@@ -490,7 +490,10 @@ SET_TRAINING_ANCHOR_TOOL = {
                 "enum": ["strength", "social_run", "hard_run", "easy_run", "long_run", "mobility", "other"],
             },
             "label": {"type": "string", "description": "E.g. 'PT with trainer', 'Wednesday social run'."},
-            "time_of_day": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "time_of_day": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "Time in HH:MM 24-hour format, e.g. '07:00'. Null if unknown.",
+            },
             "is_hard_constraint": {"type": "boolean"},
         },
         "required": ["day_of_week", "kind", "label"],
@@ -1078,6 +1081,16 @@ def handle_apply_readiness_adaptation(
     return TrainingService.format_plan(saved, heading="Plan updated")
 
 
+def _parse_hhmm(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        datetime.strptime(value, "%H:%M")
+        return value
+    except ValueError:
+        return None
+
+
 def handle_list_training_anchors(user_id: UUID, input_dict: dict, now: datetime, *, anchor_service) -> str:
     if anchor_service is None:
         return "Training anchors are not available."
@@ -1093,12 +1106,19 @@ def handle_list_training_anchors(user_id: UUID, input_dict: dict, now: datetime,
 def handle_set_training_anchor(user_id: UUID, input_dict: dict, now: datetime, *, anchor_service) -> str:
     if anchor_service is None:
         return "Training anchors are not available."
+    try:
+        day_of_week = int(input_dict["day_of_week"])
+    except (KeyError, ValueError, TypeError):
+        return "day_of_week is required (0=Monday through 6=Sunday)."
+    raw_time = input_dict.get("time_of_day")
+    if raw_time is not None and _parse_hhmm(raw_time) is None:
+        return f"time_of_day '{raw_time}' is not valid — use HH:MM 24-hour format (e.g. '07:30') or omit it."
     anchor = anchor_service.set(
         user_id,
-        day_of_week=int(input_dict["day_of_week"]),
+        day_of_week=day_of_week,
         kind=input_dict["kind"],
         label=input_dict["label"],
-        time_of_day=input_dict.get("time_of_day") or None,
+        time_of_day=raw_time,
         is_hard_constraint=input_dict.get("is_hard_constraint", True),
     )
     return f"Anchor saved: {anchor.describe()}"
@@ -1155,7 +1175,10 @@ def handle_list_goals(user_id: UUID, input_dict: dict, now: datetime, *, goal_se
 
 def handle_update_goal(user_id: UUID, input_dict: dict, now: datetime, *, goal_service) -> str:
     from uuid import UUID as _UUID
-    goal_id = _UUID(input_dict["goal_id"])
+    try:
+        goal_id = _UUID(input_dict.get("goal_id", ""))
+    except (ValueError, AttributeError, TypeError):
+        return "Invalid goal ID — use list_goals to get the correct ID first."
     kwargs: dict[str, Any] = {}
     if input_dict.get("title") is not None:
         kwargs["title"] = input_dict["title"]
