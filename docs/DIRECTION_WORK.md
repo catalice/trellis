@@ -70,6 +70,16 @@ Domain knowledge tracking is the anchor use case: take a complex domain (e.g. eC
 
 ---
 
+## Existing Assets (as of June 2026)
+
+- **RAG layer** — already built in Allerac. Port rather than rebuild.
+- **MD-based UI** — partially built. Knowledge structure and rendering mostly figured out.
+- **This repo** — clean architecture foundation, learn module maps directly to domain knowledge threads.
+
+The remaining work is primarily file ingestion (PDF, Word, Figma parsers) and wiring the pieces together.
+
+---
+
 ## Build Order (when the time comes)
 
 1. Fork Trellis, strip health/training domains
