@@ -1,0 +1,65 @@
+name: trellis
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: trellis
+      POSTGRES_PASSWORD: trellis
+      POSTGRES_DB: trellis
+    ports:
+      - "5433:5432"
+    volumes:
+      - trellis_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trellis -d trellis"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  health-worker:
+    build:
+      context: ./services/health-worker
+      dockerfile: Dockerfile
+    env_file:
+      - path: ../Trellis/.env
+        required: false
+      - path: .env
+        required: false
+    environment:
+      PORT: 8001
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3))['status'] == 'ok'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  trellis-bot:
+    build: .
+    env_file:
+      - path: ../Trellis/.env
+        required: false
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://trellis:trellis@postgres:5432/trellis
+      OBSIDIAN_VAULT: /vault
+      HEALTH_WORKER_URL: http://health-worker:8001
+    volumes:
+      - ${OBSIDIAN_VAULT:-/Users/catalice/Documents/Obsidian}:/vault
+    depends_on:
+      postgres:
+        condition: service_healthy
+      health-worker:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  trellis_postgres:
