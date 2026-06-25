@@ -17,15 +17,7 @@ def learn_context_loader(learning_service: _LearningService) -> ContextLoader:
         if not state:
             return None
 
-        lines = [
-            "[Learning]",
-            "Teaching approach: always build the scaffold first. Start with the big picture —",
-            "why this subject matters, how the major forces/eras/concepts relate to each other.",
-            "Give the user somewhere to hang the details before adding them. Never open with",
-            "a fun fact or anecdote. Build systematically from the foundations up.",
-            "",
-            "Active learning threads:",
-        ]
+        lines = ["[Learning]\nActive learning threads:"]
         for item in state:
             thread = item["thread"]
             entries = item["recent_entries"]
