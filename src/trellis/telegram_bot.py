@@ -129,7 +129,10 @@ class TelegramTrellis:
             self.logger.exception("Oracle failed for user %s", user_id)
             reply = "Something went wrong. Nothing was changed — please try again."
 
-        await update.message.reply_text(reply, parse_mode="Markdown")
+        await update.message.reply_text(
+            reply or "Something went wrong — no response was generated. Please try again.",
+            parse_mode="Markdown",
+        )
 
     async def _run_pattern_scan(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         if self.pattern_engine is None or not self.settings.telegram_allowed_users:

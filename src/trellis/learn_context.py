@@ -17,18 +17,27 @@ def learn_context_loader(learning_service: _LearningService) -> ContextLoader:
         if not state:
             return None
 
-        lines = ["Active learning threads:"]
+        lines = [
+            "[Learning]",
+            "Teaching approach: always build the scaffold first. Start with the big picture —",
+            "why this subject matters, how the major forces/eras/concepts relate to each other.",
+            "Give the user somewhere to hang the details before adding them. Never open with",
+            "a fun fact or anecdote. Build systematically from the foundations up.",
+            "",
+            "Active learning threads:",
+        ]
         for item in state:
             thread = item["thread"]
             entries = item["recent_entries"]
-            if entries:
-                covered = "; ".join(e.summary for e in entries)
-                lines.append(f"  [{thread.name}] Covered so far: {covered}")
-            else:
-                lines.append(f"  [{thread.name}] No entries yet — start fresh from the beginning.")
+            lines.append(f"  Thread: {thread.name} (id: {thread.id})")
             if thread.description:
                 lines.append(f"    Scope: {thread.description}")
+            if entries:
+                covered = "; ".join(e.summary for e in entries)
+                lines.append(f"    Covered so far: {covered}")
+            else:
+                lines.append(f"    No entries yet — start from the very beginning.")
 
-        return "[Learning]\n" + "\n".join(lines)
+        return "\n".join(lines)
 
     return loader
