@@ -112,6 +112,7 @@ Built and working:
 - Intelligence layer: domain-agnostic pattern engine, daily background scan, active insights in oracle context, snooze/resolve/reject responses
 - Goals as first-class data
 - Current context: general notes, physical state, cognitive/exec state
+- Domain preferences: per-domain preferences stored in DB (`user_preferences` table), loaded only when that domain routes — user states preferences conversationally, Trellis saves and applies them. Covers training, learn, ef, notes.
 
 Not yet built:
 

@@ -29,6 +29,7 @@ from trellis.postgres import (
     PostgresDatabase,
     PostgresGoalRepository,
     PostgresInsightRepository,
+    PostgresPreferencesRepository,
     PostgresReminderRepository,
     PostgresStrengthSessionRepository,
     PostgresTaskRepository,
@@ -162,6 +163,7 @@ def main() -> None:
     cycle_service = CycleService(PostgresCycleRepository(database))
     capture_repository = PostgresCaptureRepository(database)
     capture_projection = ObsidianRawCaptureProjection(settings.obsidian_vault, settings.timezone)
+    preferences_repository = PostgresPreferencesRepository(database)
 
     # --- Permanent context services ---
     profile_service = UserProfileService(PostgresUserProfileRepository(database))
@@ -229,6 +231,7 @@ def main() -> None:
             anchor_service=anchor_service,
             training_history_service=training_history_service,
             cycle_service=cycle_service,
+            preferences_repository=preferences_repository,
         ),
         training_tools(
             training_service=training_service,
@@ -252,19 +255,19 @@ def main() -> None:
 
     registry.add_domain(
         "ef",
-        ef_context_loader(task_service, reminder_service),
+        ef_context_loader(task_service, reminder_service, preferences_repository),
         ef_tools(task_service, reminder_service, insight_repository=insight_repository),
         EF_SIGNALS,
     )
     registry.add_domain(
         "notes",
-        notes_context_loader(capture_repository),
+        notes_context_loader(capture_repository, preferences_repository),
         notes_tools(capture_repository),
         NOTES_SIGNALS,
     )
     registry.add_domain(
         "learn",
-        learn_context_loader(learning_service),
+        learn_context_loader(learning_service, preferences_repository),
         learn_tools(learning_service),
         LEARN_SIGNALS,
     )
@@ -282,7 +285,7 @@ def main() -> None:
         ],
         tracking_summary=("tracking", tracking_context_loader(health_repository, cycle_service)),
         intelligence=("intelligence", intelligence_context_loader(insight_repository)),
-        always_tools=[*meta_tools(capture_repository, context_service, capture_projection=capture_projection), *tracking_tools(health_repository, cycle_service)],
+        always_tools=[*meta_tools(capture_repository, context_service, preferences_repository, capture_projection=capture_projection), *tracking_tools(health_repository, cycle_service)],
         summariser=summariser,
         onboarding_check=lambda uid: needs_onboarding(profile_service, uid),
         onboarding_system=ONBOARDING_SYSTEM,

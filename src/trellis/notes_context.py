@@ -25,10 +25,18 @@ class _CaptureRepo(Protocol):
     def list_recent(self, user_id: UUID, limit: int) -> list: ...
 
 
+class _PreferencesRepo(Protocol):
+    def get(self, user_id: UUID, domain: str) -> str | None: ...
+
+
 # --- Factory ----------------------------------------------------------------
 
-def notes_context_loader(capture_repository: _CaptureRepo) -> ContextLoader:
+def notes_context_loader(
+    capture_repository: _CaptureRepo,
+    preferences_repository: _PreferencesRepo,
+) -> ContextLoader:
     def loader(user_id: UUID, now: datetime) -> str | None:
+        parts: list[str] = []
         try:
             captures = capture_repository.list_recent(user_id, limit=10)
             if captures:
@@ -36,10 +44,16 @@ def notes_context_loader(capture_repository: _CaptureRepo) -> ContextLoader:
                 for c in captures:
                     local = c.created_at.astimezone(now.tzinfo) if now.tzinfo else c.created_at
                     lines.append(f"  [{local.strftime('%d %b %H:%M')}] {c.synthesis}")
-                return "[Notes]\n" + "\n".join(lines)
+                parts.append("\n".join(lines))
         except Exception:
             _log.warning("notes_context: captures load failed", exc_info=True)
 
-        return None
+        prefs = preferences_repository.get(user_id, "notes")
+        if prefs:
+            parts.append(f"[Your notes preferences]\n{prefs}")
+
+        if not parts:
+            return None
+        return "[Notes]\n" + "\n\n".join(parts)
 
     return loader

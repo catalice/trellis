@@ -100,6 +100,7 @@ def training_context_loader(
     anchor_service: _AnchorService | None = None,
     training_history_service: _TrainingHistoryService | None = None,
     cycle_service: _CycleService | None = None,
+    preferences_repository=None,
 ) -> ContextLoader:
     def loader(user_id: UUID, now: datetime) -> str | None:
         local_now = now.astimezone(timezone)
@@ -211,6 +212,11 @@ def training_context_loader(
                 _log.warning("training_context: cycle phase load failed", exc_info=True)
 
         parts.append(_COACHING_INSTRUCTIONS)
+
+        if preferences_repository is not None:
+            prefs = preferences_repository.get(user_id, "training")
+            if prefs:
+                parts.append(f"[Your training preferences]\n{prefs}")
 
         if not parts:
             return None

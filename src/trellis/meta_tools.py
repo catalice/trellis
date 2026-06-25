@@ -168,11 +168,65 @@ def handle_update_current_context(
         return "Couldn't save that — try again in a moment."
 
 
+# --- save_preferences -------------------------------------------------------
+
+SAVE_PREFERENCES_TOOL = {
+    "name": "save_preferences",
+    "description": (
+        "Save the user's stated preferences for a domain. Call when the user expresses "
+        "how they want to be coached, taught, or supported in a specific area — e.g. "
+        "'I want to learn from the scaffold up', 'don't give me long plans', "
+        "'I prefer shorter sessions'. These preferences load automatically whenever "
+        "that domain is active."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "domain": {
+                "type": "string",
+                "enum": ["training", "learn", "ef", "notes"],
+                "description": "Which domain these preferences apply to.",
+            },
+            "content": {
+                "type": "string",
+                "description": (
+                    "The user's preferences in plain text. Write in second person "
+                    "as a reminder to future Trellis — e.g. 'You prefer teaching "
+                    "from the big picture down, not facts first.'"
+                ),
+            },
+        },
+        "required": ["domain", "content"],
+    },
+}
+
+
+def handle_save_preferences(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    preferences_repository,
+) -> str:
+    domain = input_dict.get("domain", "").strip()
+    content = input_dict.get("content", "").strip()
+    if not domain or not content:
+        return "Domain and content are required."
+    try:
+        preferences_repository.set(user_id, domain, content)
+        return f"Preferences saved for {domain}."
+    except Exception:
+        _log.exception("save_preferences failed for user %s", user_id)
+        return "Couldn't save preferences — try again in a moment."
+
+
 # --- Registration ------------------------------------------------------------
 
 def meta_tools(
     capture_repository,
     context_service: CurrentContextService,
+    preferences_repository,
     capture_projection: ObsidianRawCaptureProjection | None = None,
 ) -> list[tuple[dict, callable]]:
     return [
@@ -195,6 +249,12 @@ def meta_tools(
             UPDATE_CONTEXT_TOOL,
             lambda uid, inp, now: handle_update_current_context(
                 uid, inp, now, context_service=context_service,
+            ),
+        ),
+        (
+            SAVE_PREFERENCES_TOOL,
+            lambda uid, inp, now: handle_save_preferences(
+                uid, inp, now, preferences_repository=preferences_repository,
             ),
         ),
     ]

@@ -32,11 +32,16 @@ class _ReminderService(Protocol):
     def due_between(self, user_id: UUID, start_at: datetime, end_at: datetime) -> list: ...
 
 
+class _PreferencesRepo(Protocol):
+    def get(self, user_id: UUID, domain: str) -> str | None: ...
+
+
 # --- Factory ----------------------------------------------------------------
 
 def ef_context_loader(
     task_service: _TaskService,
     reminder_service: _ReminderService,
+    preferences_repository: _PreferencesRepo,
 ) -> ContextLoader:
     def loader(user_id: UUID, now: datetime) -> str | None:
         parts: list[str] = []
@@ -103,6 +108,10 @@ def ef_context_loader(
                 parts.append("\n".join(lines))
         except Exception:
             _log.warning("ef_context: reminders load failed", exc_info=True)
+
+        prefs = preferences_repository.get(user_id, "ef")
+        if prefs:
+            parts.append(f"[Your EF preferences]\n{prefs}")
 
         if not parts:
             return None

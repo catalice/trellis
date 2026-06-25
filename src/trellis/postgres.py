@@ -1777,3 +1777,31 @@ class PostgresLearningEntryRepository:
             summary=row["summary"],
             created_at=row["created_at"],
         )
+
+
+class PostgresPreferencesRepository:
+    def __init__(self, database: PostgresDatabase) -> None:
+        self.database = database
+
+    def get(self, user_id: UUID, domain: str) -> str | None:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT content FROM user_preferences WHERE user_id = %s AND domain = %s",
+                    (user_id, domain),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+
+    def set(self, user_id: UUID, domain: str, content: str) -> None:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO user_preferences (user_id, domain, content, updated_at)
+                    VALUES (%s, %s, %s, NOW())
+                    ON CONFLICT (user_id, domain) DO UPDATE
+                        SET content = EXCLUDED.content, updated_at = NOW()
+                    """,
+                    (user_id, domain, content),
+                )
