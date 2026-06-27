@@ -58,7 +58,10 @@ class Oracle:
             return self._extract_text(response)
 
         _log.warning("oracle hit iteration cap")
-        return self._extract_text(response) if response else ""
+        text = self._extract_text(response) if response else ""
+        if not text:
+            _log.warning("oracle returned empty text at iteration cap; last stop_reason=%s", getattr(response, "stop_reason", None))
+        return text
 
     def _call(self, name: str, input_dict: dict, handlers: dict[str, Callable[[dict], str]]) -> str:
         handler = handlers.get(name)
@@ -76,4 +79,9 @@ class Oracle:
         for block in response.content:
             if hasattr(block, "text"):
                 return block.text
+        _log.warning(
+            "oracle: no text block in response; stop_reason=%s content_types=%s",
+            getattr(response, "stop_reason", None),
+            [getattr(b, "type", type(b).__name__) for b in response.content],
+        )
         return ""

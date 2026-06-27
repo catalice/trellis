@@ -68,7 +68,11 @@ class PostgresConversationHistory:
             if self._timezone is not None and ts.tzinfo is not None:
                 ts = ts.astimezone(self._timezone)
             prefix = ts.strftime("[%a %d %b %H:%M] ")
-            result.append({"role": t.role, "content": f"{prefix}{t.content}"})
+            entry = {"role": t.role, "content": f"{prefix}{t.content}"}
+            if result and result[-1]["role"] == t.role:
+                result[-1]["content"] += f"\n{entry['content']}"
+            else:
+                result.append(entry)
         return result
 
     def prune(self, user_id: UUID, keep: int = 50) -> None:

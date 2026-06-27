@@ -102,7 +102,8 @@ class Assembler:
         response = self._oracle.run(system, messages, tool_schemas, bound_handlers)
 
         self._history.append(user_id, "user", message)
-        self._history.append(user_id, "assistant", response)
+        if response:
+            self._history.append(user_id, "assistant", response)
 
         self._maybe_summarise(user_id, domains)
 
@@ -124,7 +125,8 @@ class Assembler:
         ]
         response = self._oracle.run(system, messages, schemas, handlers)
         self._history.append(user_id, "user", message)
-        self._history.append(user_id, "assistant", response)
+        if response:
+            self._history.append(user_id, "assistant", response)
         return response
 
     # --- Context assembly ---------------------------------------------------
