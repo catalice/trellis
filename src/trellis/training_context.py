@@ -64,7 +64,8 @@ class _GarminSyncService(Protocol):
 
 
 class _CompletionService(Protocol):
-    def format_week_completion(self, user_id: UUID, week_start: date, as_of: date) -> str: ...
+    def refresh(self, user_id: UUID, week_start: date, as_of: date) -> None: ...
+    def summary(self, user_id: UUID, week_start: date) -> str: ...
 
 
 _COACHING_INSTRUCTIONS = """\
@@ -117,9 +118,16 @@ def training_context_loader(
         today = local_now.date()
         parts: list[str] = []
 
+        last_week_start = (today - timedelta(days=today.weekday())) - timedelta(days=7)
+        last_week_end = last_week_start + timedelta(days=6)
+        week_start_local = today - timedelta(days=today.weekday())
+
         if garmin_sync_service is not None:
             try:
-                garmin_sync_service.sync_if_stale(user_id, stale_after_minutes=10, days=2)
+                synced = garmin_sync_service.sync_if_stale(user_id, stale_after_minutes=10, days=2)
+                if synced and completion_service is not None:
+                    completion_service.refresh(user_id, week_start_local, today)
+                    completion_service.refresh(user_id, last_week_start, last_week_end)
             except Exception:
                 _log.warning("training_context: garmin sync failed", exc_info=True)
 
@@ -158,8 +166,7 @@ def training_context_loader(
             _log.warning("training_context: readiness load failed", exc_info=True)
 
         try:
-            week_start = today - timedelta(days=today.weekday())
-            plan = training_repository.latest_active(user_id, week_start)
+            plan = training_repository.latest_active(user_id, week_start_local)
             if plan is not None:
                 parts.append(_format_plan_compact(plan, today))
         except Exception:
@@ -229,21 +236,13 @@ def training_context_loader(
 
         if completion_service is not None:
             try:
-                last_week_start = (today - timedelta(days=today.weekday())) - timedelta(days=7)
-                last_week_end = last_week_start + timedelta(days=6)
-                last_week = completion_service.format_week_completion(user_id, last_week_start, last_week_end)
-                if last_week and "No training plan" not in last_week:
-                    parts.append(f"Last week ({last_week_start.strftime('%-d %b')}–{last_week_end.strftime('%-d %b')}):\n{last_week}")
+                last_week_summary = completion_service.summary(user_id, last_week_start)
+                if last_week_summary:
+                    parts.append(
+                        f"Last week ({last_week_start.strftime('%-d %b')}–{last_week_end.strftime('%-d %b')}):\n{last_week_summary}"
+                    )
             except Exception:
-                _log.warning("training_context: last week completion failed", exc_info=True)
-
-            try:
-                week_start = today - timedelta(days=today.weekday())
-                this_week = completion_service.format_week_completion(user_id, week_start, today)
-                if this_week and "No training plan" not in this_week:
-                    parts.append(f"This week so far:\n{this_week}")
-            except Exception:
-                _log.warning("training_context: this week completion failed", exc_info=True)
+                _log.warning("training_context: last week summary failed", exc_info=True)
 
         parts.append(_COACHING_INSTRUCTIONS)
 

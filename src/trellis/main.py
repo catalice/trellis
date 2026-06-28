@@ -248,7 +248,6 @@ def main() -> None:
             timezone=settings.timezone,
             health_status_service=health_status_service,
             goal_service=goal_service,
-            completion_service=completion_service,
             workout_checkin_service=workout_checkin_service,
             strength_session_service=strength_session_service,
             pattern_engine=pattern_engine,

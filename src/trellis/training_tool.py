@@ -415,23 +415,6 @@ RECORD_STRENGTH_SESSION_TOOL = {
     },
 }
 
-GET_WEEK_COMPLETION_TOOL = {
-    "name": "get_week_completion",
-    "description": "Show which training sessions in the current week have a matching Garmin activity and which haven't happened yet. Use this mid-week or when Cat asks about this week's progress — not for reviewing last week.",
-    "input_schema": {"type": "object", "properties": {}, "required": []},
-}
-
-GET_WEEK_REVIEW_TOOL = {
-    "name": "get_week_review",
-    "description": (
-        "Get a retrospective of last week (the previous Mon–Sun) — "
-        "session completion, how each session felt, PT/strength work, and daily body scores. "
-        "Call this when Cat says 'sunday', 'monday', 'week review', 'how did last week go', "
-        "or anything about reviewing the week that just ended. "
-        "After presenting it, ask what next week looks like so the plan can be adapted."
-    ),
-    "input_schema": {"type": "object", "properties": {}, "required": []},
-}
 
 GET_TRAINING_ARC_TOOL = {
     "name": "get_training_arc",
@@ -824,111 +807,6 @@ def handle_record_strength_session(
     exercise_summary = ", ".join(e.display() for e in session.exercises) or "no exercises logged"
     phase = f" ({session.program_phase})" if session.program_phase else ""
     return f"Strength session saved{phase}: {exercise_summary}"
-
-
-def handle_get_week_completion(
-    user_id: UUID, input_dict: dict, now: datetime,
-    *, completion_service, timezone,
-) -> str:
-    if completion_service is None:
-        return "Session completion not available."
-    today = now.astimezone(timezone).date()
-    week_start = today - timedelta(days=today.weekday())
-    return completion_service.format_week_completion(user_id, week_start, today)
-
-
-def handle_get_week_review(
-    user_id: UUID, input_dict: dict, now: datetime,
-    *, completion_service, workout_checkin_service, strength_session_service, health_repository, timezone,
-) -> str:
-    today = now.astimezone(timezone).date()
-    days_since_monday = today.weekday()
-    this_week_start = today - timedelta(days=days_since_monday)
-    last_week_start = this_week_start - timedelta(days=7)
-    last_week_end = this_week_start - timedelta(days=1)
-
-    sections: list[str] = [
-        f"Week of {last_week_start.strftime('%-d %b')} – {last_week_end.strftime('%-d %b')}:"
-    ]
-
-    if completion_service is not None:
-        try:
-            completion = completion_service.format_week_completion(
-                user_id, last_week_start, last_week_end
-            )
-            body = completion.partition("\n")[2].strip()
-            if body:
-                sections.append(body)
-        except Exception:
-            _log.warning("get_week_review: completion data unavailable", exc_info=True)
-            sections.append("(session completion data unavailable)")
-
-    if workout_checkin_service is not None:
-        try:
-            checkins = workout_checkin_service.list_recent(user_id, limit=28)
-            week_checkins = [
-                c for c in checkins
-                if last_week_start <= c.checked_in_on <= last_week_end
-            ]
-            if week_checkins:
-                lines = ["How sessions felt:"]
-                for c in week_checkins:
-                    parts = [f"  {c.checked_in_on.strftime('%a')} {(c.session_kind or '').replace('_', ' ')}"]
-                    if c.perceived_effort is not None:
-                        parts.append(f"RPE {c.perceived_effort}/10")
-                    if c.feel_note:
-                        parts.append(c.feel_note)
-                    if c.soreness_note:
-                        parts.append(f"soreness: {c.soreness_note}")
-                    lines.append(" — ".join(parts))
-                sections.append("\n".join(lines))
-        except Exception:
-            _log.warning("get_week_review: checkin data unavailable", exc_info=True)
-
-    if strength_session_service is not None:
-        try:
-            sessions = strength_session_service.list_recent(user_id, limit=14)
-            week_strength = [
-                s for s in sessions
-                if last_week_start <= s.session_date <= last_week_end
-            ]
-            if week_strength:
-                lines = ["PT/strength:"]
-                for s in week_strength:
-                    exercises = ", ".join(e.display() for e in s.exercises)
-                    line = f"  {s.session_date.strftime('%a')}"
-                    if exercises:
-                        line += f": {exercises}"
-                    if s.notes:
-                        line += f" — {s.notes}"
-                    lines.append(line)
-                sections.append("\n".join(lines))
-        except Exception:
-            _log.warning("get_week_review: strength data unavailable", exc_info=True)
-
-    if health_repository is not None:
-        try:
-            body_lines = []
-            for i in range(7):
-                d = last_week_start + timedelta(days=i)
-                reports = health_repository.list_self_reports(user_id, d)
-                if reports:
-                    r = reports[-1]
-                    parts: list[str] = [d.strftime("%a")]
-                    if r.energy_score is not None:
-                        parts.append(f"energy {r.energy_score}")
-                    if r.body_score is not None:
-                        parts.append(f"body {r.body_score}")
-                    if r.life_load_score is not None:
-                        parts.append(f"load {r.life_load_score}")
-                    if len(parts) > 1:
-                        body_lines.append("  " + " / ".join(parts))
-            if body_lines:
-                sections.append("Body scores:\n" + "\n".join(body_lines))
-        except Exception:
-            _log.warning("get_week_review: body score data unavailable", exc_info=True)
-
-    return "\n\n".join(sections)
 
 
 def handle_get_training_arc(user_id: UUID, input_dict: dict, now: datetime, *, arc_repository) -> str:
@@ -1420,7 +1298,6 @@ def training_tools(
     timezone,
     health_status_service=None,
     goal_service=None,
-    completion_service=None,
     workout_checkin_service=None,
     strength_session_service=None,
     pattern_engine=None,

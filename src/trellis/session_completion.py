@@ -126,19 +126,18 @@ class SessionCompletionService:
 
         return completions
 
-    def format_week_completion(
-        self, user_id: UUID, week_start: date, as_of: date
-    ) -> str:
-        # Refresh matches and persist any new ones
+    def refresh(self, user_id: UUID, week_start: date, as_of: date) -> None:
+        """Run session matching and persist results. Call after a Garmin sync."""
         self.match_week(user_id, week_start, as_of)
-        # Read all stored completions — includes ones whose Garmin activities have aged out
+
+    def summary(self, user_id: UUID, week_start: date) -> str:
+        """Read pre-computed completions from DB and format. No computation."""
         stored = self.repository.list_for_week(user_id, week_start)
         plan = self.plan_source.latest_active(user_id, week_start)
         if plan is None:
-            return "No training plan for this week."
-
+            return ""
         done_session_ids = {c.session_id for c in stored}
-        lines: list[str] = [f"Week of {week_start.isoformat()}:"]
+        lines: list[str] = []
         for session in plan.sessions:
             planned_on = date_for_day(week_start, session.day)
             mark = "✓" if session.id in done_session_ids else "—"
