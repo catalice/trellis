@@ -35,12 +35,13 @@ from trellis.postgres import (
     PostgresTaskRepository,
     PostgresTrainingAnchorRepository,
     PostgresUserProfileRepository,
+    PostgresSessionCompletionRepository,
     PostgresWorkoutCheckinRepository,
 )
 from trellis.readiness_service import ReadinessService
 from trellis.registry import TrellisRegistry
 from trellis.reminders import ReminderService
-from trellis.session_completion import WorkoutCheckinService
+from trellis.session_completion import SessionCompletionService, WorkoutCheckinService
 from trellis.telegram_bot import TelegramTrellis
 from trellis.training import TrainingPlanner
 from trellis.training_arc import TrainingArc
@@ -200,6 +201,11 @@ def main() -> None:
     workout_checkin_service = WorkoutCheckinService(
         PostgresWorkoutCheckinRepository(database)
     )
+    completion_service = SessionCompletionService(
+        repository=PostgresSessionCompletionRepository(database),
+        activity_source=health_repository,
+        plan_source=training_repository,
+    )
     insight_repository = PostgresInsightRepository(database)
     pattern_engine = PatternEngine(
         repository=insight_repository,
@@ -241,7 +247,7 @@ def main() -> None:
             timezone=settings.timezone,
             health_status_service=health_status_service,
             goal_service=goal_service,
-            completion_service=workout_checkin_service,
+            completion_service=completion_service,
             workout_checkin_service=workout_checkin_service,
             strength_session_service=strength_session_service,
             pattern_engine=pattern_engine,
