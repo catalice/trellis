@@ -29,6 +29,9 @@ class GarminConnectionRepository(Protocol):
     def get_session_dump(self, user_id: UUID) -> str | None:
         ...
 
+    def get_last_sync_at(self, user_id: UUID) -> datetime | None:
+        ...
+
     def mark_sync_success(self, user_id: UUID, synced_at: datetime) -> None:
         ...
 
@@ -141,6 +144,21 @@ class GarminSyncService:
             start_date=start_date,
             end_date=today,
         )
+
+    def sync_if_stale(
+        self,
+        user_id: UUID,
+        *,
+        stale_after_minutes: int = 10,
+        days: int = 2,
+    ) -> bool:
+        """Sync only if last sync was more than stale_after_minutes ago. Returns True if synced."""
+        last = self.connection_repository.get_last_sync_at(user_id)
+        now = datetime.now(timezone.utc)
+        if last is not None and (now - last).total_seconds() < stale_after_minutes * 60:
+            return False
+        self.sync_recent(user_id, days=days, now=now)
+        return True
 
     def _sync_daily_health(
         self,

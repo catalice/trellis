@@ -121,6 +121,16 @@ class PostgresGarminConnectionRepository:
                     (synced_at, user_id),
                 )
 
+    def get_last_sync_at(self, user_id: UUID) -> datetime | None:
+        with self.database.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT last_sync_at FROM garmin_connections WHERE user_id = %s",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+        return row[0] if row else None
+
     def mark_sync_failure(self, user_id: UUID, error: str) -> None:
         with self.database.connect() as connection:
             with connection.cursor() as cursor:

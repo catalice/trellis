@@ -232,6 +232,7 @@ def main() -> None:
             training_history_service=training_history_service,
             cycle_service=cycle_service,
             preferences_repository=preferences_repository,
+            garmin_sync_service=garmin_sync,
         ),
         training_tools(
             training_service=training_service,

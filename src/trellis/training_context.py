@@ -59,6 +59,10 @@ class _CycleService(Protocol):
     def current_phase(self, user_id: UUID, today: date) -> str | None: ...
 
 
+class _GarminSyncService(Protocol):
+    def sync_if_stale(self, user_id: UUID, *, stale_after_minutes: int = 10, days: int = 2) -> bool: ...
+
+
 _COACHING_INSTRUCTIONS = """\
 Coaching framework — follow these when handling training requests:
 
@@ -101,11 +105,18 @@ def training_context_loader(
     training_history_service: _TrainingHistoryService | None = None,
     cycle_service: _CycleService | None = None,
     preferences_repository=None,
+    garmin_sync_service: _GarminSyncService | None = None,
 ) -> ContextLoader:
     def loader(user_id: UUID, now: datetime) -> str | None:
         local_now = now.astimezone(timezone)
         today = local_now.date()
         parts: list[str] = []
+
+        if garmin_sync_service is not None:
+            try:
+                garmin_sync_service.sync_if_stale(user_id, stale_after_minutes=10, days=2)
+            except Exception:
+                _log.warning("training_context: garmin sync failed", exc_info=True)
 
         try:
             health = health_repository.latest_daily_health(user_id)
