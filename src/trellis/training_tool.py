@@ -1457,19 +1457,6 @@ def training_tools(
          lambda uid, inp, now: handle_record_strength_session(
              uid, inp, now, strength_session_service=strength_session_service, timezone=timezone
          )),
-        (GET_WEEK_COMPLETION_TOOL,
-         lambda uid, inp, now: handle_get_week_completion(
-             uid, inp, now, completion_service=completion_service, timezone=timezone
-         )),
-        (GET_WEEK_REVIEW_TOOL,
-         lambda uid, inp, now: handle_get_week_review(
-             uid, inp, now,
-             completion_service=completion_service,
-             workout_checkin_service=workout_checkin_service,
-             strength_session_service=strength_session_service,
-             health_repository=health_repository,
-             timezone=timezone,
-         )),
         (GET_TRAINING_ARC_TOOL,
          lambda uid, inp, now: handle_get_training_arc(uid, inp, now, arc_repository=arc_repository)),
         (GENERATE_TRAINING_ARC_TOOL,

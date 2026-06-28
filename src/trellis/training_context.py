@@ -63,6 +63,10 @@ class _GarminSyncService(Protocol):
     def sync_if_stale(self, user_id: UUID, *, stale_after_minutes: int = 10, days: int = 2) -> bool: ...
 
 
+class _CompletionService(Protocol):
+    def format_week_completion(self, user_id: UUID, week_start: date, as_of: date) -> str: ...
+
+
 _COACHING_INSTRUCTIONS = """\
 Coaching framework — follow these when handling training requests:
 
@@ -106,6 +110,7 @@ def training_context_loader(
     cycle_service: _CycleService | None = None,
     preferences_repository=None,
     garmin_sync_service: _GarminSyncService | None = None,
+    completion_service: _CompletionService | None = None,
 ) -> ContextLoader:
     def loader(user_id: UUID, now: datetime) -> str | None:
         local_now = now.astimezone(timezone)
@@ -221,6 +226,24 @@ def training_context_loader(
                     parts.append(f"Cycle phase: {cycle}")
             except Exception:
                 _log.warning("training_context: cycle phase load failed", exc_info=True)
+
+        if completion_service is not None:
+            try:
+                last_week_start = (today - timedelta(days=today.weekday())) - timedelta(days=7)
+                last_week_end = last_week_start + timedelta(days=6)
+                last_week = completion_service.format_week_completion(user_id, last_week_start, last_week_end)
+                if last_week and "No training plan" not in last_week:
+                    parts.append(f"Last week ({last_week_start.strftime('%-d %b')}–{last_week_end.strftime('%-d %b')}):\n{last_week}")
+            except Exception:
+                _log.warning("training_context: last week completion failed", exc_info=True)
+
+            try:
+                week_start = today - timedelta(days=today.weekday())
+                this_week = completion_service.format_week_completion(user_id, week_start, today)
+                if this_week and "No training plan" not in this_week:
+                    parts.append(f"This week so far:\n{this_week}")
+            except Exception:
+                _log.warning("training_context: this week completion failed", exc_info=True)
 
         parts.append(_COACHING_INSTRUCTIONS)
 
