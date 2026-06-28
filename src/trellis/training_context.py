@@ -124,12 +124,16 @@ def training_context_loader(
 
         if garmin_sync_service is not None:
             try:
-                synced = garmin_sync_service.sync_if_stale(user_id, stale_after_minutes=10, days=2)
-                if synced and completion_service is not None:
-                    completion_service.refresh(user_id, week_start_local, today)
-                    completion_service.refresh(user_id, last_week_start, last_week_end)
+                garmin_sync_service.sync_if_stale(user_id, stale_after_minutes=10, days=2)
             except Exception:
                 _log.warning("training_context: garmin sync failed", exc_info=True)
+
+        if completion_service is not None:
+            try:
+                completion_service.refresh(user_id, week_start_local, today)
+                completion_service.refresh(user_id, last_week_start, last_week_end)
+            except Exception:
+                _log.warning("training_context: completion refresh failed", exc_info=True)
 
         try:
             health = health_repository.latest_daily_health(user_id)
