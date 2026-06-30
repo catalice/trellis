@@ -41,7 +41,6 @@ class TrainingReadinessRecommendation:
     confidence: str
     sessions: tuple[TrainingSession, ...]
     explanation: tuple[str, ...]
-    suggested_change: str
     data_lines: tuple[str, ...] = ()
     missing_metrics: tuple[str, ...] = ()
 
@@ -70,7 +69,6 @@ class TrainingReadinessAdvisor:
                 readiness,
                 sessions,
                 "No training is planned today.",
-                "Keep the day open unless you want gentle mobility.",
             )
 
         priority_session = self._priority_session(sessions)
@@ -98,7 +96,6 @@ class TrainingReadinessAdvisor:
             readiness,
             sessions,
             self._session_reason(priority_session),
-            "Keep the planned session.",
         )
 
     def _low_readiness(
@@ -110,13 +107,12 @@ class TrainingReadinessAdvisor:
         session: TrainingSession,
     ) -> TrainingReadinessRecommendation:
         if session.kind in (SessionKind.HARD_RUN, SessionKind.SOCIAL_RUN):
+            next_day = self._next_suitable_run_date(plan, target_date)
+            reason = "Readiness is low and today contains hard running."
+            if next_day:
+                reason += f" Next suitable day: {next_day.strftime('%A %d %b')}."
             return self._recommendation(
-                TrainingAdjustment.SWAP,
-                target_date,
-                readiness,
-                sessions,
-                "Readiness is low and today contains hard running.",
-                self._hard_swap_change(plan, target_date),
+                TrainingAdjustment.SWAP, target_date, readiness, sessions, reason,
             )
         if session.kind == SessionKind.LONG_RUN:
             return self._recommendation(
@@ -125,7 +121,6 @@ class TrainingReadinessAdvisor:
                 readiness,
                 sessions,
                 "Readiness is low and today contains the long run.",
-                "Reduce the long run to 30-40 minutes easy or replace it with a walk.",
             )
         if session.kind == SessionKind.EASY_RUN:
             return self._recommendation(
@@ -134,7 +129,6 @@ class TrainingReadinessAdvisor:
                 readiness,
                 sessions,
                 "Readiness is low, but today is only easy running.",
-                "Reduce to 20-25 minutes easy or do mobility instead.",
             )
         if session.kind == SessionKind.STRENGTH:
             return self._recommendation(
@@ -143,7 +137,6 @@ class TrainingReadinessAdvisor:
                 readiness,
                 sessions,
                 "Readiness is low and personal training is an external anchor.",
-                "Keep the appointment, but tell the trainer to reduce load or intensity.",
             )
         return self._recommendation(
             TrainingAdjustment.REST,
@@ -151,17 +144,6 @@ class TrainingReadinessAdvisor:
             readiness,
             sessions,
             "Readiness is low and today has no essential training load.",
-            "Rest or do only gentle mobility.",
-        )
-
-    def _hard_swap_change(self, plan: WeeklyPlan, target_date: date) -> str:
-        next_day = self._next_suitable_run_date(plan, target_date)
-        today_change = "Today: replace it with 20-25 minutes easy or mobility only."
-        if next_day is None:
-            return f"{today_change} Keep the hard run out of this week unless readiness improves."
-        return (
-            f"{today_change} Move the hard run to "
-            f"{next_day.strftime('%A %d %b')}."
         )
 
     @staticmethod
@@ -200,7 +182,6 @@ class TrainingReadinessAdvisor:
                 readiness,
                 sessions,
                 "Readiness is steady, not strong, and today contains hard running.",
-                "Keep the session shape but reduce the hard work by one repeat.",
             )
         if session.kind == SessionKind.LONG_RUN:
             return self._recommendation(
@@ -209,7 +190,6 @@ class TrainingReadinessAdvisor:
                 readiness,
                 sessions,
                 "Readiness is steady and today contains the long run.",
-                "Keep it easy and cap the run if effort drifts above the target.",
             )
         return self._recommendation(
             TrainingAdjustment.KEEP,
@@ -217,7 +197,6 @@ class TrainingReadinessAdvisor:
             readiness,
             sessions,
             self._session_reason(session),
-            "Keep the planned session.",
         )
 
     @staticmethod
@@ -270,7 +249,6 @@ class TrainingReadinessAdvisor:
         readiness: ReadinessLike,
         sessions: tuple[TrainingSession, ...],
         reason: str,
-        suggested_change: str,
     ) -> TrainingReadinessRecommendation:
         explanation = [reason]
         explanation.append(
@@ -304,7 +282,6 @@ class TrainingReadinessAdvisor:
             confidence=readiness.confidence,
             sessions=sessions,
             explanation=tuple(dict.fromkeys(explanation)),
-            suggested_change=suggested_change,
             data_lines=tuple(getattr(readiness, "data_lines", ())),
             missing_metrics=readiness.missing_metrics,
         )

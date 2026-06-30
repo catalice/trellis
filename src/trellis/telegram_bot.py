@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -103,6 +103,13 @@ class TelegramTrellis:
                     text=f"Reminder: {reminder.task_title}",
                 )
                 self.reminders.mark_sent(reminder.id)
+                if reminder.recur_daily:
+                    self.reminders.schedule_standalone_reminder(
+                        user_id,
+                        reminder.task_title,
+                        reminder.remind_at + timedelta(days=1),
+                        recur_daily=True,
+                    )
                 delivered += 1
         return delivered
 

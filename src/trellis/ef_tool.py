@@ -176,7 +176,8 @@ SET_REMINDER_TOOL = {
     "name": "set_reminder",
     "description": (
         "Schedule a reminder at a specific time. Can be for a task (will link to it) "
-        "or standalone (any label). Use when the user says 'remind me' or specifies a time."
+        "or standalone (any label). Use when the user says 'remind me' or specifies a time. "
+        "Set recur_daily=true for daily recurring reminders (e.g. daily check-ins)."
     ),
     "input_schema": {
         "type": "object",
@@ -191,6 +192,10 @@ SET_REMINDER_TOOL = {
             "remind_at": {
                 "type": "string",
                 "description": "When to send the reminder as ISO 8601 datetime string.",
+            },
+            "recur_daily": {
+                "type": "boolean",
+                "description": "If true, reminder automatically reschedules 24h after firing.",
             },
         },
         "required": ["label", "remind_at"],
@@ -465,8 +470,10 @@ def handle_set_reminder(user_id: UUID, input_dict: dict, now: datetime, *, task_
             return f"Multiple tasks matched '{label}': {titles}. Be more specific."
 
         # No task found — standalone reminder
-        reminder = reminder_service.schedule_standalone_reminder(user_id, label, remind_at, now=now)
-        return f"Reminder set: '{label}' at {reminder.remind_at.strftime('%Y-%m-%d %H:%M UTC')}"
+        recur_daily = bool(input_dict.get("recur_daily", False))
+        reminder = reminder_service.schedule_standalone_reminder(user_id, label, remind_at, recur_daily=recur_daily, now=now)
+        recur_note = " (repeats daily)" if recur_daily else ""
+        return f"Reminder set: '{label}' at {reminder.remind_at.strftime('%Y-%m-%d %H:%M UTC')}{recur_note}"
     except ReminderSchedulingError as exc:
         return f"Could not set reminder: {exc}"
 

@@ -103,7 +103,7 @@ class TrainingService:
         week_start = self._week_start(local_now.date())
         plan = self.repository.latest_active(user_id, week_start)
         if plan is None:
-            return "No active training plan this week. Call create_plan to build one."
+            return "No active training plan this week."
         return self.format_plan(plan)
 
     def create_plan(self, user_id: UUID, now: datetime, *, mode: str | None = None) -> str:
@@ -518,7 +518,6 @@ class TrainingService:
                 f"{recommendation.confidence} confidence)"
             ),
             f"Recommendation: {recommendation.action.value}",
-            f"Suggested change: {recommendation.suggested_change}",
         ]
         data_lines = getattr(recommendation, "data_lines", ())
         if data_lines:

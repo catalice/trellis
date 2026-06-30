@@ -136,12 +136,19 @@ class SessionCompletionService:
         plan = self.plan_source.latest_active(user_id, week_start)
         if plan is None:
             return ""
-        done_session_ids = {c.session_id for c in stored}
+        completions = {c.session_id: c for c in stored}
         lines: list[str] = []
         for session in plan.sessions:
             planned_on = date_for_day(week_start, session.day)
-            mark = "✓" if session.id in done_session_ids else "—"
-            lines.append(f"{mark} {planned_on.strftime('%a %d %b')}  {session.title}")
+            completion = completions.get(session.id)
+            if completion is not None:
+                actual = completion.completed_at.date() if completion.completed_at else None
+                if actual and actual != planned_on:
+                    lines.append(f"✓ {session.title} — planned {planned_on.strftime('%a %d %b')}, done {actual.strftime('%a %d %b')}")
+                else:
+                    lines.append(f"✓ {planned_on.strftime('%a %d %b')}  {session.title}")
+            else:
+                lines.append(f"— {planned_on.strftime('%a %d %b')}  {session.title} (no Garmin match)")
         return "\n".join(lines)
 
 

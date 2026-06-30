@@ -147,10 +147,8 @@ GET_SESSION_DETAIL_TOOL = {
 ADJUST_TRAINING_TOOL = {
     "name": "adjust_training",
     "description": (
-        "Change or query the training plan. Use for: creating a new plan, "
-        "replacing the social run, holiday or deload week, "
-        "explaining the plan rationale, or showing what's on today's schedule. "
-        "To change PT days: call set_training_anchor, then create_plan."
+        "Query the training plan. Use for: explaining the plan rationale, "
+        "or showing what's on today's schedule including readiness adaptation."
     ),
     "input_schema": {
         "type": "object",
@@ -533,11 +531,20 @@ LIST_GOALS_TOOL = {
 
 SYNC_GARMIN_TOOL = {
     "name": "sync_garmin",
-    "description": "Sync recent Garmin data. Use when data looks stale or user asks to sync.",
+    "description": (
+        "Pull fresh Garmin data back to a specific date. "
+        "Pass since_date (YYYY-MM-DD) when the user mentions a specific day or session — "
+        "use that date or the Monday of that week so you get everything relevant. "
+        "Omit since_date only for truly recent data (today/yesterday); Python will default to 2 days. "
+        "Always call this before answering if the data you need might not be in context yet."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "days": {"type": "integer", "minimum": 1, "maximum": 30, "default": 7},
+            "since_date": {
+                "type": "string",
+                "description": "Sync back to this date (YYYY-MM-DD). Python calculates how many days that is from today.",
+            },
         },
         "required": [],
     },
@@ -1080,8 +1087,16 @@ def handle_sync_garmin(
 ) -> str:
     if garmin_sync is None:
         return "Garmin sync not configured."
-    days = int(input_dict.get("days") or 7)
-    days = max(1, min(30, days))
+    since_date_str = input_dict.get("since_date")
+    if since_date_str:
+        try:
+            since = date.fromisoformat(str(since_date_str))
+            days = max(1, min(30, (now.date() - since).days + 1))
+        except ValueError:
+            days = 7
+    else:
+        days = int(input_dict.get("days") or 2)
+        days = max(1, min(30, days))
     try:
         summary = garmin_sync.sync_recent(user_id, days=days)
         return (

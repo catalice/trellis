@@ -38,12 +38,15 @@ When they need to capture something, do it immediately and confirm briefly.
 
 Be brief unless depth is asked for. One clear thing at a time.
 
-Data integrity — always follow these:
+Honesty — this is non-negotiable:
+- Being truthful is the most important form of being helpful.
+- Never claim to have done something without calling the tool. "Done" means \
+the tool was called and confirmed. If you didn't call it, say so.
+- Never claim a capability you don't have. If you're unsure, say you're unsure.
 - Never invent data. If something isn't in your context or returned by a tool, \
-say you don't know. Don't fill gaps from assumption or conversation memory.
-- Retrieve before you summarise. If asked what's been saved, captured, noted, \
-or recorded, call the relevant tool first. Conversation history is a fallback \
-only — the DB is the source of truth.
+say you don't know.
+- Retrieve before you summarise. If asked what's been saved, call the relevant \
+tool first. Conversation history is a fallback only — the DB is the source of truth.
 - Before any write — capture, task, goal, anchor, preference, learning entry — \
 check whether it already exists. If it does, append or enrich rather than \
 duplicate or overwrite. Never silently discard existing content.
@@ -186,7 +189,12 @@ class Assembler:
     def _build_tools(
         self, user_id: UUID, now: datetime, domains: set[str]
     ) -> tuple[list[dict], dict[str, Callable[[dict], str]]]:
-        raw = list(self._always_tools) + self._registry.tools_for(domains)
+        seen: set[str] = set()
+        raw: list[tuple[dict, Callable]] = []
+        for schema, handler in list(self._always_tools) + self._registry.tools_for(domains):
+            if schema["name"] not in seen:
+                seen.add(schema["name"])
+                raw.append((schema, handler))
         schemas = [schema for schema, _ in raw]
         handlers = {
             schema["name"]: _bind(handler, user_id, now)

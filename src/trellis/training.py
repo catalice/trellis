@@ -169,11 +169,6 @@ class TrainingPlanner:
         sessions: list[TrainingSession] = [
             self._strength(day) for day in request.strength_days
         ]
-        rationale = [
-            "The half-marathon plan builds around trainer-owned strength sessions.",
-            "The week contains no more than one hard running stimulus.",
-        ]
-
         occupied_days = {s.day for s in sessions}
         for cs in request.claude_sessions:
             if cs.day not in occupied_days:
@@ -187,7 +182,7 @@ class TrainingPlanner:
             goal=request.goal,
             mode=request.mode,
             sessions=self._sorted(sessions),
-            rationale=tuple(rationale),
+            rationale=(),
         )
 
     def _recovery_plan(self, request: PlanningRequest) -> WeeklyPlan:
@@ -209,10 +204,7 @@ class TrainingPlanner:
             goal=request.goal,
             mode=request.mode,
             sessions=self._sorted(sessions),
-            rationale=(
-                "This is a recovery week, not a backlog.",
-                "No hard session or missed mileage will be carried into the next week.",
-            ),
+            rationale=(),
         )
 
     @staticmethod

@@ -56,6 +56,7 @@ from trellis.training_tool import (
     ADD_GOAL_TOOL, SET_TRAINING_ANCHOR_TOOL,
     handle_add_goal, handle_set_training_anchor,
 )
+from trellis.ef_tool import SET_REMINDER_TOOL, handle_set_reminder, LIST_REMINDERS_TOOL, handle_list_reminders
 from trellis.cycle import CycleService
 from trellis.intelligence_context import intelligence_context_loader
 from trellis.ef_context import ef_context_loader
@@ -292,7 +293,12 @@ def main() -> None:
         ],
         tracking_summary=("tracking", tracking_context_loader(health_repository, cycle_service)),
         intelligence=("intelligence", intelligence_context_loader(insight_repository)),
-        always_tools=[*meta_tools(capture_repository, context_service, preferences_repository, capture_projection=capture_projection), *tracking_tools(health_repository, cycle_service)],
+        always_tools=[
+            *meta_tools(capture_repository, context_service, preferences_repository, capture_projection=capture_projection),
+            *tracking_tools(health_repository, cycle_service),
+            (SET_REMINDER_TOOL, lambda uid, inp, now: handle_set_reminder(uid, inp, now, task_service=task_service, reminder_service=reminder_service)),
+            (LIST_REMINDERS_TOOL, lambda uid, inp, now: handle_list_reminders(uid, inp, now, reminder_service=reminder_service)),
+        ],
         summariser=summariser,
         onboarding_check=lambda uid: needs_onboarding(profile_service, uid),
         onboarding_system=ONBOARDING_SYSTEM,

@@ -339,8 +339,8 @@ class PostgresReminderRepository:
                 cursor.execute(
                     """
                     INSERT INTO reminders (
-                        id, task_id, user_id, remind_at, status, created_at, label
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        id, task_id, user_id, remind_at, status, created_at, label, recur_daily
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
@@ -351,6 +351,7 @@ class PostgresReminderRepository:
                         reminder.status.value,
                         reminder.created_at,
                         reminder.task_title if reminder.task_id is None else None,
+                        reminder.recur_daily,
                     ),
                 )
                 return self._reminder(cursor.fetchone(), reminder.task_title)
@@ -459,6 +460,7 @@ class PostgresReminderRepository:
             task_title=task_title,
             remind_at=row["remind_at"],
             status=ReminderStatus(row["status"]),
+            recur_daily=row.get("recur_daily", False),
             created_at=row["created_at"],
         )
 

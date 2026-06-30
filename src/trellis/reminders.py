@@ -23,6 +23,7 @@ class ReminderIntent:
     task_title: str  # task title or standalone label
     task_id: UUID | None = None
     status: ReminderStatus = ReminderStatus.SCHEDULED
+    recur_daily: bool = False
     created_at: datetime = datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -84,6 +85,7 @@ class ReminderService:
         label: str,
         remind_at: datetime,
         *,
+        recur_daily: bool = False,
         now: datetime | None = None,
     ) -> ReminderIntent:
         now = now or datetime.now(timezone.utc)
@@ -96,6 +98,7 @@ class ReminderService:
                 task_id=None,
                 task_title=label,
                 remind_at=remind_at,
+                recur_daily=recur_daily,
                 created_at=now,
             )
         )

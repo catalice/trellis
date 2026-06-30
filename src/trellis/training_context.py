@@ -69,30 +69,14 @@ class _CompletionService(Protocol):
 
 
 _COACHING_INSTRUCTIONS = """\
-Coaching framework — follow these when handling training requests:
+Tools — use these correctly:
+- To plan the week: generate sessions and call save_week_plan with the full \
+sessions array. Do not call adjust_training for this.
+- To adapt a session based on readiness: call apply_readiness_adaptation.
+- To build or regenerate the training arc: call save_training_arc.
 
-WEEK PLAN: When the user asks to plan the week, generate sessions and call \
-save_week_plan with the full sessions array. Do not call adjust_training for this.
-  BUILD: include easy run, hard run (threshold for build phase, VO2max for sharpen), \
-long run, mobility. Use arc phase targets and readiness to calibrate.
-  DELOAD: easy running and mobility only — no hard sessions, no long run.
-  Day rules: avoid anchor days, no consecutive run days, long run needs rest or \
-easy movement the day before. Do not generate strength sessions.
-
-SESSION CONTENT: Every session needs real blocks with specific instructions — \
-not placeholders. Vary activation drills each week (A-skips, B-skips, pogos, \
-leg swings, high knees, lateral shuffles). Effort language: conversational (easy), \
-hard but sustainable (threshold/moderate), very hard (VO2max/hard).
-
-TRAINING ARC: When asked to build or regenerate the arc, generate phases then \
-call save_training_arc. Start from today, build toward race date, include recovery.
-  Phases: Aerobic Base → Build → Sharpen → Taper → Recovery.
-  Each phase needs name, focus, start/end dates, weekly_runs, long_run_minutes, \
-intensity, notes.
-
-READINESS ADAPTATION: keep (score ≥70), reduce (50–69, same type lighter), \
-swap (hard session, score <50 — replace with easy today), rest (very low or illness).
-  To apply adaptation: generate the adapted session and call apply_readiness_adaptation.\
+One constraint: do not generate strength sessions. Strength is set by the PT — \
+only include it if explicitly asked.\
 """
 
 
@@ -124,7 +108,7 @@ def training_context_loader(
 
         if garmin_sync_service is not None:
             try:
-                garmin_sync_service.sync_if_stale(user_id, stale_after_minutes=10, days=2)
+                garmin_sync_service.sync_if_stale(user_id, stale_after_minutes=60, days=1)
             except Exception:
                 _log.warning("training_context: garmin sync failed", exc_info=True)
 
@@ -243,7 +227,8 @@ def training_context_loader(
                 last_week_summary = completion_service.summary(user_id, last_week_start)
                 if last_week_summary:
                     parts.append(
-                        f"Last week ({last_week_start.strftime('%-d %b')}–{last_week_end.strftime('%-d %b')}):\n{last_week_summary}"
+                        f"Last week ({last_week_start.strftime('%-d %b')}–{last_week_end.strftime('%-d %b')}) "
+                        f"— verified Garmin matches only. ✓ = confirmed activity, — = no Garmin match (do not infer or fill gaps from the plan):\n{last_week_summary}"
                     )
             except Exception:
                 _log.warning("training_context: last week summary failed", exc_info=True)

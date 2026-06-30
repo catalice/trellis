@@ -1,19 +1,45 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable
 
+import anthropic
 from anthropic import Anthropic
 
 _log = logging.getLogger(__name__)
 
 _MAX_TOOL_ITERATIONS = 8
+_RETRY_DELAYS = (1.0, 3.0)  # two retries, exponential-ish
 
 
 class Oracle:
     def __init__(self, client: Anthropic, model: str) -> None:
         self._client = client
         self._model = model
+
+    def _api_call(self, kwargs: dict):
+        last_exc: Exception | None = None
+        for attempt, delay in enumerate((*_RETRY_DELAYS, None)):
+            try:
+                return self._client.messages.create(**kwargs)
+            except (
+                anthropic.RateLimitError,
+                anthropic.APITimeoutError,
+                anthropic.APIConnectionError,
+            ) as exc:
+                last_exc = exc
+                _log.warning("Anthropic API transient error (attempt %d): %s", attempt + 1, exc)
+                if delay is not None:
+                    time.sleep(delay)
+            except anthropic.APIStatusError as exc:
+                if exc.status_code in (529, 503, 500) and delay is not None:
+                    last_exc = exc
+                    _log.warning("Anthropic API %d (attempt %d): %s", exc.status_code, attempt + 1, exc)
+                    time.sleep(delay)
+                else:
+                    raise
+        raise last_exc  # type: ignore[misc]
 
     def run(
         self,
@@ -33,7 +59,7 @@ class Oracle:
 
         response = None
         for _ in range(_MAX_TOOL_ITERATIONS):
-            response = self._client.messages.create(**kwargs)
+            response = self._api_call(kwargs)
 
             if response.stop_reason == "end_turn":
                 return self._extract_text(response)
