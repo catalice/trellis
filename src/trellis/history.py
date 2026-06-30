@@ -22,15 +22,16 @@ class PostgresConversationHistory:
         self.database = database
         self._timezone = timezone
 
-    def append(self, user_id: UUID, role: str, content: str) -> None:
+    def append(self, user_id: UUID, role: str, content: str, metadata: dict | None = None) -> None:
+        import json
         with self.database.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO conversation_turns (user_id, role, content)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO conversation_turns (user_id, role, content, metadata)
+                    VALUES (%s, %s, %s, %s)
                     """,
-                    (user_id, role, content),
+                    (user_id, role, content, json.dumps(metadata or {})),
                 )
 
     def recent(self, user_id: UUID, limit: int = 12) -> list[ConversationTurn]:

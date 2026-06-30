@@ -114,7 +114,10 @@ class Assembler:
 
         response = self._oracle.run(system, messages, tool_schemas, bound_handlers)
 
-        self._history.append(user_id, "user", message)
+        self._history.append(user_id, "user", message, metadata={
+            "handled_by": "claude",
+            "domains": sorted(domains),
+        })
         if response:
             self._history.append(user_id, "assistant", response)
 
