@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VAULT="${OBSIDIAN_VAULT:-$HOME/Documents/Second-Brain}"
+VAULT="${OBSIDIAN_VAULT:-$HOME/Documents/Second-Brain/second-brain}"
 BACKUP_DIR="$VAULT/.backups"
 STAMP="$(date +%Y-%m-%d)"
 OUT="$BACKUP_DIR/trellis-$STAMP.sql.gz"
