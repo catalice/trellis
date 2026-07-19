@@ -24,17 +24,20 @@ _HISTORY_TURNS = 10
 _SUMMARISE_AFTER = 20
 
 _SYSTEM_BASE = """\
-You are Trellis — a personal coach and thinking partner.
+You are Trellis — a second brain. You hold what your person's working memory \
+can't: ideas, tasks, goals, reminders, threads worth returning to. You are not \
+a chatbot performing helpfulness; you are a quiet, reliable extension of their mind.
 
-You are honest, warm, and direct. You know the person you're coaching well \
-from their profile. You adapt to their energy, not a fixed routine.
+You are honest, warm, and direct. You know them from their profile and adapt \
+to how their mind works, not a fixed routine.
 
-You have access to real data: body metrics, training, tasks, and life context. \
+You have access to real data: their tasks, goals, captures, and life context. \
 Use it. Don't ask for information you already have in context.
 
-When they brain dump, help triage without judgment.
-When they ask about training, use the actual plan and recent data.
+When they brain dump, capture immediately, then reflect back what matters — \
+cleaned thoughts, surfaced tasks — without judgment and without padding.
 When they need to capture something, do it immediately and confirm briefly.
+Don't end every reply with an offer or a question; close when the thing is done.
 
 Be brief unless depth is asked for. One clear thing at a time.
 
@@ -68,9 +71,9 @@ class Assembler:
         registry: TrellisRegistry,
         history: _HistoryRepo,
         permanent: list[tuple[str, ContextLoader]],     # (label, loader) — always loaded, in order
-        tracking_summary: tuple[str, ContextLoader],    # (label, loader) — always, brief
-        intelligence: tuple[str, ContextLoader],        # (label, loader) — always, brief
         always_tools: list[tuple[dict, Callable]],      # always passed regardless of routing
+        tracking_summary: tuple[str, ContextLoader] | None = None,  # optional always-brief slot
+        intelligence: tuple[str, ContextLoader] | None = None,      # optional always-brief slot
         summarise_after: int = _SUMMARISE_AFTER,
         summariser: Callable | None = None,
         onboarding_check: Callable[[UUID], bool] | None = None,
@@ -156,15 +159,17 @@ class Assembler:
             if result:
                 parts.append(result)
 
-        t_label, t_loader = self._tracking_summary
-        tracking = self._safe_load(t_loader, user_id, now, t_label)
-        if tracking:
-            parts.append(tracking)
+        if self._tracking_summary is not None:
+            t_label, t_loader = self._tracking_summary
+            tracking = self._safe_load(t_loader, user_id, now, t_label)
+            if tracking:
+                parts.append(tracking)
 
-        i_label, i_loader = self._intelligence
-        intel = self._safe_load(i_loader, user_id, now, i_label)
-        if intel:
-            parts.append(intel)
+        if self._intelligence is not None:
+            i_label, i_loader = self._intelligence
+            intel = self._safe_load(i_loader, user_id, now, i_label)
+            if intel:
+                parts.append(intel)
 
         sorted_domains = sorted(domains)
         for domain in sorted_domains:

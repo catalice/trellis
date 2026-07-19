@@ -18,18 +18,12 @@ from trellis.core_registry import TrellisRegistry
 from trellis.core_summariser import make_summariser
 from trellis.core_telegram import TelegramTrellis, make_transcriber
 from trellis.infra_obsidian import ObsidianVault
-from trellis.infra_tracking import CycleService, PostgresHealthRepository
-from trellis.intelligence_context import intelligence_context_loader
 from trellis.postgres import (
-    PostgresCycleRepository,
     PostgresCurrentContextRepository,
     PostgresDatabase,
-    PostgresInsightRepository,
     PostgresPreferencesRepository,
     PostgresUserProfileRepository,
 )
-from trellis.tracking_context import tracking_context_loader
-from trellis.tracking_tool import tracking_tools
 from trellis.user_context import CurrentContextService, UserProfileService
 
 # Second brain domain — the product. Training and learn are future modules;
@@ -111,11 +105,6 @@ def main() -> None:
 
     history = PostgresConversationHistory(database, settings.timezone)
     preferences_repository = PostgresPreferencesRepository(database)
-    insight_repository = PostgresInsightRepository(database)
-
-    # --- Body tracking (self-reports, cycle) ---
-    health_repository = PostgresHealthRepository(database)
-    cycle_service = CycleService(PostgresCycleRepository(database))
 
     # --- Permanent context services ---
     profile_service = UserProfileService(PostgresUserProfileRepository(database))
@@ -174,8 +163,6 @@ def main() -> None:
             ("current_context", _current_context_loader(context_service)),
             ("snapshot", second_brain_snapshot(task_service, reminder_service)),
         ],
-        tracking_summary=("tracking", tracking_context_loader(health_repository, cycle_service)),
-        intelligence=("intelligence", intelligence_context_loader(insight_repository)),
         always_tools=[
             (
                 BRAIN_DUMP_TOOL,
@@ -184,7 +171,6 @@ def main() -> None:
                 ),
             ),
             *meta_tools(context_service, preferences_repository),
-            *tracking_tools(health_repository, cycle_service),
         ],
         summariser=summariser,
         default_domain="second_brain",
