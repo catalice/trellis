@@ -316,5 +316,6 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 - Runs via Docker Compose: `docker compose up --build`
 - `.env` is gitignored — contains live bot token, API key, secrets. Never log or expose.
-- DB reset: `scripts/reset_training.sql`
+- DB reset (full wipe): `docker compose down -v && docker compose up --build -d`
+- Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
 - Tests: `.venv/bin/pytest tests/ -q`
