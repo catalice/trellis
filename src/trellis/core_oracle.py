@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import Callable
 
 import anthropic
@@ -11,6 +12,26 @@ _log = logging.getLogger(__name__)
 
 _MAX_TOOL_ITERATIONS = 8
 _RETRY_DELAYS = (1.0, 3.0)  # two retries, exponential-ish
+_TRACE_RESULT_CHARS = 120
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    name: str
+    result_summary: str  # first line of the tool result, truncated
+
+
+@dataclass(frozen=True)
+class OracleResult:
+    text: str
+    tool_calls: tuple[ToolCall, ...] = ()
+
+    def trace(self) -> str | None:
+        """Compact record of actions taken, for conversation history."""
+        if not self.tool_calls:
+            return None
+        entries = "; ".join(f"{c.name} → {c.result_summary}" for c in self.tool_calls)
+        return f"[actions taken: {entries}]"
 
 
 class Oracle:
@@ -47,7 +68,7 @@ class Oracle:
         messages: list[dict],
         tools: list[dict],
         handlers: dict[str, Callable[[dict], str]],
-    ) -> str:
+    ) -> OracleResult:
         kwargs: dict = {
             "model": self._model,
             "max_tokens": 8192,
@@ -57,18 +78,23 @@ class Oracle:
         if tools:
             kwargs["tools"] = tools
 
+        calls: list[ToolCall] = []
         response = None
         for _ in range(_MAX_TOOL_ITERATIONS):
             response = self._api_call(kwargs)
 
             if response.stop_reason == "end_turn":
-                return self._extract_text(response)
+                return OracleResult(self._extract_text(response), tuple(calls))
 
             if response.stop_reason == "tool_use":
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
                         result = self._call(block.name, block.input, handlers)
+                        calls.append(ToolCall(
+                            name=block.name,
+                            result_summary=result.splitlines()[0][:_TRACE_RESULT_CHARS] if result else "",
+                        ))
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -81,13 +107,13 @@ class Oracle:
                 ]
                 continue
 
-            return self._extract_text(response)
+            return OracleResult(self._extract_text(response), tuple(calls))
 
         _log.warning("oracle hit iteration cap")
         text = self._extract_text(response) if response else ""
         if not text:
             _log.warning("oracle returned empty text at iteration cap; last stop_reason=%s", getattr(response, "stop_reason", None))
-        return text
+        return OracleResult(text, tuple(calls))
 
     def _call(self, name: str, input_dict: dict, handlers: dict[str, Callable[[dict], str]]) -> str:
         handler = handlers.get(name)

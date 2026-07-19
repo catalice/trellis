@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 from typing import Callable, Protocol
 from uuid import UUID
 
-from trellis.oracle import Oracle
-from trellis.registry import ContextLoader, TrellisRegistry
-from trellis.router import Router
+from trellis.core_oracle import Oracle
+from trellis.core_registry import ContextLoader, TrellisRegistry
+from trellis.core_router import Router
 
 _log = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ class Assembler:
         onboarding_check: Callable[[UUID], bool] | None = None,
         onboarding_system: str | None = None,
         onboarding_tools: list[tuple[dict, Callable]] | None = None,
+        default_domain: str | None = None,
     ) -> None:
         self._oracle = oracle
         self._registry = registry
@@ -89,7 +90,7 @@ class Assembler:
         self._onboarding_check = onboarding_check
         self._onboarding_system = onboarding_system
         self._onboarding_tools = onboarding_tools or []
-        self._router = Router(registry.all_signals())
+        self._router = Router(registry.all_signals(), default_domain=default_domain)
         self._last_summarised: dict[UUID, int] = {}
 
     def handle_turn(self, user_id: UUID, message: str) -> str:
@@ -112,18 +113,17 @@ class Assembler:
             {"role": "user", "content": message},
         ]
 
-        response = self._oracle.run(system, messages, tool_schemas, bound_handlers)
+        result = self._oracle.run(system, messages, tool_schemas, bound_handlers)
 
         self._history.append(user_id, "user", message, metadata={
             "handled_by": "claude",
             "domains": sorted(domains),
         })
-        if response:
-            self._history.append(user_id, "assistant", response)
+        self._save_assistant_turn(user_id, result)
 
         self._maybe_summarise(user_id, domains)
 
-        return response
+        return result.text
 
     # --- Onboarding mode ----------------------------------------------------
 
@@ -139,11 +139,10 @@ class Assembler:
             *self._history.to_messages(turns),
             {"role": "user", "content": message},
         ]
-        response = self._oracle.run(system, messages, schemas, handlers)
+        result = self._oracle.run(system, messages, schemas, handlers)
         self._history.append(user_id, "user", message)
-        if response:
-            self._history.append(user_id, "assistant", response)
-        return response
+        self._save_assistant_turn(user_id, result)
+        return result.text
 
     # --- Context assembly ---------------------------------------------------
 
@@ -222,6 +221,22 @@ class Assembler:
         self._last_summarised[user_id] = count
 
     # --- Helpers ------------------------------------------------------------
+
+    def _save_assistant_turn(self, user_id: UUID, result) -> None:
+        """Persist the assistant's reply with a trace of tool calls made.
+
+        The trace goes into history only (not the user-facing reply) so that
+        future turns can see which actions were actually taken — without it,
+        Claude reads a text-only transcript and can't tell whether "done"
+        meant a real tool call.
+        """
+        if not result.text and not result.tool_calls:
+            return
+        content = result.text
+        trace = result.trace()
+        if trace:
+            content = f"{content}\n{trace}" if content else trace
+        self._history.append(user_id, "assistant", content)
 
     @staticmethod
     def _safe_load(

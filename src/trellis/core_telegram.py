@@ -2,16 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timezone
+from typing import Callable
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from trellis.assembler import Assembler
-from trellis.config import Settings
-from trellis.garmin_sync import GarminSyncService
+from trellis.core_assembler import Assembler
+from trellis.core_config import Settings
+from trellis.infra_garmin import GarminSyncService
 from trellis.postgres import PostgresDatabase
-from trellis.reminders import ReminderService
+from trellis.domain_second_brain_service import ReminderService
+
+# (audio_bytes) -> transcript
+Transcriber = Callable[[bytes], str]
+
+
+def make_transcriber(groq_client, model: str = "whisper-large-v3-turbo") -> Transcriber:
+    def transcribe(audio: bytes) -> str:
+        response = groq_client.audio.transcriptions.create(
+            file=("voice.ogg", audio),
+            model=model,
+        )
+        return response.text.strip()
+    return transcribe
 
 
 class TelegramTrellis:
@@ -23,6 +37,7 @@ class TelegramTrellis:
         reminders: ReminderService | None = None,
         garmin_sync_service: GarminSyncService | None = None,
         pattern_engine=None,
+        transcriber: Transcriber | None = None,
     ):
         self.settings = settings
         self.database = database
@@ -30,6 +45,7 @@ class TelegramTrellis:
         self.reminders = reminders
         self.garmin_sync_service = garmin_sync_service
         self.pattern_engine = pattern_engine
+        self.transcriber = transcriber
         self._reminder_delivery_task: asyncio.Task | None = None
         self.logger = logging.getLogger(__name__)
 
@@ -45,6 +61,7 @@ class TelegramTrellis:
         application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.message)
         )
+        application.add_handler(MessageHandler(filters.VOICE, self.voice))
         if self.pattern_engine is not None:
             if application.job_queue is None:
                 self.logger.warning("Scheduled jobs disabled: job-queue extra not installed")
@@ -92,24 +109,15 @@ class TelegramTrellis:
                 and telegram_user_id not in self.settings.telegram_allowed_users
             ):
                 continue
-            due = [
-                reminder
-                for reminder in self.reminders.list_scheduled(user_id)
-                if reminder.remind_at.astimezone(timezone.utc) <= now
-            ]
+            due = self.reminders.upcoming(user_id, hours=0, now=now)
             for reminder in due:
                 await application.bot.send_message(
                     chat_id=telegram_user_id,
-                    text=f"Reminder: {reminder.task_title}",
+                    text=f"Reminder: {reminder.label}",
                 )
                 self.reminders.mark_sent(reminder.id)
                 if reminder.recur_daily:
-                    self.reminders.schedule_standalone_reminder(
-                        user_id,
-                        reminder.task_title,
-                        reminder.remind_at + timedelta(days=1),
-                        recur_daily=True,
-                    )
+                    self.reminders.reschedule_daily(user_id, reminder, now=now)
                 delivered += 1
         return delivered
 
@@ -123,10 +131,39 @@ class TelegramTrellis:
         user_id = self._user(update)
         if user_id is None:
             return
+        await self._respond(update, user_id, update.message.text)
 
-        text = update.message.text
-        now = datetime.now(self.settings.timezone)
+    async def voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user_id = self._user(update)
+        if user_id is None:
+            return
+        if self.transcriber is None:
+            await update.message.reply_text(
+                "Voice notes aren't set up right now — send it as text instead."
+            )
+            return
 
+        await update.message.chat.send_action("typing")
+        try:
+            voice_file = await update.message.voice.get_file()
+            audio = bytes(await voice_file.download_as_bytearray())
+            transcript = await asyncio.to_thread(self.transcriber, audio)
+        except Exception:
+            self.logger.exception("Voice transcription failed for user %s", user_id)
+            await update.message.reply_text(
+                "Couldn't transcribe that voice note — try again or send it as text."
+            )
+            return
+
+        if not transcript:
+            await update.message.reply_text(
+                "That voice note came through empty — try again?"
+            )
+            return
+
+        await self._respond(update, user_id, transcript)
+
+    async def _respond(self, update: Update, user_id, text: str) -> None:
         await update.message.chat.send_action("typing")
         try:
             reply = await asyncio.to_thread(

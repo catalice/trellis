@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from trellis.garmin.models import GarminActivity, GarminDailyHealth
+from trellis.infra_garmin import GarminActivity, GarminDailyHealth
 
 
 class HealthProvider(StrEnum):

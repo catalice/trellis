@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from trellis.registry import ContextLoader
+from trellis.core_registry import ContextLoader
 
 
 class _LearningService(Protocol):

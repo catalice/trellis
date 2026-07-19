@@ -6,8 +6,16 @@ Read this before touching anything. These rules exist because we learned them th
 
 ## What Trellis is
 
-A personal operating system for Cat. Not a running bot with extra features.
-Full direction: `docs/DIRECTION.md`. Read it if you haven't.
+Trellis is a second brain. Not a coaching bot. Not a task manager. A persistent external mind that holds what Cat's brain can't — ideas, tasks, goals, things worth remembering — and synthesises it into something useful.
+
+Coaching (training) and structured learning are modules that plug into the second brain. The second brain is the system. Everything else is a room inside it.
+
+**Three modes:**
+- **Second brain** — capture, synthesise, triage, retrieve, build. The front door. Default when nothing else is signalled.
+- **Training** — physical coaching module. Plans, Garmin, readiness, arc. Add-on, not the core.
+- **Learn** — deliberate knowledge building. Threads, synthesis, understanding over time.
+
+Full direction: `docs/DIRECTION.md`.
 
 ---
 
@@ -21,49 +29,69 @@ When in doubt: say what you'd do and ask first.
 
 ## Python / Claude boundary
 
-This is the most important architectural rule. Getting it wrong is how the system becomes rigid or expensive.
-
 **Python owns:**
 - Data persistence (all DB writes)
 - Garmin sync and health data
 - Readiness scoring (deterministic calculation)
-- Structural validation (no two hard sessions in a week, etc.)
-- Strength session generation (PT sets the programme — Python generates these anchors)
+- Structural validation
 - Tool execution and side effects
 - Anything that must produce the same result every time
 
 **Claude owns:**
+- Brain dump synthesis — triage, clean up, surface actions and project seeds
 - All running session content (easy run, long run, hard run, social run, mobility)
 - Coaching decisions (what kind of week, how much load, what to adjust)
 - Interpreting what the user actually needs from a message
-- Responses and explanations to the user
 - Anything requiring judgment, nuance, or knowledge
 
 **The test:** is this a fact or a judgment? Facts live in Python. Judgments go to Claude.
 
-**Never:** hardcode session content in Python. No fixed activation sequences, no templated run blocks, no if/else coaching rules. Claude generates all of that — that's the whole point.
+**Never:** hardcode content in Python. No fixed coaching rules, no templated session blocks, no if/else synthesis logic. Claude generates all of that.
 
 ---
 
-## File naming convention
+## File naming — non-negotiable
 
-Flat structure, domain prefix. No nested folders.
+Every file in `src/trellis/` must be exactly one of these categories. Flat structure, no nested folders, no exceptions.
 
 ```
-training_models.py     # domain models
-training_service.py    # business logic
-training_claude.py     # all Claude calls for this domain
-training_repo.py       # storage protocol + postgres impl
-training_tool.py       # tool schema + handler
+# Core — runtime infrastructure
+core_assembler.py
+core_config.py
+core_history.py
+core_main.py
+core_meta_tool.py
+core_onboarding.py
+core_oracle.py
+core_profile.py        # UserProfile, CurrentContext — global services
+core_registry.py
+core_router.py
+core_summariser.py
+core_telegram.py
+
+# Infrastructure — data sources, not domains
+infra_garmin.py      # Garmin API client, sync, push, connection management
+infra_tracking.py    # health records, readiness scoring, cycle, self-reports
+infra_postgres.py    # DB connection + migrate() only — no repo classes here
+
+# Domains — exactly 5 files each
+domain_{second_brain|training|learn}_models.py
+domain_{second_brain|training|learn}_service.py
+domain_{second_brain|training|learn}_claude.py
+domain_{second_brain|training|learn}_repo.py
+domain_{second_brain|training|learn}_tool.py
+
+# Migrations
+migrations/001_schema.sql   # single clean-state file
 ```
 
-Adding a new domain (e.g. `learn`) means creating `learn_models.py`, `learn_service.py`, etc. Same pattern every time.
+**If a file doesn't fit one of these patterns, it cannot be created.** Stop, explain why it doesn't fit, and get explicit agreement before writing anything. This rule exists because the codebase grew to 58 files by ignoring it.
 
 ---
 
 ## Domain file pattern
 
-Every domain follows this structure:
+Every domain follows this structure exactly:
 
 | File | Contents | Rule |
 |------|----------|------|
@@ -71,7 +99,77 @@ Every domain follows this structure:
 | `*_service.py` | Business logic | Never talks to Claude or DB directly — delegates |
 | `*_claude.py` | All Claude calls | Prompts as module-level constants; methods return typed data or None on failure |
 | `*_repo.py` | Storage | Protocol at top, Postgres impl below |
-| `*_tool.py` | Tool wiring | Schema dict + one handler `(user_id, input_dict, now) → str` |
+| `*_tool.py` | Tool wiring + context loader | Schema dict + handler `(user_id, input_dict, now) → str`; context loader factory at bottom |
+
+---
+
+## The second brain domain
+
+The core of Trellis. Default domain when no other signal fires — if the message doesn't sound like training or structured learning, it lands here.
+
+**What it owns:**
+- Brain dumps (raw text in, synthesised + triaged out)
+- Ideas (wild, half-formed, philosophical — all valid)
+- Tasks and reminders
+- Goals (all types — training goals are a subset, not separate)
+- Captures (links, quotes, references)
+- Periodic cleanup sessions ("what have I got, let's organise it")
+
+**What it does not own:**
+- Training plans, sessions, Garmin data → training module
+- Structured learning threads → learn module
+
+**The synthesis pipeline** — the feature that makes this a second brain, not a notes dump:
+
+```
+user sends brain dump
+       ↓
+Claude triages + synthesises (domain_second_brain_claude.py)
+       ↓
+Returns: BrainDumpResult
+  - type: idea | task | goal | project_seed | question | reference | mixed
+  - cleaned_text: coherent version, not garbled
+  - action_items: list[str] — anything that implies a to-do
+  - project_hints: list[str] — anything that suggests a larger project
+  - raw preserved alongside
+       ↓
+Stored in DB. Claude responds with the cleaned version + any actions surfaced.
+```
+
+The original dump is always preserved. The synthesis sits alongside it.
+
+**Goals live here, not in training.** All goals — race, life, habit, general — are owned by second_brain. Training domain reads training-relevant goals (goal_type: race|aerobic|strength) as Tier 1b context when building plans. Second_brain shows all goals.
+
+---
+
+## Training domain
+
+A module. The old code (`training_*.py`, `ef_*.py`, etc.) stays functional until this domain is built. Build second_brain first.
+
+**What it owns:**
+- Weekly training plans and sessions
+- Training arc (periodisation)
+- Garmin integration (activities, sync, push to watch)
+- Readiness adaptation
+- Morning check-ins, post-workout logs, strength sessions
+- Training-specific anchors (PT, social run)
+
+**What it does not own:**
+- Goals — reads them from second_brain's goals table filtered by goal_type
+- General tasks — those are second_brain
+
+---
+
+## Learn domain
+
+A module. Deliberate knowledge building — different cognitive mode from second_brain.
+
+**The distinction:** second_brain is retrieval and action (closing tabs, not losing things). Learn is synthesis and understanding (building something deliberately). Test: does it need to be *done* or *understood*? Done → second_brain. Understood → learn.
+
+**What it owns:**
+- Learning threads (named topics)
+- Entries within threads
+- Periodic synthesis within a thread
 
 ---
 
@@ -80,53 +178,143 @@ Every domain follows this structure:
 - Prompts are **module-level constants**, never inline strings inside methods
 - Every Claude call has a **typed return** — parse the response, return a dataclass or None
 - Parse failures **log a warning and return None** — callers handle gracefully, never crash
-- `max_tokens` must be set generously for calls that return full session JSON (8192+)
+- `max_tokens` must be set generously for calls that return full JSON (8192+)
 - Never call Claude for something Python can calculate deterministically
 
 ---
 
 ## Service rules
 
-- Services are **thin** — validate input, call repo/claude, return formatted string
+- Services are **thin** — validate input, call repo/claude, return typed data
 - No 500-line if/elif chains — one method per action
 - Services never talk to Claude directly — that goes through the `*_claude.py` module
 - Fallback on Claude failure: **raise**, don't silently return a degraded result
 
+**Services never return strings.** String formatting belongs exclusively in the tool handler.
+
+```python
+# Wrong
+def get_week_plan(self, user_id) -> str:
+    return "No plan found." if not plan else f"This week: ..."
+
+# Right
+def get_week_plan(self, user_id) -> WeekPlan | None:
+    return self.repo.latest_active(user_id)
+```
+
+The tool handler is the only place strings are assembled.
+
 ---
 
-## Lean constraints (non-negotiable from day one)
+## Tool design rules
+
+Two patterns, chosen by risk profile:
+
+| Pattern | When to use | Why |
+|---|---|---|
+| **Dispatch read** `{domain}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
+| **Specific named write** `save_week_plan`, `complete_task` | All writes | High-stakes. Explicit names prevent confusion. |
+
+**Always-available tools** (regardless of domain routing):
+- `brain_dump(text)` — capture anything, immediately; synthesis happens automatically
+- `update_context(data)` — current life situation
+- `body_log(type: self_report|cycle|period, data)`
+
+**Second brain tools (~8)**
+- `second_brain_get(what: tasks|goals|inbox|ideas|reminders|project)` — dispatch read
+- `create_task`, `complete_task`, `update_task`
+- `set_reminder`, `cancel_reminder`
+- `add_goal`, `update_goal`
+- `cleanup_session` — periodic review: "what have I got, let's organise it"
+
+**Training tools (~8)** — build second, existing code stays functional in the meantime
+- `training_get(what: plan|today|health|arc|anchors|activities)`
+- `save_week_plan`, `save_training_arc`, `adapt_session`
+- `training_log(type: morning|post_workout|strength, data)`
+- `set_anchor`, `remove_anchor`
+- `push_to_watch`
+
+**Learn tools (2)**
+- `start_learning_thread`, `add_learning_entry`
+
+**Total: ~20 tools.** The ceiling is 30. Above that, something has been added without being questioned.
+
+Note: Garmin sync is **not** a tool. It runs automatically when stale. Claude never decides to sync.
+
+---
+
+## Context strategy
+
+Three tiers. Every piece of data belongs in exactly one.
+
+**The test:**
+- Does Claude need the *content* to reason well? → Tier 1
+- Does Claude just need to know something exists or how urgent it is? → Tier 2
+- Is it detail Claude might need but often won't? → Tier 3
+
+**Tier 1a — Global** (always loaded, every turn):
+- **Profile** — who Cat is, physiology, background
+- **Life context** — user-managed via `update_context`. "Wedding in 3 weeks." Affects everything.
+- **Latest self-report** — today's energy/body/life load if logged
+
+**Tier 1b — Domain-routed** (loaded when domain is active):
+- **second_brain:** active task count + recent ideas summary + active goals
+- **training:** training-relevant goals (race|aerobic|strength) + detected patterns/insights
+- **learn:** active thread names
+
+**Tier 2 — Snapshot** (always loaded, existence and urgency only):
+```
+Today: Monday 2 July
+Tasks: 3 overdue, 2 due today
+Readiness: STEADY
+Reminders: 1 due at 18:00
+```
+
+**Tier 3 — Tool-on-demand:** task content, session details, thread entries, arc, activity history.
+
+The snapshot does not grow. Any new line must pass: *does this tell Claude something exists or how urgent it is?*
+
+---
+
+## Lean constraints (non-negotiable)
 
 - **One Claude call per turn.** Never add a second call. Add tools instead.
-- **Domain routing.** Before the oracle loads context, a lightweight classifier determines which domains are relevant to the message. Training questions load training context. Task questions load task context. Never load everything for everything. This is an architectural constraint, not a future optimisation — it must be present in the initial design.
-- **Bounded context.** Insights, patterns, and history enter the oracle as summaries. Never pass raw records. Context size is a cost.
-- **Tools as the API surface.** A future UI calls the same tools Telegram does. Design tools accordingly — they are the interface.
+- **Minimal pre-loaded context.** The failure mode is loading too much, not too little.
+- **Bounded context.** Insights and history enter as summaries. Never pass raw records.
+- **Tools as the API surface.** A future UI calls the same tools Telegram does.
+
+---
+
+## Future UI compatibility
+
+1. **Services return typed data, not strings.** Tool handler converts to string for Claude, REST endpoint converts to JSON. Service is indifferent to both.
+2. **Everything through the repo layer.** No ad-hoc SQL in handlers.
+3. **Tools have two consumers.** Claude now, UI later. Keep the seam clean.
 
 ---
 
 ## Things we keep re-learning (don't repeat)
 
-- **Don't build what wasn't asked for.** The long run day preference feature is a good example of something built without being asked. It wasted time and had to be reverted.
-- **Social run content belongs to Claude.** It was hardcoded in Python for months before being fixed. Never again.
-- **max_tokens too low truncates JSON silently.** Claude hits the limit mid-JSON and the parse fails. Always set 8192+ for structured responses.
-- **`goals` table must be in the reset script.** Easy to forget, causes duplicate goals on re-onboarding.
+- **Don't build what wasn't asked for.**
+- **Content belongs to Claude.** Never hardcode session content, coaching rules, or synthesis logic in Python.
+- **max_tokens too low truncates JSON silently.** Always set 8192+ for structured responses.
 - **ReadinessBand has no MODERATE.** Valid values: LOW, STEADY, READY, STRONG.
 - **Don't revert a commit by amending.** Create a new commit.
+- **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.
+
+---
+
+## Build order
+
+1. **second_brain** — this is Trellis. Build it first.
+2. **training** — module, add after. Existing code stays functional in the meantime.
+3. **learn** — module, comes naturally after second_brain is solid.
 
 ---
 
 ## Deployment
 
 - Runs via Docker Compose: `docker compose up --build`
-- `.env` is gitignored — contains live bot token, API key, secrets. Never log or expose contents.
-- DB reset for clean onboarding: `scripts/reset_training.sql` (keeps garmin/health data, wipes training/profile/context)
+- `.env` is gitignored — contains live bot token, API key, secrets. Never log or expose.
+- DB reset: `scripts/reset_training.sql`
 - Tests: `.venv/bin/pytest tests/ -q`
-
----
-
-## Current state
-
-Working: oracle, body module (Garmin, readiness, self-report, cycle), training module (continuous coach, plan creation, social run, deload/holiday, arc, PT logging, session completion), mind module (tasks, brain dump, ideas), intelligence layer (pattern engine, insights), goals, Obsidian write.
-
-Not yet built: Obsidian two-way sync, mobility as deliberate pillar, post-run analysis, adaptive routines, UI.
-
-Build order: `docs/DIRECTION.md` section "Build Order".

@@ -13,9 +13,9 @@ dependencies = [
 ]
 
 [project.scripts]
-trellis = "trellis.main:main"
-trellis-garmin-setup = "trellis.garmin_setup:main"
-trellis-garmin-sync = "trellis.garmin_sync:main"
+trellis = "trellis.core_main:main"
+trellis-garmin-setup = "trellis.infra_garmin:main_setup"
+trellis-garmin-sync = "trellis.infra_garmin:main_sync"
 
 [build-system]
 requires = ["hatchling"]

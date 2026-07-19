@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from trellis.garmin_setup import GarminConnectionStatus
+from trellis.infra_garmin import GarminConnectionStatus
 from trellis.health import GarminActivityRecord, GarminDailyHealthRecord
 
 

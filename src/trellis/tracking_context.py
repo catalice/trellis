@@ -15,7 +15,7 @@ from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
-from trellis.registry import ContextLoader
+from trellis.core_registry import ContextLoader
 
 _log = logging.getLogger(__name__)
 

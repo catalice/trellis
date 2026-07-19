@@ -503,32 +503,6 @@ RUN_PATTERN_SCAN_TOOL = {
     "input_schema": {"type": "object", "properties": {}, "required": []},
 }
 
-ADD_GOAL_TOOL = {
-    "name": "add_goal",
-    "description": (
-        "Add a new goal or waypoint. Use for races, aerobic targets, strength milestones, "
-        "or any other named goal. Races have fixed dates; other waypoints can move."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string"},
-            "goal_type": {"type": "string", "enum": ["race", "aerobic", "strength", "general"]},
-            "target_date_iso": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "is_fixed_date": {"type": "boolean"},
-            "metrics": {"anyOf": [{"type": "object"}, {"type": "null"}]},
-            "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-        },
-        "required": ["title", "goal_type"],
-    },
-}
-
-LIST_GOALS_TOOL = {
-    "name": "list_goals",
-    "description": "List all active goals and waypoints.",
-    "input_schema": {"type": "object", "properties": {}, "required": []},
-}
-
 SYNC_GARMIN_TOOL = {
     "name": "sync_garmin",
     "description": (
@@ -639,33 +613,6 @@ DELETE_GARMIN_WORKOUT_TOOL = {
         "required": ["workout_id"],
     },
 }
-
-UPDATE_GOAL_TOOL = {
-    "name": "update_goal",
-    "description": (
-        "Update an existing goal — move the target date, update metrics, "
-        "mark as achieved, change the title, or remove a duplicate by setting status to 'dropped'."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "goal_id": {"type": "string"},
-            "title": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "target_date_iso": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "is_fixed_date": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
-            "metrics": {"anyOf": [{"type": "object"}, {"type": "null"}]},
-            "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            "status": {
-                "anyOf": [
-                    {"type": "string", "enum": ["active", "achieved", "paused", "dropped"]},
-                    {"type": "null"},
-                ],
-            },
-        },
-        "required": ["goal_id"],
-    },
-}
-
 
 # ---------------------------------------------------------------------------
 # Handlers
@@ -831,9 +778,9 @@ def handle_generate_training_arc(
 ) -> str:
     if goal_service is None:
         return "No goals found — save a race goal first."
-    goals = goal_service.list_active(user_id)
+    goals = goal_service.list_training_goals(user_id)
     if not goals:
-        return "No active goals found — save a race goal first, then build the arc."
+        return "No active training goals found — save a race goal first, then build the arc."
     goal_summary = "\n".join(g.summary() for g in goals)
     extra = input_dict.get("context", "")
     lines = [
@@ -1030,55 +977,6 @@ def handle_run_pattern_scan(user_id: UUID, input_dict: dict, now: datetime, *, p
             f"  [{ins.domain}] {ins.summary} (confidence: {ins.confidence:.0%}, n={ins.evidence_count})"
         )
     return "\n".join(lines)
-
-
-def handle_add_goal(user_id: UUID, input_dict: dict, now: datetime, *, goal_service) -> str:
-    target_date = None
-    if input_dict.get("target_date_iso"):
-        target_date = date.fromisoformat(input_dict["target_date_iso"])
-    goal = goal_service.add(
-        user_id,
-        title=input_dict["title"],
-        goal_type=input_dict["goal_type"],
-        target_date=target_date,
-        is_fixed_date=input_dict.get("is_fixed_date", False),
-        metrics=input_dict.get("metrics") or {},
-        notes=input_dict.get("notes"),
-    )
-    return f"Goal added: {goal.summary()}"
-
-
-def handle_list_goals(user_id: UUID, input_dict: dict, now: datetime, *, goal_service) -> str:
-    goals = goal_service.list_active(user_id)
-    if not goals:
-        return "No active goals."
-    lines = ["Active goals:"]
-    for g in goals:
-        lines.append(f"  [{g.id}] {g.summary()}")
-    return "\n".join(lines)
-
-
-def handle_update_goal(user_id: UUID, input_dict: dict, now: datetime, *, goal_service) -> str:
-    from uuid import UUID as _UUID
-    try:
-        goal_id = _UUID(input_dict.get("goal_id", ""))
-    except (ValueError, AttributeError, TypeError):
-        return "Invalid goal ID — use list_goals to get the correct ID first."
-    kwargs: dict[str, Any] = {}
-    if input_dict.get("title") is not None:
-        kwargs["title"] = input_dict["title"]
-    if input_dict.get("target_date_iso") is not None:
-        kwargs["target_date"] = date.fromisoformat(input_dict["target_date_iso"])
-    if input_dict.get("is_fixed_date") is not None:
-        kwargs["is_fixed_date"] = input_dict["is_fixed_date"]
-    if input_dict.get("metrics") is not None:
-        kwargs["metrics"] = input_dict["metrics"]
-    if input_dict.get("notes") is not None:
-        kwargs["notes"] = input_dict["notes"]
-    if input_dict.get("status") is not None:
-        kwargs["status"] = input_dict["status"]
-    goal = goal_service.update(user_id, goal_id, **kwargs)
-    return f"Goal updated: {goal.summary()}"
 
 
 def handle_sync_garmin(
@@ -1375,12 +1273,6 @@ def training_tools(
          lambda uid, inp, now: handle_remove_training_anchor(uid, inp, now, anchor_service=anchor_service)),
         (RUN_PATTERN_SCAN_TOOL,
          lambda uid, inp, now: handle_run_pattern_scan(uid, inp, now, pattern_engine=pattern_engine)),
-        (ADD_GOAL_TOOL,
-         lambda uid, inp, now: handle_add_goal(uid, inp, now, goal_service=goal_service)),
-        (LIST_GOALS_TOOL,
-         lambda uid, inp, now: handle_list_goals(uid, inp, now, goal_service=goal_service)),
-        (UPDATE_GOAL_TOOL,
-         lambda uid, inp, now: handle_update_goal(uid, inp, now, goal_service=goal_service)),
         (SYNC_GARMIN_TOOL,
          lambda uid, inp, now: handle_sync_garmin(uid, inp, now, garmin_sync=garmin_sync)),
         (GET_GARMIN_ACTIVITIES_TOOL,

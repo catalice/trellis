@@ -37,7 +37,7 @@ Be concise. 150 words max. Plain text, no headers.\
 
 def make_summariser(
     groq_client,
-    model: str = "qwen/qwen3-32b",
+    model: str = "llama-3.3-70b-versatile",
 ) -> Callable:
     def summarise(user_id: UUID, domain: str, history) -> None:
         try:
