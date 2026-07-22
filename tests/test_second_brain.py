@@ -69,6 +69,10 @@ class FakeTaskRepo:
         return [t for t in self.tasks.values()
                 if t.user_id == user_id and t.status in (TaskStatus.OPEN, TaskStatus.IN_PROGRESS)]
 
+    def list_parked(self, user_id):
+        return [t for t in self.tasks.values()
+                if t.user_id == user_id and t.status == TaskStatus.PARKED]
+
     def list_recent(self, user_id, *, limit):
         return list(self.tasks.values())[:limit]
 
@@ -678,3 +682,56 @@ class TestFeltAtAndDelete:
         reply = handle_delete_log_entry(UID, {"entry_id": str(log.id)}, NOW, state_service=svc)
         assert "removed" in reply
         assert repo.states == []
+
+
+class TestSeedsAndParked:
+    def _service(self, repo=None):
+        return TaskService(repo or FakeTaskRepo(), TZ)
+
+    def test_seed_never_gets_due_date(self):
+        from trellis.domain_second_brain_models import TaskKind
+        svc = self._service()
+        seed = svc.create(UID, "Look into ceramics", kind=TaskKind.SEED,
+                          due="2026-07-25", now=NOW)
+        assert seed.due_at is None
+        assert seed.kind == TaskKind.SEED
+
+    def test_list_open_excludes_seeds(self):
+        from trellis.domain_second_brain_models import TaskKind
+        svc = self._service()
+        svc.create(UID, "Buy wine", now=NOW)
+        svc.create(UID, "Research drum machines", kind=TaskKind.SEED, now=NOW)
+        assert [t.title for t in svc.list_open(UID)] == ["Buy wine"]
+        assert [t.title for t in svc.list_seeds(UID)] == ["Research drum machines"]
+
+    def test_park_and_reclaim(self):
+        from trellis.domain_second_brain_models import TaskStatus
+        repo = FakeTaskRepo()
+        svc = self._service(repo)
+        task = svc.create(UID, "Sort shoes", now=NOW)
+        svc.update(UID, task.id, status=TaskStatus.PARKED, now=NOW)
+        assert svc.list_open(UID) == []
+        assert [t.title for t in svc.list_parked(UID)] == ["Sort shoes"]
+        svc.update(UID, task.id, status=TaskStatus.OPEN, now=NOW)
+        assert [t.title for t in svc.list_open(UID)] == ["Sort shoes"]
+
+    def test_reclassify_todo_to_seed(self):
+        from trellis.domain_second_brain_models import TaskKind
+        svc = self._service()
+        task = svc.create(UID, "Research flying", now=NOW)
+        updated = svc.update(UID, task.id, kind=TaskKind.SEED, now=NOW)
+        assert updated.kind == TaskKind.SEED
+        assert svc.list_open(UID) == []
+
+    def test_synthesis_kind_parsed(self):
+        raw = """{
+          "capture_type": "brain_dump", "cleaned_text": "text", "summary": "s",
+          "extracted_tasks": [
+            {"title": "Buy wine", "kind": "todo"},
+            {"title": "Look into ceramics", "kind": "seed"}
+          ]
+        }"""
+        result = _parse_synthesis(raw)
+        from trellis.domain_second_brain_models import TaskKind
+        assert result.extracted_tasks[0].kind == TaskKind.TODO
+        assert result.extracted_tasks[1].kind == TaskKind.SEED

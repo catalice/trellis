@@ -59,9 +59,10 @@ SECOND_BRAIN_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["tasks", "goals", "inbox", "efforts", "reminders", "tracking"],
+                "enum": ["tasks", "seeds", "goals", "inbox", "efforts", "reminders", "tracking"],
                 "description": (
-                    "tasks: open tasks ordered by urgency. "
+                    "tasks: open todos ordered by urgency, plus parked. "
+                    "seeds: the exploration menu — for 'what could I explore'. "
                     "goals: all active goals. "
                     "inbox: unassigned captures for cleanup. "
                     "efforts: all efforts by intensity. "
@@ -77,11 +78,19 @@ SECOND_BRAIN_GET_TOOL: dict = {
 
 CREATE_TASK_TOOL: dict = {
     "name": "create_task",
-    "description": "Create a new task. Use for explicit to-dos that weren't extracted from a brain dump.",
+    "description": (
+        "Create a task or seed directly (when not part of a brain dump). "
+        "kind='todo' for admin Cat owes; kind='seed' for curiosity she might "
+        "feed — explorations with zero obligation, never urgent."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
             "title": {"type": "string"},
+            "kind": {
+                "type": "string", "enum": ["todo", "seed"], "default": "todo",
+                "description": "todo = obligation. seed = exploration, no due date, never nags.",
+            },
             "priority": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
             "energy": {
                 "type": "string",
@@ -118,9 +127,11 @@ COMPLETE_TASK_TOOL: dict = {
 UPDATE_TASK_TOOL: dict = {
     "name": "update_task",
     "description": (
-        "Update a task: title, priority, energy, due date, description, or status. "
-        "When Cat wants a task gone (delete/remove/drop), set status='dropped' — "
-        "it vanishes from every list. Only send fields that change."
+        "Update a task or seed: title, priority, energy, kind, due date, "
+        "description, or status. Delete/remove → status='dropped' (gone from "
+        "every view, never again). Shelve for later → status='parked' (visible "
+        "in its own section). Reclassify todo↔seed with kind. "
+        "Only send fields that change."
     ),
     "input_schema": {
         "type": "object",
@@ -129,9 +140,10 @@ UPDATE_TASK_TOOL: dict = {
             "title": {"type": "string"},
             "priority": {"type": "string", "enum": ["low", "medium", "high"]},
             "energy": {"type": "string", "enum": ["low", "medium", "high"]},
+            "kind": {"type": "string", "enum": ["todo", "seed"]},
             "status": {
-                "type": "string", "enum": ["open", "dropped"],
-                "description": "dropped = remove from all lists; open = reopen.",
+                "type": "string", "enum": ["open", "dropped", "parked"],
+                "description": "dropped = never again, invisible. parked = not now, shelved but visible. open = back on the list.",
             },
             "due": {
                 "type": "string",
@@ -248,7 +260,11 @@ LOG_STATE_TOOL: dict = {
         "properties": {
             "note": {
                 "type": "string",
-                "description": "Her words about how she's doing, verbatim — do not paraphrase or clean up.",
+                "description": (
+                    "Her words about how she's doing, first person, verbatim — "
+                    "never paraphrase into third person ('feeling flat', not "
+                    "'she feels flat'). Voice notes: transcript as she said it."
+                ),
             },
             "felt_at": {
                 "type": "string",
@@ -407,7 +423,8 @@ def handle_second_brain_get(
 
     if what == "tasks":
         tasks = task_service.list_open(user_id)
-        if not tasks:
+        parked = task_service.list_parked(user_id)
+        if not tasks and not parked:
             return "No open tasks."
         overdue = [t for t in tasks if t.is_overdue(now)]
         rest = [t for t in tasks if not t.is_overdue(now)]
@@ -421,6 +438,19 @@ def handle_second_brain_get(
             for t in rest:
                 due = f" — due {_fmt_datetime(t.due_at)}" if t.due_at else ""
                 lines.append(f"  [{t.id}] {t.title}{due} | {t.priority}/{t.energy}")
+        if parked:
+            lines.append("Parked (not now, on the shelf):")
+            for t in parked:
+                lines.append(f"  [{t.id}] {t.title}")
+        return "\n".join(lines)
+
+    if what == "seeds":
+        seeds = task_service.list_seeds(user_id)
+        if not seeds:
+            return "No seeds planted yet."
+        lines = ["Seeds (no obligation, pick what sparks):"]
+        for t in seeds:
+            lines.append(f"  [{t.id}] {t.title} | energy {t.energy}")
         return "\n".join(lines)
 
     if what == "goals":
@@ -507,8 +537,14 @@ def handle_create_task(
         energy = TaskEnergy(input_dict.get("energy", "medium"))
     except ValueError:
         energy = TaskEnergy.MEDIUM
+    from trellis.domain_second_brain_models import TaskKind
+    try:
+        kind = TaskKind(input_dict.get("kind", "todo"))
+    except ValueError:
+        kind = TaskKind.TODO
     task = task_service.create(
         user_id, title,
+        kind=kind,
         priority=priority,
         energy=energy,
         description=input_dict.get("description"),
@@ -570,8 +606,14 @@ def handle_update_task(
             pass
     if "status" in input_dict:
         from trellis.domain_second_brain_models import TaskStatus
-        if input_dict["status"] in ("open", "dropped"):
+        if input_dict["status"] in ("open", "dropped", "parked"):
             kwargs["status"] = TaskStatus(input_dict["status"])
+    if "kind" in input_dict:
+        from trellis.domain_second_brain_models import TaskKind
+        try:
+            kwargs["kind"] = TaskKind(input_dict["kind"])
+        except ValueError:
+            pass
     if "due" in input_dict:
         kwargs["due"] = input_dict["due"]
     if "description" in input_dict:
@@ -919,6 +961,9 @@ def second_brain_context_loader(
                 )
             if remaining:
                 task_parts.append(f"Open ({len(remaining)}): " + ", ".join(t.title for t in remaining[:5]))
+            seeds = task_service.list_seeds(user_id)
+            if seeds:
+                task_parts.append(f"Seeds waiting ({len(seeds)}): " + ", ".join(t.title for t in seeds[:4]))
             if task_parts:
                 parts.append("Tasks:\n" + "\n".join(task_parts))
         except Exception:

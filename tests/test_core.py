@@ -73,6 +73,9 @@ class _TaskRepo:
     def list_open(self, user_id):
         return [t for t in self._tasks if t.status == TaskStatus.OPEN]
 
+    def list_parked(self, user_id):
+        return [t for t in self._tasks if t.status == TaskStatus.PARKED]
+
     def list_recent(self, user_id, *, limit):
         return self._tasks[:limit]
 

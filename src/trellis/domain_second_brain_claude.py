@@ -11,6 +11,7 @@ from trellis.domain_second_brain_models import (
     CaptureType,
     ExtractedTask,
     TaskEnergy,
+    TaskKind,
     TaskPriority,
 )
 
@@ -33,6 +34,7 @@ Return ONLY valid JSON matching this structure exactly:
   "extracted_tasks": [
     {
       "title": "...",
+      "kind": "todo" | "seed",
       "energy": "low" | "medium" | "high",
       "priority": "low" | "medium" | "high",
       "due": "2026-07-23T10:00" | "2026-07-23" | null
@@ -53,6 +55,11 @@ Link or source = reference.
 - extracted_tasks: only explicit or strongly implied actions. "I need to call the \
 dentist Thursday" → task. "I wonder if tracking systems could replace agriculture" \
 → NOT a task, it's an idea/question.
+- kind: "todo" = admin she owes — obligations, errands, things with consequences \
+if missed ("confirm Erin is coming", "buy wine"). "seed" = curiosity she might \
+feed — explorations, research, things to look into with zero obligation \
+("look into ceramics", "research drum machines"). Seeds never get a due date. \
+When in doubt: would ignoring it forever cost her anything? No → seed.
 - due: resolve relative phrases ("Thursday", "tomorrow at 10") to an explicit \
 LOCAL date using the current date you are given: "YYYY-MM-DDTHH:MM" if a time was \
 mentioned, "YYYY-MM-DD" if only a day. Null if no deadline was mentioned. \
@@ -176,6 +183,10 @@ def _parse_synthesis(raw: str) -> BrainDumpResult | None:
         if not isinstance(t, dict) or not t.get("title"):
             continue
         try:
+            kind = TaskKind(t.get("kind", "todo"))
+        except ValueError:
+            kind = TaskKind.TODO
+        try:
             energy = TaskEnergy(t.get("energy", "medium"))
         except ValueError:
             energy = TaskEnergy.MEDIUM
@@ -185,6 +196,7 @@ def _parse_synthesis(raw: str) -> BrainDumpResult | None:
             priority = TaskPriority.MEDIUM
         tasks.append(ExtractedTask(
             title=str(t["title"]).strip(),
+            kind=kind,
             energy=energy,
             priority=priority,
             due=t.get("due") or None,

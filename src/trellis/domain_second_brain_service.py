@@ -22,6 +22,7 @@ from trellis.domain_second_brain_models import (
     Task,
     TaskEnergy,
     TaskEvent,
+    TaskKind,
     TaskPriority,
     TaskStatus,
     TrackingEvent,
@@ -57,6 +58,7 @@ class TaskRepository(Protocol):
     def save(self, task: Task) -> Task: ...
     def get(self, task_id: UUID) -> Task | None: ...
     def list_open(self, user_id: UUID) -> list[Task]: ...
+    def list_parked(self, user_id: UUID) -> list[Task]: ...
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Task]: ...
     def update(self, task_id: UUID, **kwargs: Any) -> Task: ...
     def save_event(self, event: TaskEvent) -> None: ...
@@ -173,6 +175,7 @@ class BrainDumpService:
                     status=TaskStatus.OPEN,
                     priority=extracted.priority,
                     energy=extracted.energy,
+                    kind=extracted.kind,
                     due_at=due_at,
                     source_capture_id=capture.id,
                     created_at=now,
@@ -293,13 +296,15 @@ class TaskService:
         user_id: UUID,
         title: str,
         *,
+        kind: TaskKind = TaskKind.TODO,
         priority: TaskPriority = TaskPriority.MEDIUM,
         energy: TaskEnergy = TaskEnergy.MEDIUM,
         description: str | None = None,
         due: str | None = None,
         now: datetime,
     ) -> Task:
-        due_at = _parse_local_due(due, self._tz)
+        # Seeds never carry deadlines — urgency is what makes a todo a todo.
+        due_at = _parse_local_due(due, self._tz) if kind == TaskKind.TODO else None
         task = self._repo.save(Task(
             id=uuid4(),
             user_id=user_id,
@@ -307,6 +312,7 @@ class TaskService:
             status=TaskStatus.OPEN,
             priority=priority,
             energy=energy,
+            kind=kind,
             description=description,
             due_at=due_at,
             created_at=now,
@@ -316,7 +322,14 @@ class TaskService:
         return task
 
     def list_open(self, user_id: UUID) -> list[Task]:
-        return self._repo.list_open(user_id)
+        """Open todos — the real list. Seeds live in list_seeds."""
+        return [t for t in self._repo.list_open(user_id) if t.kind == TaskKind.TODO]
+
+    def list_seeds(self, user_id: UUID) -> list[Task]:
+        return [t for t in self._repo.list_open(user_id) if t.kind == TaskKind.SEED]
+
+    def list_parked(self, user_id: UUID) -> list[Task]:
+        return self._repo.list_parked(user_id)
 
     def complete(self, user_id: UUID, task_id: UUID, *, now: datetime) -> Task:
         task = self._repo.get(task_id)
@@ -338,6 +351,8 @@ class TaskService:
         title: str | None = None,
         priority: TaskPriority | None = None,
         energy: TaskEnergy | None = None,
+        kind: TaskKind | None = None,
+        status: TaskStatus | None = None,
         due: str | None = None,
         description: str | None = None,
         now: datetime,
@@ -352,6 +367,10 @@ class TaskService:
             kwargs["priority"] = priority
         if energy is not None:
             kwargs["energy"] = energy
+        if kind is not None:
+            kwargs["kind"] = kind
+        if status is not None:
+            kwargs["status"] = status
         if description is not None:
             kwargs["description"] = description
         if due is not None:
@@ -369,12 +388,12 @@ class TaskService:
         return dropped
 
     def overdue(self, user_id: UUID, now: datetime) -> list[Task]:
-        return [t for t in self._repo.list_open(user_id) if t.is_overdue(now)]
+        return [t for t in self.list_open(user_id) if t.is_overdue(now)]
 
     def due_today(self, user_id: UUID, now: datetime) -> list[Task]:
         today = now.astimezone(self._tz).date()
         return [
-            t for t in self._repo.list_open(user_id)
+            t for t in self.list_open(user_id)
             if t.due_at and t.due_at.astimezone(self._tz).date() == today
         ]
 

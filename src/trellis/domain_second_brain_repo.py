@@ -20,6 +20,7 @@ from trellis.domain_second_brain_models import (
     Task,
     TaskEnergy,
     TaskEvent,
+    TaskKind,
     TaskPriority,
     TaskStatus,
     TrackingEvent,
@@ -229,14 +230,15 @@ class PostgresTaskRepository:
                 cur.execute(
                     """
                     INSERT INTO tasks (
-                        id, user_id, title, status, priority, energy,
+                        id, user_id, title, status, priority, energy, kind,
                         description, due_at, source_capture_id,
                         created_at, updated_at, completed_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         task.id, task.user_id, task.title,
                         str(task.status), str(task.priority), str(task.energy),
+                        str(task.kind),
                         task.description, task.due_at, task.source_capture_id,
                         task.created_at, task.updated_at, task.completed_at,
                     ),
@@ -263,6 +265,19 @@ class PostgresTaskRepository:
                 )
                 return [_task(r) for r in cur.fetchall()]
 
+    def list_parked(self, user_id: UUID) -> list[Task]:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM tasks
+                    WHERE user_id = %s AND status = 'parked'
+                    ORDER BY updated_at DESC
+                    """,
+                    (user_id,),
+                )
+                return [_task(r) for r in cur.fetchall()]
+
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Task]:
         with self._db.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -281,7 +296,7 @@ class PostgresTaskRepository:
         if not kwargs:
             raise ValueError("update called with no fields")
         allowed = {
-            "title", "status", "priority", "energy",
+            "title", "status", "priority", "energy", "kind",
             "description", "due_at", "updated_at", "completed_at",
         }
         unknown = set(kwargs) - allowed
@@ -634,6 +649,7 @@ def _task(row: dict) -> Task:
         status=TaskStatus(row["status"]),
         priority=TaskPriority(row["priority"]),
         energy=TaskEnergy(row["energy"]),
+        kind=TaskKind(row.get("kind", "todo")),
         description=row.get("description"),
         due_at=row.get("due_at"),
         source_capture_id=row.get("source_capture_id"),

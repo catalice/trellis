@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     description TEXT,
     status TEXT NOT NULL DEFAULT 'open'
-        CHECK (status IN ('open', 'in_progress', 'done', 'dropped', 'archived')),
+        CHECK (status IN ('open', 'in_progress', 'done', 'dropped', 'archived', 'parked')),
+    kind TEXT NOT NULL DEFAULT 'todo'
+        CHECK (kind IN ('todo', 'seed')),
     priority TEXT NOT NULL DEFAULT 'medium'
         CHECK (priority IN ('low', 'medium', 'high')),
     energy TEXT NOT NULL DEFAULT 'medium'

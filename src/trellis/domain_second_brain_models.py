@@ -29,8 +29,14 @@ class TaskStatus(StrEnum):
     OPEN = "open"
     IN_PROGRESS = "in_progress"
     DONE = "done"
-    DROPPED = "dropped"
+    DROPPED = "dropped"      # decided never — invisible everywhere
     ARCHIVED = "archived"
+    PARKED = "parked"        # consciously shelved — visible in its own section
+
+
+class TaskKind(StrEnum):
+    TODO = "todo"            # admin you owe — counted, can be overdue
+    SEED = "seed"            # curiosity you might feed — never urgent, never counted
 
 
 class TaskPriority(StrEnum):
@@ -68,6 +74,7 @@ class GoalStatus(StrEnum):
 @dataclass(frozen=True)
 class ExtractedTask:
     title: str
+    kind: TaskKind = TaskKind.TODO
     energy: TaskEnergy = TaskEnergy.MEDIUM
     priority: TaskPriority = TaskPriority.MEDIUM
     due: str | None = None  # explicit user-local "YYYY-MM-DD[THH:MM]"; Python attaches tz
@@ -130,6 +137,7 @@ class Task:
     status: TaskStatus
     priority: TaskPriority
     energy: TaskEnergy
+    kind: TaskKind = TaskKind.TODO
     description: str | None = None
     due_at: datetime | None = None
     source_capture_id: UUID | None = None
