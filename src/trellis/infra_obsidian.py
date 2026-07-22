@@ -43,14 +43,14 @@ _TASKS_HEADER = """\
 _TRACKING_HEADER = """\
 # Tracking
 
-> Live view — managed by Trellis. Energy and mood over the day \
-(morning · afternoon · evening), with meds, sleep, and cycle.
+> Live view — managed by Trellis. Energy and mood scored 1-5 across the day \
+as morning/afternoon/evening (e.g. `2/4/-` — rough morning, good afternoon, \
+evening not logged yet), with meds, sleep, and cycle.
 """
 
 _UPCOMING_REMINDER_DAYS = 14
 _RECENTLY_COMPLETED_LIMIT = 8
 _TRACKING_DAYS = 14
-_SPARK_CHARS = "▁▂▄▆█"  # scores 1-5
 
 # Vault layout — Cat's chosen structure. Change here, nowhere else.
 _DAILY_DIR = "Calendar/Captures"
@@ -327,8 +327,9 @@ class ObsidianVault:
 
 
 def _spark(states: list, tz: tzinfo, axis: str) -> str:
-    """Three-char sparkline: morning (<12) · afternoon (12-17) · evening (17+).
-    Averages multiple logs in a bucket; '·' where nothing was logged."""
+    """Day shape as numbers: morning (<12) / afternoon (12-17) / evening (17+),
+    e.g. "2/4/-". Averages multiple logs in a bucket; '-' where nothing logged.
+    Plain digits render in every font, unlike block characters."""
     buckets: list[list[int]] = [[], [], []]
     for s in states:
         score = getattr(s, axis)
@@ -340,8 +341,8 @@ def _spark(states: list, tz: tzinfo, axis: str) -> str:
     out = []
     for bucket in buckets:
         if not bucket:
-            out.append("·")
+            out.append("-")
         else:
             avg = round(sum(bucket) / len(bucket))
-            out.append(_SPARK_CHARS[max(1, min(5, avg)) - 1])
-    return "".join(out)
+            out.append(str(max(1, min(5, avg))))
+    return "/".join(out)
