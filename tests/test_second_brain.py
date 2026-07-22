@@ -793,3 +793,49 @@ class TestSeedsAndParked:
         from trellis.domain_second_brain_models import TaskKind
         assert result.extracted_tasks[0].kind == TaskKind.TODO
         assert result.extracted_tasks[1].kind == TaskKind.SEED
+
+
+class TestWebSearch:
+    def _tools(self, web_search):
+        from trellis.domain_second_brain_tool import second_brain_tools
+        svc = None
+        return second_brain_tools(
+            task_service=svc, goal_service=svc, capture_service=svc,
+            effort_service=svc, reminder_service=svc, cleanup_service=svc,
+            state_service=svc, web_search=web_search, tz=TZ,
+        )
+
+    def test_tool_absent_when_no_provider(self):
+        names = [s["name"] for s, _ in self._tools(None)]
+        assert "web_search" not in names
+
+    def test_tool_present_when_provider(self):
+        class FakeSearch:
+            def search(self, q, *, max_results=5): return None
+        names = [s["name"] for s, _ in self._tools(FakeSearch())]
+        assert "web_search" in names
+
+    def test_handler_formats_results(self):
+        from trellis.domain_second_brain_tool import handle_web_search
+        from trellis.infra_search import SearchResponse, SearchResult
+        class FakeSearch:
+            def search(self, q, *, max_results=5):
+                return SearchResponse(
+                    query=q, answer="Short answer.",
+                    results=(SearchResult("Title A", "https://a.com", "snippet a"),),
+                )
+        reply = handle_web_search(UID, {"query": "drum machines"}, NOW, web_search=FakeSearch())
+        assert "Short answer." in reply
+        assert "https://a.com" in reply
+
+    def test_handler_empty(self):
+        from trellis.domain_second_brain_tool import handle_web_search
+        class FakeSearch:
+            def search(self, q, *, max_results=5): return None
+        reply = handle_web_search(UID, {"query": "x"}, NOW, web_search=FakeSearch())
+        assert "empty" in reply or "unavailable" in reply
+
+    def test_handler_requires_query(self):
+        from trellis.domain_second_brain_tool import handle_web_search
+        reply = handle_web_search(UID, {}, NOW, web_search=object())
+        assert "required" in reply

@@ -18,6 +18,7 @@ from trellis.core_registry import TrellisRegistry
 from trellis.core_summariser import make_summariser
 from trellis.core_telegram import TelegramTrellis, make_transcriber
 from trellis.infra_obsidian import ObsidianVault
+from trellis.infra_search import TavilySearch
 from trellis.postgres import (
     PostgresCurrentContextRepository,
     PostgresDatabase,
@@ -98,6 +99,9 @@ def main() -> None:
     anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
     brain_dump_claude = BrainDumpClaude(anthropic_client, settings.anthropic_model)
 
+    # Web search — read-only window on the outside world. None if no key configured.
+    web_search = TavilySearch(settings.tavily_api_key) if settings.tavily_api_key else None
+
     summariser = None
     transcriber = None
     if settings.groq_api_key:
@@ -154,6 +158,7 @@ def main() -> None:
             reminder_service=reminder_service,
             cleanup_service=cleanup_service,
             state_service=state_service,
+            web_search=web_search,
             tz=settings.timezone,
         ),
         SECOND_BRAIN_SIGNALS,

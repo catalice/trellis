@@ -865,6 +865,48 @@ def handle_delete_entry(
     return "No record with that id."
 
 
+WEB_SEARCH_TOOL: dict = {
+    "name": "web_search",
+    "description": (
+        "Search the web for current information. Use it to research a seed "
+        "(\"look into that drum machine seed\" → search, bring back real options "
+        "and links), answer a factual question, or find something concrete like "
+        "local classes or prices. Read-only — it fetches, it can't act. Present "
+        "results as a short digest with the links, not a wall of text."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "What to search for. Be specific."},
+        },
+        "required": ["query"],
+    },
+}
+
+
+def handle_web_search(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    web_search,
+) -> str:
+    query = str(input_dict.get("query", "")).strip()
+    if not query:
+        return "query is required."
+    result = web_search.search(query)
+    if result is None:
+        return "Search came back empty or the search service is unavailable — try rephrasing, or again in a moment."
+    lines = []
+    if result.answer:
+        lines.append(result.answer)
+        lines.append("")
+    for r in result.results:
+        snippet = r.snippet[:200] + ("…" if len(r.snippet) > 200 else "")
+        lines.append(f"- {r.title} — {r.url}\n  {snippet}")
+    return "\n".join(lines) if lines else "Nothing useful found."
+
+
 def handle_cleanup_session(
     user_id: UUID,
     input_dict: dict,
@@ -1061,10 +1103,11 @@ def second_brain_tools(
     reminder_service,
     cleanup_service,
     state_service,
+    web_search,
     tz,
 ) -> list[tuple[dict, Any]]:
     # brain_dump is NOT here — it's an always-available tool wired in core_main.
-    return [
+    tools = [
         (
             SECOND_BRAIN_GET_TOOL,
             lambda uid, inp, now: handle_second_brain_get(
@@ -1121,6 +1164,13 @@ def second_brain_tools(
             ),
         ),
     ]
+    # Web search only appears if a provider is configured — no dead tool otherwise.
+    if web_search is not None:
+        tools.append((
+            WEB_SEARCH_TOOL,
+            lambda uid, inp, now: handle_web_search(uid, inp, now, web_search=web_search),
+        ))
+    return tools
 
 
 def _fmt_datetime(dt: datetime | None) -> str:
