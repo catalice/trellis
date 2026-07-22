@@ -320,6 +320,15 @@ class PostgresTaskRepository:
                     raise LookupError(task_id)
                 return _task(row)
 
+    def delete(self, user_id: UUID, task_id: UUID) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM tasks WHERE id = %s AND user_id = %s",
+                    (task_id, user_id),
+                )
+                return cur.rowcount > 0
+
     def save_event(self, event: TaskEvent) -> None:
         with self._db.connect() as conn:
             with conn.cursor() as cur:

@@ -83,6 +83,12 @@ class FakeTaskRepo:
         self.tasks[task_id] = updated
         return updated
 
+    def delete(self, user_id, task_id):
+        if task_id in self.tasks and self.tasks[task_id].user_id == user_id:
+            del self.tasks[task_id]
+            return True
+        return False
+
     def save_event(self, event: TaskEvent) -> None:
         self.events.append(event)
 
@@ -673,15 +679,42 @@ class TestFeltAtAndDelete:
         assert repo.states == []
         assert svc.delete_entry(UID, log.id) is False
 
-    def test_delete_handler(self):
+    def test_delete_handler_erases_state(self):
         from trellis.domain_second_brain_service import StateService
-        from trellis.domain_second_brain_tool import handle_delete_log_entry
+        from trellis.domain_second_brain_tool import handle_delete_entry
         repo = FakeStateRepo()
         svc = StateService(repo, TZ)
+        task_svc = TaskService(FakeTaskRepo(), TZ)
         log = svc.log_state(UID, "wrong", energy=3, mood=3, now=NOW)
-        reply = handle_delete_log_entry(UID, {"entry_id": str(log.id)}, NOW, state_service=svc)
-        assert "removed" in reply
+        reply = handle_delete_entry(UID, {"entry_id": str(log.id)}, NOW,
+                                    state_service=svc, task_service=task_svc)
+        assert "Erased" in reply
         assert repo.states == []
+
+    def test_delete_handler_erases_duplicate_task(self):
+        from trellis.domain_second_brain_service import StateService
+        from trellis.domain_second_brain_tool import handle_delete_entry
+        state_svc = StateService(FakeStateRepo(), TZ)
+        task_repo = FakeTaskRepo()
+        task_svc = TaskService(task_repo, TZ)
+        task_svc.create(UID, "Find ceramics class", now=NOW)
+        dupe = task_svc.create(UID, "Find a local ceramics class", now=NOW)
+        reply = handle_delete_entry(UID, {"entry_id": str(dupe.id)}, NOW,
+                                    state_service=state_svc, task_service=task_svc)
+        assert "Erased" in reply
+        assert [t.title for t in task_svc.list_open(UID)] == ["Find ceramics class"]
+
+    def test_delete_other_users_task_refused(self):
+        from trellis.domain_second_brain_service import StateService
+        from trellis.domain_second_brain_tool import handle_delete_entry
+        state_svc = StateService(FakeStateRepo(), TZ)
+        task_repo = FakeTaskRepo()
+        task_svc = TaskService(task_repo, TZ)
+        other = task_svc.create(uuid4(), "not yours", now=NOW)
+        reply = handle_delete_entry(UID, {"entry_id": str(other.id)}, NOW,
+                                    state_service=state_svc, task_service=task_svc)
+        assert "No record" in reply
+        assert len(task_repo.tasks) == 1
 
 
 class TestSeedsAndParked:

@@ -61,6 +61,7 @@ class TaskRepository(Protocol):
     def list_parked(self, user_id: UUID) -> list[Task]: ...
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Task]: ...
     def update(self, task_id: UUID, **kwargs: Any) -> Task: ...
+    def delete(self, user_id: UUID, task_id: UUID) -> bool: ...
     def save_event(self, event: TaskEvent) -> None: ...
 
 
@@ -386,6 +387,15 @@ class TaskService:
         dropped = self._repo.update(task_id, status=TaskStatus.DROPPED, updated_at=now)
         self._vault_refresh(user_id)
         return dropped
+
+    def delete(self, user_id: UUID, task_id: UUID) -> bool:
+        """Erase an erroneous task (duplicate, mis-extraction) — not a decision.
+        A task she decided against gets status=dropped; a task that should
+        never have existed is deleted so it cannot pollute history."""
+        deleted = self._repo.delete(user_id, task_id)
+        if deleted:
+            self._vault_refresh(user_id)
+        return deleted
 
     def overdue(self, user_id: UUID, now: datetime) -> list[Task]:
         return [t for t in self.list_open(user_id) if t.is_overdue(now)]

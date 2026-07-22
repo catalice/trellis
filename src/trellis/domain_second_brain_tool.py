@@ -313,18 +313,20 @@ LOG_STATE_TOOL: dict = {
     },
 }
 
-DELETE_LOG_ENTRY_TOOL: dict = {
-    "name": "delete_log_entry",
+DELETE_ENTRY_TOOL: dict = {
+    "name": "delete_entry",
     "description": (
-        "Remove a tracking entry (state log or meds/sleep/period event) that is "
-        "wrong. Corrections are delete + re-log: remove the wrong entry, then call "
-        "log_state with the right details. Get entry IDs from "
-        "second_brain_get(what='tracking') first."
+        "Erase a record that should never have existed: a duplicate task, a wrong "
+        "tracking entry (state or meds/sleep/period event), a mis-extraction. "
+        "Completely removes it — use ONLY for mistakes, never for decisions: "
+        "a task Cat decided against gets update_task status='dropped' instead. "
+        "Corrections are delete + re-log. Get IDs from second_brain_get first. "
+        "Deleting a task also deletes any reminder attached to it."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "entry_id": {"type": "string", "description": "UUID of the entry to remove."},
+            "entry_id": {"type": "string", "description": "UUID of the record to erase."},
         },
         "required": ["entry_id"],
     },
@@ -837,12 +839,13 @@ def handle_log_state(
     return " ".join(parts)
 
 
-def handle_delete_log_entry(
+def handle_delete_entry(
     user_id: UUID,
     input_dict: dict,
     now: datetime,
     *,
     state_service,
+    task_service,
 ) -> str:
     entry_id_str = str(input_dict.get("entry_id", "")).strip()
     if not entry_id_str:
@@ -851,9 +854,9 @@ def handle_delete_log_entry(
         entry_id = UUID(entry_id_str)
     except ValueError:
         return f"Invalid entry_id: {entry_id_str!r}"
-    if state_service.delete_entry(user_id, entry_id):
-        return "Entry removed."
-    return "No entry with that id."
+    if state_service.delete_entry(user_id, entry_id) or task_service.delete(user_id, entry_id):
+        return "Erased."
+    return "No record with that id."
 
 
 def handle_cleanup_session(
@@ -1097,9 +1100,9 @@ def second_brain_tools(
             lambda uid, inp, now: handle_update_goal(uid, inp, now, goal_service=goal_service),
         ),
         (
-            DELETE_LOG_ENTRY_TOOL,
-            lambda uid, inp, now: handle_delete_log_entry(
-                uid, inp, now, state_service=state_service,
+            DELETE_ENTRY_TOOL,
+            lambda uid, inp, now: handle_delete_entry(
+                uid, inp, now, state_service=state_service, task_service=task_service,
             ),
         ),
         (
