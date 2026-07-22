@@ -113,7 +113,7 @@ class TestObsidianVault:
                           summary="A thought", effort_id=None, created_at=NOW)
         vault.capture_saved(capture)
         vault.capture_saved(capture)  # second dump, same day
-        note = (tmp_path / "Calendar" / "2026-07-20.md").read_text()
+        note = (tmp_path / "Calendar" / "Captures" / "2026-07-20.md").read_text()
         assert note.startswith("# Monday 20 July 2026")
         assert note.count("## ") == 2
         assert "> line one" in note
@@ -134,7 +134,7 @@ class TestObsidianVault:
                               remind_at=real_now + timedelta(days=1), status="scheduled")]
         vault = self._vault(tmp_path, tasks=tasks, reminders=reminders)
         vault.tasks_changed(UID)
-        content = (tmp_path / "Tasks.md").read_text()
+        content = (tmp_path / "Calendar" / "Tasks.md").read_text()
         for section in ("## Overdue", "## Today", "## Upcoming", "## Anytime",
                         "## Reminders", "## Recently completed"):
             assert section in content
@@ -144,7 +144,7 @@ class TestObsidianVault:
     def test_empty_tasks_file_has_message(self, tmp_path):
         vault = self._vault(tmp_path)
         vault.tasks_changed(UID)
-        assert "Nothing on the list" in (tmp_path / "Tasks.md").read_text()
+        assert "Nothing on the list" in (tmp_path / "Calendar" / "Tasks.md").read_text()
 
     def test_effort_page_and_capture_assignment(self, tmp_path):
         effort = Effort(id=uuid4(), user_id=UID, title="Notes from the Void",

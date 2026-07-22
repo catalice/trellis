@@ -10,12 +10,27 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from trellis.core_assembler import Assembler
 from trellis.core_config import Settings
-from trellis.infra_garmin import GarminSyncService
 from trellis.postgres import PostgresDatabase
 from trellis.domain_second_brain_service import ReminderService
 
 # (audio_bytes) -> transcript
 Transcriber = Callable[[bytes], str]
+
+# Check-in pings. Chrome, not content: the real conversation happens when Cat
+# replies (through the oracle). Rotated deterministically by day of year.
+# Design rule: ignoring a ping costs nothing and is never mentioned.
+_MORNING_PINGS = (
+    "Morning — how are you landing today? One line or a voice note.",
+    "Quick pulse: how's the morning treating you?",
+    "Morning check-in — how's the energy, how's the mood?",
+)
+_EVENING_PINGS = (
+    "Evening — what was the shape of today?",
+    "Day's done. How did it go, start to finish?",
+    "Evening check-in — tell me today's story in a line or a ramble.",
+)
+_MORNING_PING_TIME = time(9, 0)
+_EVENING_PING_TIME = time(21, 0)
 
 
 def make_transcriber(groq_client, model: str = "whisper-large-v3-turbo") -> Transcriber:
@@ -35,17 +50,15 @@ class TelegramTrellis:
         database: PostgresDatabase,
         assembler: Assembler,
         reminders: ReminderService | None = None,
-        garmin_sync_service: GarminSyncService | None = None,
-        pattern_engine=None,
         transcriber: Transcriber | None = None,
+        checkin_pings: bool = True,
     ):
         self.settings = settings
         self.database = database
         self.assembler = assembler
         self.reminders = reminders
-        self.garmin_sync_service = garmin_sync_service
-        self.pattern_engine = pattern_engine
         self.transcriber = transcriber
+        self.checkin_pings = checkin_pings
         self._reminder_delivery_task: asyncio.Task | None = None
         self.logger = logging.getLogger(__name__)
 
@@ -62,16 +75,35 @@ class TelegramTrellis:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.message)
         )
         application.add_handler(MessageHandler(filters.VOICE, self.voice))
-        if self.pattern_engine is not None:
+        if self.checkin_pings and self.settings.telegram_allowed_users:
             if application.job_queue is None:
-                self.logger.warning("Scheduled jobs disabled: job-queue extra not installed")
+                self.logger.warning("Check-in pings disabled: job-queue extra not installed")
             else:
                 application.job_queue.run_daily(
-                    self._run_pattern_scan,
-                    time=time(4, 0, tzinfo=self.settings.timezone),
-                    name="pattern_scan",
+                    self._send_morning_ping,
+                    time=_MORNING_PING_TIME.replace(tzinfo=self.settings.timezone),
+                    name="morning_checkin",
+                )
+                application.job_queue.run_daily(
+                    self._send_evening_ping,
+                    time=_EVENING_PING_TIME.replace(tzinfo=self.settings.timezone),
+                    name="evening_checkin",
                 )
         return application
+
+    async def _send_morning_ping(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._send_ping(context, _MORNING_PINGS)
+
+    async def _send_evening_ping(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._send_ping(context, _EVENING_PINGS)
+
+    async def _send_ping(self, context: ContextTypes.DEFAULT_TYPE, lines: tuple[str, ...]) -> None:
+        text = lines[datetime.now(self.settings.timezone).timetuple().tm_yday % len(lines)]
+        for telegram_id in self.settings.telegram_allowed_users:
+            try:
+                await context.bot.send_message(chat_id=telegram_id, text=text)
+            except Exception:
+                self.logger.warning("check-in ping failed for %s", telegram_id, exc_info=True)
 
     async def _post_init(self, application: Application) -> None:
         if self.reminders is None:
@@ -177,19 +209,6 @@ class TelegramTrellis:
             reply or "Something went wrong — no response was generated. Please try again.",
             parse_mode="Markdown",
         )
-
-    async def _run_pattern_scan(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if self.pattern_engine is None or not self.settings.telegram_allowed_users:
-            return
-        telegram_id = next(iter(self.settings.telegram_allowed_users))
-        now = datetime.now(self.settings.timezone)
-        today = now.date()
-        user_id = self.database.ensure_user(telegram_id, str(self.settings.timezone))
-        try:
-            await asyncio.to_thread(self.pattern_engine.run, user_id, today)
-            self.logger.info("Pattern scan completed for user %s", user_id)
-        except Exception:
-            self.logger.exception("Pattern scan failed for user %s", user_id)
 
     def _user(self, update: Update):
         telegram_user_id = update.effective_user.id

@@ -82,7 +82,8 @@ domain_{second_brain|training|learn}_repo.py
 domain_{second_brain|training|learn}_tool.py
 
 # Migrations
-migrations/001_schema.sql   # single clean-state file
+migrations/001_schema.sql   # base schema (fresh installs)
+migrations/00N_*.sql        # numbered additive migrations — never wipe live data to avoid one
 ```
 
 **If a file doesn't fit one of these patterns, it cannot be created.** Stop, explain why it doesn't fit, and get explicit agreement before writing anything. This rule exists because the codebase grew to 58 files by ignoring it.

@@ -34,6 +34,7 @@ from trellis.domain_second_brain_repo import (
     PostgresEffortRepository,
     PostgresGoalRepository,
     PostgresReminderRepository,
+    PostgresStateRepository,
     PostgresTaskRepository,
 )
 from trellis.domain_second_brain_service import (
@@ -43,11 +44,13 @@ from trellis.domain_second_brain_service import (
     EffortService,
     GoalService,
     ReminderService,
+    StateService,
     TaskService,
 )
 from trellis.domain_second_brain_tool import (
     ADD_GOAL_TOOL, handle_add_goal,
     BRAIN_DUMP_TOOL, handle_brain_dump,
+    LOG_STATE_TOOL, handle_log_state,
     SECOND_BRAIN_SIGNALS,
     second_brain_context_loader,
     second_brain_snapshot,
@@ -116,10 +119,12 @@ def main() -> None:
     task_repo = PostgresTaskRepository(database)
     reminder_repo = PostgresReminderRepository(database)
     goal_repo = PostgresGoalRepository(database)
+    state_repo = PostgresStateRepository(database)
 
     vault = ObsidianVault(
         settings.obsidian_vault, settings.timezone,
         task_repo, reminder_repo, effort_repo,
+        state_repo=state_repo,
     )
 
     capture_service = CaptureService(capture_repo, projection=vault)
@@ -131,6 +136,7 @@ def main() -> None:
         capture_repo, task_repo, brain_dump_claude, settings.timezone, projection=vault,
     )
     cleanup_service = CleanupService(capture_repo, effort_repo, brain_dump_claude)
+    state_service = StateService(state_repo, settings.timezone, projection=vault)
 
     # --- Registry ---
     # Register ALL domains before constructing Assembler.
@@ -161,13 +167,19 @@ def main() -> None:
         permanent=[
             ("profile", _profile_loader(profile_service)),
             ("current_context", _current_context_loader(context_service)),
-            ("snapshot", second_brain_snapshot(task_service, reminder_service)),
+            ("snapshot", second_brain_snapshot(task_service, reminder_service, state_service)),
         ],
         always_tools=[
             (
                 BRAIN_DUMP_TOOL,
                 lambda uid, inp, now: handle_brain_dump(
                     uid, inp, now, brain_dump_service=brain_dump_service
+                ),
+            ),
+            (
+                LOG_STATE_TOOL,
+                lambda uid, inp, now: handle_log_state(
+                    uid, inp, now, state_service=state_service, tz=settings.timezone
                 ),
             ),
             *meta_tools(context_service, preferences_repository),

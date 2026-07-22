@@ -496,3 +496,138 @@ class TestModels:
         assert goal(GoalType.STRENGTH).is_training_goal()
         assert not goal(GoalType.LIFE).is_training_goal()
         assert not goal(GoalType.GENERAL).is_training_goal()
+
+
+# ---------------------------------------------------------------------------
+# Self-tracking (StateService + log_state handler)
+# ---------------------------------------------------------------------------
+
+class FakeStateRepo:
+    def __init__(self):
+        self.states: list = []
+        self.events: list = []
+
+    def save_state(self, log):
+        self.states.append(log)
+        return log
+
+    def save_event(self, event):
+        self.events.append(event)
+        return event
+
+    def list_states_since(self, user_id, *, since):
+        return sorted(
+            (s for s in self.states if s.logged_at >= since),
+            key=lambda s: s.logged_at,
+        )
+
+    def list_events_since(self, user_id, *, since):
+        return [e for e in self.events if e.occurred_at >= since]
+
+    def last_period_start(self, user_id):
+        from trellis.domain_second_brain_models import TrackingEventType
+        starts = [e for e in self.events if e.event_type == TrackingEventType.PERIOD_START]
+        return max(starts, key=lambda e: e.occurred_at) if starts else None
+
+
+class TestStateService:
+    def _service(self, repo=None):
+        from trellis.domain_second_brain_service import StateService
+        return StateService(repo or FakeStateRepo(), TZ)
+
+    def test_log_state_stores_note_verbatim(self):
+        svc = self._service()
+        log = svc.log_state(UID, "dead this morning but weirdly cheerful",
+                            energy=2, mood=4, now=NOW)
+        assert log.note == "dead this morning but weirdly cheerful"
+        assert log.energy == 2
+        assert log.mood == 4
+
+    def test_scores_clamped_to_range(self):
+        svc = self._service()
+        log = svc.log_state(UID, "x", energy=9, mood=0, now=NOW)
+        assert log.energy == 5
+        assert log.mood == 1
+
+    def test_scores_optional(self):
+        svc = self._service()
+        log = svc.log_state(UID, "just noting", energy=None, mood=None, now=NOW)
+        assert log.energy is None and log.mood is None
+
+    def test_today_summary_compact_line(self):
+        repo = FakeStateRepo()
+        svc = self._service(repo)
+        morning = NOW.astimezone(TZ).replace(hour=9, minute=12).astimezone(timezone.utc)
+        evening = NOW.astimezone(TZ).replace(hour=19, minute=30).astimezone(timezone.utc)
+        svc.log_state(UID, "rough", energy=2, mood=4, now=morning)
+        svc.log_state(UID, "flying", energy=4, mood=5, now=evening)
+        summary = svc.today_summary(UID, evening)
+        assert summary == "State today: 09:12 e2/m4, 19:30 e4/m5"
+
+    def test_today_summary_none_when_empty(self):
+        assert self._service().today_summary(UID, NOW) is None
+
+    def test_cycle_day(self):
+        from trellis.domain_second_brain_models import TrackingEventType
+        repo = FakeStateRepo()
+        svc = self._service(repo)
+        svc.log_event(UID, TrackingEventType.PERIOD_START,
+                      occurred_at=NOW - timedelta(days=3))
+        assert svc.cycle_day(UID, NOW) == 4
+
+    def test_cycle_day_none_without_period(self):
+        assert self._service().cycle_day(UID, NOW) is None
+
+    def test_cycle_day_none_when_stale(self):
+        from trellis.domain_second_brain_models import TrackingEventType
+        repo = FakeStateRepo()
+        svc = self._service(repo)
+        svc.log_event(UID, TrackingEventType.PERIOD_START,
+                      occurred_at=NOW - timedelta(days=90))
+        assert svc.cycle_day(UID, NOW) is None
+
+
+class TestLogStateHandler:
+    def _handle(self, input_dict, repo=None):
+        from trellis.domain_second_brain_service import StateService
+        from trellis.domain_second_brain_tool import handle_log_state
+        repo = repo or FakeStateRepo()
+        svc = StateService(repo, TZ)
+        reply = handle_log_state(UID, input_dict, NOW, state_service=svc, tz=TZ)
+        return reply, repo
+
+    def test_full_checkin(self):
+        from trellis.domain_second_brain_models import TrackingEventType
+        reply, repo = self._handle({
+            "note": "slept badly, took dex at 9, feeling flat",
+            "energy": 2, "mood": 3,
+            "meds": [{"name": "dex", "time": "09:00"}],
+            "sleep_hours": 6, "sleep_quality": "badly",
+        })
+        assert len(repo.states) == 1
+        assert repo.states[0].note == "slept badly, took dex at 9, feeling flat"
+        types = [e.event_type for e in repo.events]
+        assert TrackingEventType.MEDS in types
+        assert TrackingEventType.SLEEP in types
+        meds = next(e for e in repo.events if e.event_type == TrackingEventType.MEDS)
+        assert meds.detail == "dex"
+        assert meds.occurred_at.astimezone(TZ).hour == 9
+
+    def test_period_started(self):
+        from trellis.domain_second_brain_models import TrackingEventType
+        reply, repo = self._handle({"note": "period started", "period": "started"})
+        assert [e.event_type for e in repo.events] == [TrackingEventType.PERIOD_START]
+
+    def test_note_required(self):
+        reply, repo = self._handle({"energy": 3})
+        assert repo.states == []
+        assert "note is required" in reply
+
+    def test_bad_med_time_still_logs_med(self):
+        from trellis.domain_second_brain_models import TrackingEventType
+        reply, repo = self._handle({
+            "note": "took meds", "meds": [{"name": "dex", "time": "nineish"}],
+        })
+        meds = [e for e in repo.events if e.event_type == TrackingEventType.MEDS]
+        assert len(meds) == 1
+        assert meds[0].occurred_at == NOW

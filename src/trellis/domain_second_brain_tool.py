@@ -224,6 +224,59 @@ UPDATE_GOAL_TOOL: dict = {
     },
 }
 
+LOG_STATE_TOOL: dict = {
+    "name": "log_state",
+    "description": (
+        "Log how Cat is doing right now — energy, mood, and body/context events. "
+        "Call whenever she describes her state (answering a check-in or spontaneously), "
+        "or mentions taking meds, sleep, or her period. Multiple logs per day are "
+        "expected; the within-day curve is the point. Derive scores from her words; "
+        "never ask her to rate herself."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "note": {
+                "type": "string",
+                "description": "Her words about how she's doing, verbatim — do not paraphrase or clean up.",
+            },
+            "energy": {
+                "type": "integer", "minimum": 1, "maximum": 5,
+                "description": "Energy derived from her words: 1 empty/shutdown, 3 okay, 5 on top of the world. Omit if she said nothing about energy.",
+            },
+            "mood": {
+                "type": "integer", "minimum": 1, "maximum": 5,
+                "description": "Mood derived from her words: 1 awful, 3 neutral, 5 great. Omit if unclear. Mood and energy are independent — 'good mood, sleepy' is mood 4, energy 2.",
+            },
+            "meds": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "e.g. 'dex'"},
+                        "time": {"type": "string", "description": "Local HH:MM if she said when; omit otherwise."},
+                    },
+                    "required": ["name"],
+                },
+                "description": "Medication she mentions taking.",
+            },
+            "sleep_hours": {
+                "type": "number",
+                "description": "Hours slept last night, if mentioned.",
+            },
+            "sleep_quality": {
+                "type": "string",
+                "description": "Her description of sleep quality, if mentioned: 'badly', 'great', etc.",
+            },
+            "period": {
+                "type": "string", "enum": ["started", "ended"],
+                "description": "If she says her period started or ended.",
+            },
+        },
+        "required": ["note"],
+    },
+}
+
 CLEANUP_SESSION_TOOL: dict = {
     "name": "cleanup_session",
     "description": (
@@ -587,6 +640,83 @@ def handle_update_goal(
         return f"Goal not found: {goal_id_str}"
 
 
+def handle_log_state(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    state_service,
+    tz,
+) -> str:
+    from trellis.domain_second_brain_models import TrackingEventType
+
+    note = str(input_dict.get("note", "")).strip()
+    if not note:
+        return "note is required — her words about how she's doing."
+
+    energy = input_dict.get("energy")
+    mood = input_dict.get("mood")
+    parts: list[str] = []
+
+    log = state_service.log_state(
+        user_id, note,
+        energy=int(energy) if energy is not None else None,
+        mood=int(mood) if mood is not None else None,
+        now=now,
+    )
+    scores = ", ".join(
+        s for s in (
+            f"energy {log.energy}" if log.energy else "",
+            f"mood {log.mood}" if log.mood else "",
+        ) if s
+    )
+    parts.append(f"State logged{f' ({scores})' if scores else ''}.")
+
+    for med in input_dict.get("meds") or []:
+        if not isinstance(med, dict) or not med.get("name"):
+            continue
+        occurred = now
+        time_str = str(med.get("time", "")).strip()
+        if time_str:
+            try:
+                h, m = time_str.split(":")
+                occurred = now.astimezone(tz).replace(
+                    hour=int(h), minute=int(m), second=0, microsecond=0
+                )
+            except (ValueError, AttributeError):
+                pass
+        state_service.log_event(
+            user_id, TrackingEventType.MEDS,
+            detail=str(med["name"]).strip(), occurred_at=occurred,
+        )
+        parts.append(f"Meds logged: {med['name']}{f' at {time_str}' if time_str else ''}.")
+
+    sleep_hours = input_dict.get("sleep_hours")
+    sleep_quality = input_dict.get("sleep_quality")
+    if sleep_hours is not None or sleep_quality:
+        state_service.log_event(
+            user_id, TrackingEventType.SLEEP,
+            detail=str(sleep_quality).strip() if sleep_quality else None,
+            value=float(sleep_hours) if sleep_hours is not None else None,
+            occurred_at=now,
+        )
+        parts.append("Sleep logged.")
+
+    period = input_dict.get("period")
+    if period in ("started", "ended"):
+        state_service.log_event(
+            user_id,
+            TrackingEventType.PERIOD_START if period == "started" else TrackingEventType.PERIOD_END,
+            occurred_at=now,
+        )
+        parts.append(f"Period {period}.")
+
+    summary = state_service.today_summary(user_id, now)
+    if summary:
+        parts.append(summary)
+    return " ".join(parts)
+
+
 def handle_cleanup_session(
     user_id: UUID,
     input_dict: dict,
@@ -707,6 +837,7 @@ def second_brain_context_loader(
 def second_brain_snapshot(
     task_service,
     reminder_service,
+    state_service=None,
 ) -> ContextLoader:
     """
     Tier 2 snapshot contribution — existence/urgency only, always loaded.
@@ -735,6 +866,17 @@ def second_brain_snapshot(
                 parts.append(f"Reminders: {len(soon)} due in 4h")
         except Exception:
             _log.warning("second_brain_snapshot: reminders failed", exc_info=True)
+
+        if state_service is not None:
+            try:
+                state_line = state_service.today_summary(user_id, now)
+                if state_line:
+                    parts.append(state_line)
+                cycle = state_service.cycle_day(user_id, now)
+                if cycle is not None:
+                    parts.append(f"Cycle day {cycle}")
+            except Exception:
+                _log.warning("second_brain_snapshot: state failed", exc_info=True)
 
         return " | ".join(parts) if parts else None
 
