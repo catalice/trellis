@@ -153,6 +153,7 @@ def main() -> None:
             effort_service=effort_service,
             reminder_service=reminder_service,
             cleanup_service=cleanup_service,
+            state_service=state_service,
             tz=settings.timezone,
         ),
         SECOND_BRAIN_SIGNALS,

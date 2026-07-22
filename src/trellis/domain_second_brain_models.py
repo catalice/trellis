@@ -222,6 +222,7 @@ class StateLog:
     note: str                             # her words, verbatim
     energy: int | None                    # 1-5, derived from the note
     mood: int | None                      # 1-5, derived from the note
+    felt_at: datetime                     # when the state was felt (may be retro)
     logged_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

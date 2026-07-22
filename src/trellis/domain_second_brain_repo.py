@@ -491,12 +491,30 @@ class PostgresStateRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO state_logs (id, user_id, note, energy, mood, logged_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO state_logs (id, user_id, note, energy, mood, felt_at, logged_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (log.id, log.user_id, log.note, log.energy, log.mood, log.logged_at),
+                    (log.id, log.user_id, log.note, log.energy, log.mood, log.felt_at, log.logged_at),
                 )
         return log
+
+    def delete_state(self, user_id: UUID, log_id: UUID) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM state_logs WHERE id = %s AND user_id = %s",
+                    (log_id, user_id),
+                )
+                return cur.rowcount > 0
+
+    def delete_event(self, user_id: UUID, event_id: UUID) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM tracking_events WHERE id = %s AND user_id = %s",
+                    (event_id, user_id),
+                )
+                return cur.rowcount > 0
 
     def save_event(self, event: TrackingEvent) -> TrackingEvent:
         with self._db.connect() as conn:
@@ -519,8 +537,8 @@ class PostgresStateRepository:
                 cur.execute(
                     """
                     SELECT * FROM state_logs
-                    WHERE user_id = %s AND logged_at >= %s
-                    ORDER BY logged_at
+                    WHERE user_id = %s AND felt_at >= %s
+                    ORDER BY felt_at
                     """,
                     (user_id, since),
                 )
@@ -566,6 +584,7 @@ def _state_log(row: dict) -> StateLog:
         note=row["note"],
         energy=row.get("energy"),
         mood=row.get("mood"),
+        felt_at=row["felt_at"],
         logged_at=row["logged_at"],
     )
 

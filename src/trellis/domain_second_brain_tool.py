@@ -59,13 +59,15 @@ SECOND_BRAIN_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["tasks", "goals", "inbox", "efforts", "reminders"],
+                "enum": ["tasks", "goals", "inbox", "efforts", "reminders", "tracking"],
                 "description": (
                     "tasks: open tasks ordered by urgency. "
                     "goals: all active goals. "
                     "inbox: unassigned captures for cleanup. "
                     "efforts: all efforts by intensity. "
-                    "reminders: upcoming reminders in the next 24h."
+                    "reminders: upcoming reminders in the next 24h. "
+                    "tracking: recent state logs and meds/sleep/period events with IDs "
+                    "(needed before delete_log_entry)."
                 ),
             }
         },
@@ -115,7 +117,11 @@ COMPLETE_TASK_TOOL: dict = {
 
 UPDATE_TASK_TOOL: dict = {
     "name": "update_task",
-    "description": "Update a task's title, priority, energy, due date, or description. Only send fields that change.",
+    "description": (
+        "Update a task: title, priority, energy, due date, description, or status. "
+        "When Cat wants a task gone (delete/remove/drop), set status='dropped' — "
+        "it vanishes from every list. Only send fields that change."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
@@ -123,6 +129,10 @@ UPDATE_TASK_TOOL: dict = {
             "title": {"type": "string"},
             "priority": {"type": "string", "enum": ["low", "medium", "high"]},
             "energy": {"type": "string", "enum": ["low", "medium", "high"]},
+            "status": {
+                "type": "string", "enum": ["open", "dropped"],
+                "description": "dropped = remove from all lists; open = reopen.",
+            },
             "due": {
                 "type": "string",
                 "description": "User-local YYYY-MM-DDTHH:MM or YYYY-MM-DD. No timezone conversion.",
@@ -240,6 +250,16 @@ LOG_STATE_TOOL: dict = {
                 "type": "string",
                 "description": "Her words about how she's doing, verbatim — do not paraphrase or clean up.",
             },
+            "felt_at": {
+                "type": "string",
+                "description": (
+                    "When this state was FELT, if different from now: user-local "
+                    "YYYY-MM-DDTHH:MM. 'This morning I was shit' said at noon → today ~09:00; "
+                    "'yesterday I crashed after work' → yesterday ~17:00. Omit for right now. "
+                    "If one message describes several states at different times, call this "
+                    "tool once per state with its own felt_at."
+                ),
+            },
             "energy": {
                 "type": "integer", "minimum": 1, "maximum": 5,
                 "description": "Energy derived from her words: 1 empty/shutdown, 3 okay, 5 on top of the world. Omit if she said nothing about energy.",
@@ -274,6 +294,23 @@ LOG_STATE_TOOL: dict = {
             },
         },
         "required": ["note"],
+    },
+}
+
+DELETE_LOG_ENTRY_TOOL: dict = {
+    "name": "delete_log_entry",
+    "description": (
+        "Remove a tracking entry (state log or meds/sleep/period event) that is "
+        "wrong. Corrections are delete + re-log: remove the wrong entry, then call "
+        "log_state with the right details. Get entry IDs from "
+        "second_brain_get(what='tracking') first."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "entry_id": {"type": "string", "description": "UUID of the entry to remove."},
+        },
+        "required": ["entry_id"],
     },
 }
 
@@ -364,6 +401,7 @@ def handle_second_brain_get(
     capture_service,
     effort_service,
     reminder_service,
+    state_service,
 ) -> str:
     what = str(input_dict.get("what", ""))
 
@@ -423,7 +461,32 @@ def handle_second_brain_get(
             lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at)} — {r.status}" for r in recent)
         return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
 
-    return f"Unknown option: {what!r}. Use: tasks, goals, inbox, efforts, reminders."
+    if what == "tracking":
+        states = state_service.recent_states(user_id, days=7, now=now)
+        events = state_service.recent_events(user_id, days=7, now=now)
+        if not states and not events:
+            return "No tracking entries in the last 7 days."
+        lines = []
+        if states:
+            lines.append("State logs (last 7 days):")
+            for s in states:
+                scores = "/".join(p for p in (
+                    f"e{s.energy}" if s.energy else "", f"m{s.mood}" if s.mood else "",
+                ) if p)
+                felt = s.felt_at.strftime("%d %b %H:%M")
+                lines.append(f"  [{s.id}] {felt} {scores or '·'} — {s.note[:80]}")
+        if events:
+            lines.append("Events:")
+            for e in events:
+                bits = [str(e.event_type)]
+                if e.detail:
+                    bits.append(e.detail)
+                if e.value is not None:
+                    bits.append(f"{e.value:g}")
+                lines.append(f"  [{e.id}] {e.occurred_at.strftime('%d %b %H:%M')} — {' '.join(bits)}")
+        return "\n".join(lines)
+
+    return f"Unknown option: {what!r}. Use: tasks, goals, inbox, efforts, reminders, tracking."
 
 
 def handle_create_task(
@@ -505,6 +568,10 @@ def handle_update_task(
             kwargs["energy"] = TaskEnergy(input_dict["energy"])
         except ValueError:
             pass
+    if "status" in input_dict:
+        from trellis.domain_second_brain_models import TaskStatus
+        if input_dict["status"] in ("open", "dropped"):
+            kwargs["status"] = TaskStatus(input_dict["status"])
     if "due" in input_dict:
         kwargs["due"] = input_dict["due"]
     if "description" in input_dict:
@@ -658,11 +725,22 @@ def handle_log_state(
     mood = input_dict.get("mood")
     parts: list[str] = []
 
+    felt_at = None
+    felt_str = str(input_dict.get("felt_at", "")).strip()
+    if felt_str:
+        try:
+            felt_at = datetime.fromisoformat(felt_str)
+            if felt_at.tzinfo is None:
+                felt_at = felt_at.replace(tzinfo=tz)
+        except ValueError:
+            felt_at = None
+
     log = state_service.log_state(
         user_id, note,
         energy=int(energy) if energy is not None else None,
         mood=int(mood) if mood is not None else None,
         now=now,
+        felt_at=felt_at,
     )
     scores = ", ".join(
         s for s in (
@@ -715,6 +793,25 @@ def handle_log_state(
     if summary:
         parts.append(summary)
     return " ".join(parts)
+
+
+def handle_delete_log_entry(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    state_service,
+) -> str:
+    entry_id_str = str(input_dict.get("entry_id", "")).strip()
+    if not entry_id_str:
+        return "entry_id is required."
+    try:
+        entry_id = UUID(entry_id_str)
+    except ValueError:
+        return f"Invalid entry_id: {entry_id_str!r}"
+    if state_service.delete_entry(user_id, entry_id):
+        return "Entry removed."
+    return "No entry with that id."
 
 
 def handle_cleanup_session(
@@ -909,6 +1006,7 @@ def second_brain_tools(
     effort_service,
     reminder_service,
     cleanup_service,
+    state_service,
     tz,
 ) -> list[tuple[dict, Any]]:
     # brain_dump is NOT here — it's an always-available tool wired in core_main.
@@ -922,6 +1020,7 @@ def second_brain_tools(
                 capture_service=capture_service,
                 effort_service=effort_service,
                 reminder_service=reminder_service,
+                state_service=state_service,
             ),
         ),
         (
@@ -951,6 +1050,12 @@ def second_brain_tools(
         (
             UPDATE_GOAL_TOOL,
             lambda uid, inp, now: handle_update_goal(uid, inp, now, goal_service=goal_service),
+        ),
+        (
+            DELETE_LOG_ENTRY_TOOL,
+            lambda uid, inp, now: handle_delete_log_entry(
+                uid, inp, now, state_service=state_service,
+            ),
         ),
         (
             CLEANUP_SESSION_TOOL,

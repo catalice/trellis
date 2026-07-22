@@ -517,8 +517,8 @@ class FakeStateRepo:
 
     def list_states_since(self, user_id, *, since):
         return sorted(
-            (s for s in self.states if s.logged_at >= since),
-            key=lambda s: s.logged_at,
+            (s for s in self.states if s.felt_at >= since),
+            key=lambda s: s.felt_at,
         )
 
     def list_events_since(self, user_id, *, since):
@@ -528,6 +528,16 @@ class FakeStateRepo:
         from trellis.domain_second_brain_models import TrackingEventType
         starts = [e for e in self.events if e.event_type == TrackingEventType.PERIOD_START]
         return max(starts, key=lambda e: e.occurred_at) if starts else None
+
+    def delete_state(self, user_id, log_id):
+        before = len(self.states)
+        self.states = [s for s in self.states if s.id != log_id]
+        return len(self.states) < before
+
+    def delete_event(self, user_id, event_id):
+        before = len(self.events)
+        self.events = [e for e in self.events if e.id != event_id]
+        return len(self.events) < before
 
 
 class TestStateService:
@@ -631,3 +641,40 @@ class TestLogStateHandler:
         meds = [e for e in repo.events if e.event_type == TrackingEventType.MEDS]
         assert len(meds) == 1
         assert meds[0].occurred_at == NOW
+
+
+class TestFeltAtAndDelete:
+    def test_retro_log_uses_felt_at(self):
+        from trellis.domain_second_brain_service import StateService
+        repo = FakeStateRepo()
+        svc = StateService(repo, TZ)
+        felt = NOW - timedelta(hours=3)
+        log = svc.log_state(UID, "this morning was shit", energy=1, mood=2,
+                            now=NOW, felt_at=felt)
+        assert log.felt_at == felt
+        assert log.logged_at == NOW
+
+    def test_felt_at_defaults_to_now(self):
+        from trellis.domain_second_brain_service import StateService
+        svc = StateService(FakeStateRepo(), TZ)
+        log = svc.log_state(UID, "now", energy=3, mood=3, now=NOW)
+        assert log.felt_at == NOW
+
+    def test_delete_entry_removes_state(self):
+        from trellis.domain_second_brain_service import StateService
+        repo = FakeStateRepo()
+        svc = StateService(repo, TZ)
+        log = svc.log_state(UID, "wrong", energy=3, mood=3, now=NOW)
+        assert svc.delete_entry(UID, log.id) is True
+        assert repo.states == []
+        assert svc.delete_entry(UID, log.id) is False
+
+    def test_delete_handler(self):
+        from trellis.domain_second_brain_service import StateService
+        from trellis.domain_second_brain_tool import handle_delete_log_entry
+        repo = FakeStateRepo()
+        svc = StateService(repo, TZ)
+        log = svc.log_state(UID, "wrong", energy=3, mood=3, now=NOW)
+        reply = handle_delete_log_entry(UID, {"entry_id": str(log.id)}, NOW, state_service=svc)
+        assert "removed" in reply
+        assert repo.states == []

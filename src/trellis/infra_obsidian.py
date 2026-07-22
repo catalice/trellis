@@ -43,9 +43,9 @@ _TASKS_HEADER = """\
 _TRACKING_HEADER = """\
 # Tracking
 
-> Live view — managed by Trellis. Energy and mood scored 1-5 across the day \
-as morning/afternoon/evening (e.g. `2/4/-` — rough morning, good afternoon, \
-evening not logged yet), with meds, sleep, and cycle.
+> Live view — managed by Trellis. Each entry is energy/mood scored 1-5 at the \
+time it was felt (e.g. `09:12 e2/m4`), so switches show as switches — no \
+averaging. Meds, sleep, and cycle ride alongside.
 """
 
 _UPCOMING_REMINDER_DAYS = 14
@@ -214,7 +214,7 @@ class ObsidianVault:
 
             by_day_states: dict = {}
             for s in states:
-                by_day_states.setdefault(s.logged_at.astimezone(self._tz).date(), []).append(s)
+                by_day_states.setdefault(s.felt_at.astimezone(self._tz).date(), []).append(s)
             by_day_events: dict = {}
             for e in events:
                 by_day_events.setdefault(e.occurred_at.astimezone(self._tz).date(), []).append(e)
@@ -226,11 +226,15 @@ class ObsidianVault:
             if not days:
                 parts.append("No entries yet. Just tell Trellis how you're doing.\n")
             for day in days:
-                day_states = by_day_states.get(day, [])
+                day_states = sorted(
+                    by_day_states.get(day, []),
+                    key=lambda s: s.felt_at,
+                )
                 day_events = by_day_events.get(day, [])
-                line = f"**{day.strftime('%a %d %b')}**  "
-                line += f"`{_spark(day_states, self._tz, 'energy')}` e  "
-                line += f"`{_spark(day_states, self._tz, 'mood')}` m"
+                line = f"**{day.strftime('%a %d %b')}**"
+                timeline = _timeline(day_states, self._tz)
+                if timeline:
+                    line += f"  `{timeline}`"
 
                 extras = []
                 for e in day_events:
@@ -257,8 +261,11 @@ class ObsidianVault:
                 parts.append(line)
 
                 for s in day_states:
-                    t = s.logged_at.astimezone(self._tz).strftime("%H:%M")
-                    parts.append(f"  - {t} — {s.note}")
+                    t = s.felt_at.astimezone(self._tz).strftime("%H:%M")
+                    retro = ""
+                    if s.felt_at.date() != s.logged_at.date():
+                        retro = f" _(logged {s.logged_at.astimezone(self._tz).strftime('%d %b')})_"
+                    parts.append(f"  - {t} — {s.note}{retro}")
                 parts.append("")
 
             path = self._vault / _TRACKING_PATH
@@ -326,23 +333,18 @@ class ObsidianVault:
         return dt.astimezone(self._tz).strftime("%a %d %b") if dt else ""
 
 
-def _spark(states: list, tz: tzinfo, axis: str) -> str:
-    """Day shape as numbers: morning (<12) / afternoon (12-17) / evening (17+),
-    e.g. "2/4/-". Averages multiple logs in a bucket; '-' where nothing logged.
-    Plain digits render in every font, unlike block characters."""
-    buckets: list[list[int]] = [[], [], []]
+def _timeline(states: list, tz: tzinfo) -> str:
+    """The day's actual curve: each scored entry at its felt time, in order,
+    e.g. "09:12 e2/m4 → 12:54 e1/m1". No averaging — a switch shows as a switch."""
+    points = []
     for s in states:
-        score = getattr(s, axis)
-        if score is None:
+        scores = "/".join(
+            p for p in (
+                f"e{s.energy}" if s.energy else "",
+                f"m{s.mood}" if s.mood else "",
+            ) if p
+        )
+        if not scores:
             continue
-        hour = s.logged_at.astimezone(tz).hour
-        idx = 0 if hour < 12 else (1 if hour < 17 else 2)
-        buckets[idx].append(score)
-    out = []
-    for bucket in buckets:
-        if not bucket:
-            out.append("-")
-        else:
-            avg = round(sum(bucket) / len(bucket))
-            out.append(str(max(1, min(5, avg))))
-    return "/".join(out)
+        points.append(f"{s.felt_at.astimezone(tz).strftime('%H:%M')} {scores}")
+    return " → ".join(points)

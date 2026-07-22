@@ -89,6 +89,8 @@ class StateRepository(Protocol):
     def list_states_since(self, user_id: UUID, *, since: datetime) -> list[StateLog]: ...
     def list_events_since(self, user_id: UUID, *, since: datetime) -> list[TrackingEvent]: ...
     def last_period_start(self, user_id: UUID) -> TrackingEvent | None: ...
+    def delete_state(self, user_id: UUID, log_id: UUID) -> bool: ...
+    def delete_event(self, user_id: UUID, event_id: UUID) -> bool: ...
 
 
 class VaultProjection(Protocol):
@@ -596,6 +598,7 @@ class StateService:
         energy: int | None,
         mood: int | None,
         now: datetime,
+        felt_at: datetime | None = None,
     ) -> StateLog:
         log = self._repo.save_state(StateLog(
             id=uuid4(),
@@ -603,6 +606,7 @@ class StateService:
             note=note,
             energy=_clamp_score(energy),
             mood=_clamp_score(mood),
+            felt_at=felt_at or now,
             logged_at=now,
         ))
         if self._projection:
@@ -643,6 +647,13 @@ class StateService:
         since = now - timedelta(days=days)
         return self._repo.list_events_since(user_id, since=since)
 
+    def delete_entry(self, user_id: UUID, entry_id: UUID) -> bool:
+        """Remove a state log or tracking event (whichever the id matches)."""
+        deleted = self._repo.delete_state(user_id, entry_id) or self._repo.delete_event(user_id, entry_id)
+        if deleted and self._projection:
+            self._projection.tracking_changed(user_id)
+        return deleted
+
     def cycle_day(self, user_id: UUID, now: datetime) -> int | None:
         start = self._repo.last_period_start(user_id)
         if start is None:
@@ -657,7 +668,7 @@ class StateService:
             return None
         parts = []
         for log in logs:
-            local = log.logged_at.astimezone(self._tz)
+            local = log.felt_at.astimezone(self._tz)
             scores = "/".join(
                 s for s in (
                     f"e{log.energy}" if log.energy else "",
