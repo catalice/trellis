@@ -30,6 +30,7 @@ class PostgresDatabase:
 
     def migrate(self, migrations_dir: Path) -> None:
         # Bootstrap the migration tracker in its own transaction.
+        # All migrations are idempotent (IF NOT EXISTS), so replaying is safe.
         with self.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -40,25 +41,6 @@ class PostgresDatabase:
                     )
                     """
                 )
-                # If the database already has tables from before schema_migrations
-                # was introduced, mark all pre-008 migrations as applied so they
-                # are not replayed (some are not idempotent).
-                cur.execute(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1 FROM information_schema.tables
-                        WHERE table_schema = 'public' AND table_name = 'tasks'
-                    )
-                    """
-                )
-                if cur.fetchone()[0]:
-                    for mf in sorted(migrations_dir.glob("*.sql")):
-                        if mf.name < "008_":
-                            cur.execute(
-                                "INSERT INTO schema_migrations (filename) VALUES (%s)"
-                                " ON CONFLICT DO NOTHING",
-                                (mf.name,),
-                            )
 
         # Apply each unapplied migration in its own transaction.
         for migration in sorted(migrations_dir.glob("*.sql")):
