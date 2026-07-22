@@ -44,6 +44,7 @@ class CaptureRepository(Protocol):
     def list_unassigned(self, user_id: UUID, *, since: date) -> list[Capture]: ...
     def assign_to_effort(self, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
     def archive(self, capture_id: UUID) -> None: ...
+    def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
 
 
 class EffortRepository(Protocol):
@@ -216,6 +217,11 @@ class CaptureService:
 
     def archive(self, capture_id: UUID) -> None:
         self._repo.archive(capture_id)
+
+    def delete(self, user_id: UUID, capture_id: UUID) -> bool:
+        """Erase a mis-capture (test, mistake) — tasks extracted from it are
+        erased separately via their own ids; the FK just nulls their source."""
+        return self._repo.delete(user_id, capture_id)
 
 
 # ---------------------------------------------------------------------------

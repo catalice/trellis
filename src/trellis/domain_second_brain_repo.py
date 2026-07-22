@@ -125,6 +125,15 @@ class PostgresCaptureRepository:
                     (capture_id,),
                 )
 
+    def delete(self, user_id: UUID, capture_id: UUID) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM captures WHERE id = %s AND user_id = %s",
+                    (capture_id, user_id),
+                )
+                return cur.rowcount > 0
+
 
 # ---------------------------------------------------------------------------
 # EffortRepository — Postgres

@@ -317,11 +317,12 @@ DELETE_ENTRY_TOOL: dict = {
     "name": "delete_entry",
     "description": (
         "Erase a record that should never have existed: a duplicate task, a wrong "
-        "tracking entry (state or meds/sleep/period event), a mis-extraction. "
+        "tracking entry (state or meds/sleep/period event), a test or mis-capture. "
         "Completely removes it — use ONLY for mistakes, never for decisions: "
         "a task Cat decided against gets update_task status='dropped' instead. "
         "Corrections are delete + re-log. Get IDs from second_brain_get first. "
-        "Deleting a task also deletes any reminder attached to it."
+        "Erasing a capture does NOT erase tasks extracted from it — erase those "
+        "by their own ids. Deleting a task also deletes reminders attached to it."
     ),
     "input_schema": {
         "type": "object",
@@ -846,6 +847,7 @@ def handle_delete_entry(
     *,
     state_service,
     task_service,
+    capture_service,
 ) -> str:
     entry_id_str = str(input_dict.get("entry_id", "")).strip()
     if not entry_id_str:
@@ -854,7 +856,11 @@ def handle_delete_entry(
         entry_id = UUID(entry_id_str)
     except ValueError:
         return f"Invalid entry_id: {entry_id_str!r}"
-    if state_service.delete_entry(user_id, entry_id) or task_service.delete(user_id, entry_id):
+    if (
+        state_service.delete_entry(user_id, entry_id)
+        or task_service.delete(user_id, entry_id)
+        or capture_service.delete(user_id, entry_id)
+    ):
         return "Erased."
     return "No record with that id."
 
@@ -1102,7 +1108,8 @@ def second_brain_tools(
         (
             DELETE_ENTRY_TOOL,
             lambda uid, inp, now: handle_delete_entry(
-                uid, inp, now, state_service=state_service, task_service=task_service,
+                uid, inp, now, state_service=state_service,
+                task_service=task_service, capture_service=capture_service,
             ),
         ),
         (

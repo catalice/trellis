@@ -121,6 +121,12 @@ class FakeCaptureRepo:
     def archive(self, capture_id) -> None:
         self.archived.add(capture_id)
 
+    def delete(self, user_id, capture_id):
+        if capture_id in self.captures and self.captures[capture_id].user_id == user_id:
+            del self.captures[capture_id]
+            return True
+        return False
+
 
 class FakeReminderRepo:
     def __init__(self):
@@ -680,19 +686,20 @@ class TestFeltAtAndDelete:
         assert svc.delete_entry(UID, log.id) is False
 
     def test_delete_handler_erases_state(self):
-        from trellis.domain_second_brain_service import StateService
+        from trellis.domain_second_brain_service import CaptureService, StateService
         from trellis.domain_second_brain_tool import handle_delete_entry
         repo = FakeStateRepo()
         svc = StateService(repo, TZ)
         task_svc = TaskService(FakeTaskRepo(), TZ)
         log = svc.log_state(UID, "wrong", energy=3, mood=3, now=NOW)
         reply = handle_delete_entry(UID, {"entry_id": str(log.id)}, NOW,
-                                    state_service=svc, task_service=task_svc)
+                                    state_service=svc, task_service=task_svc,
+                                    capture_service=CaptureService(FakeCaptureRepo()))
         assert "Erased" in reply
         assert repo.states == []
 
     def test_delete_handler_erases_duplicate_task(self):
-        from trellis.domain_second_brain_service import StateService
+        from trellis.domain_second_brain_service import CaptureService, StateService
         from trellis.domain_second_brain_tool import handle_delete_entry
         state_svc = StateService(FakeStateRepo(), TZ)
         task_repo = FakeTaskRepo()
@@ -700,19 +707,37 @@ class TestFeltAtAndDelete:
         task_svc.create(UID, "Find ceramics class", now=NOW)
         dupe = task_svc.create(UID, "Find a local ceramics class", now=NOW)
         reply = handle_delete_entry(UID, {"entry_id": str(dupe.id)}, NOW,
-                                    state_service=state_svc, task_service=task_svc)
+                                    state_service=state_svc, task_service=task_svc,
+                                    capture_service=CaptureService(FakeCaptureRepo()))
         assert "Erased" in reply
         assert [t.title for t in task_svc.list_open(UID)] == ["Find ceramics class"]
 
+    def test_delete_handler_erases_capture(self):
+        from trellis.domain_second_brain_service import CaptureService, StateService
+        from trellis.domain_second_brain_tool import handle_delete_entry
+        cap_repo = FakeCaptureRepo()
+        cap_svc = CaptureService(cap_repo)
+        state_svc = StateService(FakeStateRepo(), TZ)
+        task_svc = TaskService(FakeTaskRepo(), TZ)
+        c = cap_repo.save(Capture(id=uuid4(), user_id=UID, raw="test dump",
+                                  capture_type=CaptureType.BRAIN_DUMP, synthesis=None,
+                                  summary="test", effort_id=None, created_at=NOW))
+        reply = handle_delete_entry(UID, {"entry_id": str(c.id)}, NOW,
+                                    state_service=state_svc, task_service=task_svc,
+                                    capture_service=cap_svc)
+        assert "Erased" in reply
+        assert cap_repo.captures == {}
+
     def test_delete_other_users_task_refused(self):
-        from trellis.domain_second_brain_service import StateService
+        from trellis.domain_second_brain_service import CaptureService, StateService
         from trellis.domain_second_brain_tool import handle_delete_entry
         state_svc = StateService(FakeStateRepo(), TZ)
         task_repo = FakeTaskRepo()
         task_svc = TaskService(task_repo, TZ)
         other = task_svc.create(uuid4(), "not yours", now=NOW)
         reply = handle_delete_entry(UID, {"entry_id": str(other.id)}, NOW,
-                                    state_service=state_svc, task_service=task_svc)
+                                    state_service=state_svc, task_service=task_svc,
+                                    capture_service=CaptureService(FakeCaptureRepo()))
         assert "No record" in reply
         assert len(task_repo.tasks) == 1
 
