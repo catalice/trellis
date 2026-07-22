@@ -336,7 +336,7 @@ class ObsidianVault:
             lines = [f"# {effort.title}\n", f"_Intensity: {effort.intensity.value}_\n"]
             if effort.notes:
                 lines.append(f"{effort.notes}\n")
-            lines.append("## Captures\n")
+            lines.append("## Research & notes\n")
             path.write_text("\n".join(lines), encoding="utf-8")
         except Exception:
             _log.warning("obsidian: effort page write failed", exc_info=True)
@@ -377,10 +377,8 @@ class ObsidianVault:
             if not page.exists():
                 self.effort_created(effort)
             local = capture.created_at.astimezone(self._tz)
-            block = (
-                f"\n### {local.strftime('%d %b %Y, %H:%M')} — {capture.summary or 'research'}\n\n"
-                f"{capture.synthesis or capture.raw}\n"
-            )
+            body = (capture.synthesis or capture.raw).strip()
+            block = f"\n---\n_{local.strftime('%d %b %Y, %H:%M')}_\n\n{body}\n"
             with page.open("a", encoding="utf-8") as f:
                 f.write(block)
 
