@@ -50,6 +50,7 @@ class CaptureRepository(Protocol):
 class EffortRepository(Protocol):
     def save(self, effort: Effort) -> Effort: ...
     def get(self, effort_id: UUID) -> Effort | None: ...
+    def get_by_title(self, user_id: UUID, title: str) -> Effort | None: ...
     def list_all(self, user_id: UUID) -> list[Effort]: ...
     def update_intensity(self, effort_id: UUID, intensity: EffortIntensity) -> Effort: ...
     def update_notes(self, effort_id: UUID, notes: str) -> Effort: ...
@@ -106,6 +107,7 @@ class VaultProjection(Protocol):
     def capture_assigned(self, capture: Capture) -> None: ...
     def state_logged(self, log: StateLog) -> None: ...
     def tracking_changed(self, user_id: UUID) -> None: ...
+    def research_saved(self, capture: Capture) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +225,24 @@ class CaptureService:
         erased separately via their own ids; the FK just nulls their source."""
         return self._repo.delete(user_id, capture_id)
 
+    def save_research(self, user_id: UUID, content: str, *, effort_id: UUID, now: datetime) -> Capture:
+        """Store a piece of research/notes onto an effort. Full text lands on
+        the effort's vault page; a one-line receipt lands in the day's log."""
+        summary = content.strip().splitlines()[0][:80] if content.strip() else "research"
+        capture = self._repo.save(Capture(
+            id=uuid4(),
+            user_id=user_id,
+            raw=content,
+            capture_type=CaptureType.REFERENCE,
+            synthesis=content,
+            summary=summary,
+            effort_id=effort_id,
+            created_at=now,
+        ))
+        if self._projection:
+            self._projection.research_saved(capture)
+        return capture
+
 
 # ---------------------------------------------------------------------------
 # EffortService
@@ -247,6 +267,26 @@ class EffortService:
             title=title,
             intensity=intensity,
             notes=notes,
+            obsidian_path=_effort_obsidian_path(title),
+            created_at=now,
+            updated_at=now,
+        ))
+        if self._projection:
+            self._projection.effort_created(effort)
+        return effort
+
+    def find_or_create(self, user_id: UUID, title: str, now: datetime) -> Effort:
+        """Return the effort with this title, creating it (active) if new.
+        This is how a seed graduates: research it, and it gets a home."""
+        existing = self._repo.get_by_title(user_id, title)
+        if existing is not None:
+            return existing
+        effort = self._repo.save(Effort(
+            id=uuid4(),
+            user_id=user_id,
+            title=title,
+            intensity=EffortIntensity.ACTIVE,
+            notes=None,
             obsidian_path=_effort_obsidian_path(title),
             created_at=now,
             updated_at=now,

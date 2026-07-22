@@ -362,6 +362,41 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: effort capture append failed", exc_info=True)
 
+    def research_saved(self, capture: Capture) -> None:
+        """Research/notes kept onto an effort: full text on the effort page,
+        a one-line receipt in the day's log (which links back to the effort)."""
+        if capture.effort_id is None:
+            return
+        try:
+            effort = self._efforts.get(capture.effort_id)
+            if effort is None:
+                return
+            page = self._effort_path(effort)
+            if page is None:
+                return
+            if not page.exists():
+                self.effort_created(effort)
+            local = capture.created_at.astimezone(self._tz)
+            block = (
+                f"\n### {local.strftime('%d %b %Y, %H:%M')} — {capture.summary or 'research'}\n\n"
+                f"{capture.synthesis or capture.raw}\n"
+            )
+            with page.open("a", encoding="utf-8") as f:
+                f.write(block)
+
+            # Receipt in the day's log, linking to the effort page.
+            daily = self._vault / _DAILY_DIR / f"{local.strftime('%Y-%m-%d')}.md"
+            daily.parent.mkdir(parents=True, exist_ok=True)
+            effort_link = effort.title
+            receipt = f"\n- {local.strftime('%H:%M')} · research → [[{effort_link}]]: {capture.summary or ''}\n"
+            if daily.exists():
+                with daily.open("a", encoding="utf-8") as f:
+                    f.write(receipt)
+            else:
+                daily.write_text(f"# {local.strftime('%A %d %B %Y')}\n{receipt}", encoding="utf-8")
+        except Exception:
+            _log.warning("obsidian: research write failed", exc_info=True)
+
     # --- Helpers ------------------------------------------------------------
 
     def _effort_path(self, effort: Effort) -> Path | None:

@@ -865,6 +865,37 @@ def handle_delete_entry(
     return "No record with that id."
 
 
+SAVE_TO_EFFORT_TOOL: dict = {
+    "name": "save_to_effort",
+    "description": (
+        "Keep research, notes, or findings onto an Effort — an area Cat is "
+        "actively exploring (its own page in her vault that accumulates over time). "
+        "Use this the moment there's something worth keeping from a research "
+        "conversation, instead of offering to 'save to a seed'. Finds the effort "
+        "by name or creates it if new — so a seed graduating into real exploration "
+        "gets a home. If this came from a seed, pass graduated_seed_id to retire "
+        "the seed (it's an effort now)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "effort_title": {
+                "type": "string",
+                "description": "Short, evocative name for the area, e.g. 'Making Music'. Reuse the exact name to add to an existing effort.",
+            },
+            "content": {
+                "type": "string",
+                "description": "The research/notes to keep — the full digest, links and all. Markdown is fine.",
+            },
+            "graduated_seed_id": {
+                "type": "string",
+                "description": "UUID of the seed this grew from, if any — it gets retired.",
+            },
+        },
+        "required": ["effort_title", "content"],
+    },
+}
+
 WEB_SEARCH_TOOL: dict = {
     "name": "web_search",
     "description": (
@@ -882,6 +913,34 @@ WEB_SEARCH_TOOL: dict = {
         "required": ["query"],
     },
 }
+
+
+def handle_save_to_effort(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    effort_service,
+    capture_service,
+    task_service,
+) -> str:
+    title = str(input_dict.get("effort_title", "")).strip()
+    content = str(input_dict.get("content", "")).strip()
+    if not title or not content:
+        return "effort_title and content are both required."
+    effort = effort_service.find_or_create(user_id, title, now)
+    capture_service.save_research(user_id, content, effort_id=effort.id, now=now)
+
+    retired = ""
+    seed_id = str(input_dict.get("graduated_seed_id", "")).strip()
+    if seed_id:
+        try:
+            from trellis.domain_second_brain_models import TaskStatus
+            task_service.update(user_id, UUID(seed_id), status=TaskStatus.DROPPED, now=now)
+            retired = " (seed retired — it's an effort now)"
+        except (ValueError, Exception):
+            pass
+    return f"Saved to effort '{effort.title}'{retired}. It's on your {effort.title} page."
 
 
 def handle_web_search(
@@ -1161,6 +1220,15 @@ def second_brain_tools(
                 uid, inp, now,
                 capture_service=capture_service,
                 cleanup_service=cleanup_service,
+            ),
+        ),
+        (
+            SAVE_TO_EFFORT_TOOL,
+            lambda uid, inp, now: handle_save_to_effort(
+                uid, inp, now,
+                effort_service=effort_service,
+                capture_service=capture_service,
+                task_service=task_service,
             ),
         ),
     ]

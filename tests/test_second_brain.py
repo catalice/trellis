@@ -187,6 +187,12 @@ class FakeEffortRepo:
     def get(self, eid):
         return self.efforts.get(eid)
 
+    def get_by_title(self, user_id, title):
+        for e in self.efforts.values():
+            if e.user_id == user_id and e.title.lower() == title.strip().lower():
+                return e
+        return None
+
     def list_all(self, user_id):
         return list(self.efforts.values())
 
@@ -839,3 +845,50 @@ class TestWebSearch:
         from trellis.domain_second_brain_tool import handle_web_search
         reply = handle_web_search(UID, {}, NOW, web_search=object())
         assert "required" in reply
+
+
+class TestSaveToEffort:
+    def _wire(self):
+        from trellis.domain_second_brain_service import CaptureService, EffortService
+        cap_repo = FakeCaptureRepo()
+        eff_repo = FakeEffortRepo()
+        task_repo = FakeTaskRepo()
+        return (
+            CaptureService(cap_repo), EffortService(eff_repo),
+            TaskService(task_repo, TZ), cap_repo, eff_repo, task_repo,
+        )
+
+    def test_creates_effort_and_saves_research(self):
+        from trellis.domain_second_brain_tool import handle_save_to_effort
+        cap_svc, eff_svc, task_svc, cap_repo, eff_repo, _ = self._wire()
+        reply = handle_save_to_effort(
+            UID, {"effort_title": "Making Music", "content": "PO-33 ~£90\nCircuit Tracks ~£300"},
+            NOW, effort_service=eff_svc, capture_service=cap_svc, task_service=task_svc,
+        )
+        assert "Making Music" in reply
+        assert len(eff_repo.efforts) == 1
+        cap = list(cap_repo.captures.values())[0]
+        assert cap.effort_id == list(eff_repo.efforts.values())[0].id
+        assert "PO-33" in cap.raw
+
+    def test_reuses_existing_effort_by_name(self):
+        from trellis.domain_second_brain_tool import handle_save_to_effort
+        cap_svc, eff_svc, task_svc, cap_repo, eff_repo, _ = self._wire()
+        for content in ("first find", "second find"):
+            handle_save_to_effort(UID, {"effort_title": "Making Music", "content": content},
+                                  NOW, effort_service=eff_svc, capture_service=cap_svc, task_service=task_svc)
+        assert len(eff_repo.efforts) == 1          # not duplicated
+        assert len(cap_repo.captures) == 2         # both findings kept
+
+    def test_graduated_seed_retired(self):
+        from trellis.domain_second_brain_tool import handle_save_to_effort
+        from trellis.domain_second_brain_models import TaskKind, TaskStatus
+        cap_svc, eff_svc, task_svc, cap_repo, eff_repo, task_repo = self._wire()
+        seed = task_svc.create(UID, "look into drum machines", kind=TaskKind.SEED, now=NOW)
+        handle_save_to_effort(
+            UID, {"effort_title": "Making Music", "content": "options...",
+                  "graduated_seed_id": str(seed.id)},
+            NOW, effort_service=eff_svc, capture_service=cap_svc, task_service=task_svc,
+        )
+        assert task_repo.tasks[seed.id].status == TaskStatus.DROPPED
+        assert task_svc.list_seeds(UID) == []

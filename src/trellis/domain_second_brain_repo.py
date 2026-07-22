@@ -173,6 +173,16 @@ class PostgresEffortRepository:
                 row = cur.fetchone()
                 return _effort(row) if row else None
 
+    def get_by_title(self, user_id: UUID, title: str) -> Effort | None:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM efforts WHERE user_id = %s AND lower(title) = lower(%s) LIMIT 1",
+                    (user_id, title.strip()),
+                )
+                row = cur.fetchone()
+                return _effort(row) if row else None
+
     def list_all(self, user_id: UUID) -> list[Effort]:
         with self._db.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
