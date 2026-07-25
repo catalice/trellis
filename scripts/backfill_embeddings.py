@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 
 from dotenv import load_dotenv
 
@@ -26,11 +25,6 @@ from trellis.postgres import PostgresDatabase
 DB_URL = os.getenv(
     "BACKFILL_DATABASE_URL", "postgresql://trellis:trellis@localhost:5433/trellis"
 )
-
-# The GitHub Models free tier rate-limits bursts, so file gently: pace between
-# calls, and cool off once before a single retry.
-_PACE = 5.0
-_RETRY_COOLDOWN = 15.0
 
 
 def main() -> int:
@@ -83,26 +77,22 @@ def main() -> int:
             for sid, user_id, title, description in cur.fetchall():
                 targets.append(("seed", sid, user_id, Task.compose_embedding_text(title, description)))
 
-    fileable = [t for t in targets if t[3]]
-    filed = pending = 0
-    for entity_kind, entity_id, user_id, text in fileable:
-        if memory.remember(user_id, entity_kind, entity_id, text):
-            filed += 1
-        else:
-            # Free tier rate-limits bursts — cool off and try once more.
-            time.sleep(_RETRY_COOLDOWN)
-            if memory.remember(user_id, entity_kind, entity_id, text):
-                filed += 1
-            else:
-                pending += 1
-        time.sleep(_PACE)
-
-    if not fileable:
+    # remember_many batches the embeds, so the whole brain re-indexes in a couple
+    # of requests, not one per row — which is what keeps us under 15 requests/min.
+    items = [
+        (user_id, entity_kind, entity_id, text)
+        for entity_kind, entity_id, user_id, text in targets
+        if text
+    ]
+    if not items:
         print("Nothing to backfill — the meaning index is up to date.")
-    elif pending:
-        print(f"Filed {filed} row(s); {pending} still pending (rate-limited) — re-run later to finish.")
-    else:
+        return 0
+
+    filed = memory.remember_many(items)
+    if filed == len(items):
         print(f"Done — filed {filed} row(s) into the meaning index.")
+    else:
+        print(f"Filed {filed}/{len(items)} row(s); the rest are pending (rate-limited) — re-run later.")
     return 0
 
 

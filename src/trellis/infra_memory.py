@@ -48,11 +48,22 @@ class MemoryIndex:
 
     # -- write ----------------------------------------------------------------
 
+    _UPSERT_SQL = """
+        INSERT INTO memory_index
+            (user_id, entity_kind, entity_id, content, embedding, updated_at)
+        VALUES (%s, %s, %s, %s, %s::vector, NOW())
+        ON CONFLICT (entity_kind, entity_id) DO UPDATE SET
+            content = EXCLUDED.content,
+            embedding = EXCLUDED.embedding,
+            updated_at = NOW()
+    """
+
     def remember(self, user_id: UUID, entity_kind: str, entity_id: UUID, text: str) -> bool:
         """Embed `text` and upsert its card into the index. Best-effort: no
         embedder, empty text, or a failed embed just skips filing — never raises,
         never blocks the caller's own write. Returns True if a card was filed,
-        False if skipped, so a backfill can pace/retry and count honestly."""
+        False if skipped. One embedding request per call — fine for embed-on-write
+        (one save at a time); a backfill should use remember_many to batch."""
         clean = (text or "").strip()
         if self._embedder is None or not clean:
             return False
@@ -63,21 +74,48 @@ class MemoryIndex:
             with self._db.connect() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """
-                        INSERT INTO memory_index
-                            (user_id, entity_kind, entity_id, content, embedding, updated_at)
-                        VALUES (%s, %s, %s, %s, %s::vector, NOW())
-                        ON CONFLICT (entity_kind, entity_id) DO UPDATE SET
-                            content = EXCLUDED.content,
-                            embedding = EXCLUDED.embedding,
-                            updated_at = NOW()
-                        """,
+                        self._UPSERT_SQL,
                         (user_id, entity_kind, entity_id, clean, to_pgvector_literal(vector)),
                     )
             return True
         except Exception:
             _log.warning("memory_index upsert failed for %s %s", entity_kind, entity_id, exc_info=True)
             return False
+
+    def remember_many(self, items: "list[tuple[UUID, str, UUID, str]]") -> int:
+        """Batch-file many cards in as few embedding REQUESTS as possible: the
+        embedder batches internally, so N rows cost ~ceil(N / batch) requests, not
+        N. That's what a backfill wants — GitHub Models' free tier caps *requests*
+        (15/min, 150/day), not size (64k tokens/request). items are
+        (user_id, entity_kind, entity_id, text); returns how many were filed. A
+        failed embed files none — re-run later, it's idempotent."""
+        rows = [(u, k, e, (t or "").strip()) for (u, k, e, t) in items]
+        rows = [r for r in rows if r[3]]
+        if self._embedder is None or not rows:
+            return 0
+        try:
+            vectors = self._embedder.embed([r[3] for r in rows])
+        except Exception:
+            _log.warning("batch embed failed", exc_info=True)
+            vectors = None
+        if not vectors or len(vectors) != len(rows):
+            self._consecutive_failures += 1
+            return 0
+        self._consecutive_failures = 0
+        filed = 0
+        try:
+            with self._db.connect() as conn:
+                with conn.cursor() as cur:
+                    for (user_id, entity_kind, entity_id, content), vector in zip(rows, vectors):
+                        cur.execute(
+                            self._UPSERT_SQL,
+                            (user_id, entity_kind, entity_id, content, to_pgvector_literal(vector)),
+                        )
+                        filed += 1
+            return filed
+        except Exception:
+            _log.warning("memory_index batch upsert failed", exc_info=True)
+            return filed
 
     def forget(self, entity_kind: str, entity_id: UUID) -> None:
         """Drop an entity's card — call when the underlying thing is deleted or
