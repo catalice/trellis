@@ -75,11 +75,11 @@ infra_tracking.py    # health records, readiness scoring, cycle, self-reports
 infra_postgres.py    # DB connection + migrate() only — no repo classes here
 
 # Domains — exactly 5 files each
-domain_{second_brain|training|learn}_models.py
-domain_{second_brain|training|learn}_service.py
-domain_{second_brain|training|learn}_claude.py
-domain_{second_brain|training|learn}_repo.py
-domain_{second_brain|training|learn}_tool.py
+domain_{second_brain|training|learn|music}_models.py
+domain_{second_brain|training|learn|music}_service.py
+domain_{second_brain|training|learn|music}_claude.py
+domain_{second_brain|training|learn|music}_repo.py
+domain_{second_brain|training|learn|music}_tool.py
 
 # Migrations
 migrations/001_schema.sql   # base schema (fresh installs)
@@ -171,6 +171,33 @@ A module. Deliberate knowledge building — different cognitive mode from second
 - Learning threads (named topics)
 - Entries within threads
 - Periodic synthesis within a thread
+
+---
+
+## Music domain
+
+A module for your music and creative practice. Its first and main integration is
+the Spotify connection to your own taste; on top of that sit tools that beat the
+executive-function wall of *choosing* — surface what to play, build a playlist, or
+nudge you to start. Not limited to DJing (the dusty Traktor S4 was just the first
+case) or to Spotify — gear like the PO-33 and other instruments are fair game as
+knowledge/nudge tools even without an API.
+
+**The distinction:** a hobby/creative surface with its own external integration
+(Spotify, like training has Garmin). Its job is collapsing "all of music" down to
+a few good options — to play, to practise with, to save, or to learn.
+
+**What it owns:**
+- Spotify connection (OAuth, token refresh) + synced library (saved/top/recent/playlists)
+- "N tracks for a vibe" — vector-recall shortlist → Claude picks the final few
+- Playlist creation — turn a vibe or a set into a real Spotify playlist
+- Practice / gear nudges (DJ, Pocket Operators, whatever you're learning)
+- Room for more music tools over time (incl. future MCP integrations)
+
+**What it does not own:**
+- General tasks/goals/reminders → second_brain
+- The meaning-index — tracks file into the shared memory_index, so recall spans them
+- Getting audio into Traktor — that's the streaming-proxy on the hardware side
 
 ---
 
@@ -310,6 +337,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 1. **second_brain** — this is Trellis. Build it first.
 2. **training** — module, add after. Existing code stays functional in the meantime.
 3. **learn** — module, comes naturally after second_brain is solid.
+4. **music** — module, add after. Its own Spotify integration; rides on the shared memory index.
 
 ---
 

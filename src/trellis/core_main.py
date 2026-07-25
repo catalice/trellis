@@ -21,6 +21,7 @@ from trellis.infra_embeddings import GitHubModelsEmbedder
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_obsidian import ObsidianVault
 from trellis.infra_search import TavilySearch
+from trellis.infra_spotify import SpotifyClient
 from trellis.postgres import (
     PostgresCurrentContextRepository,
     PostgresDatabase,
@@ -28,6 +29,10 @@ from trellis.postgres import (
     PostgresUserProfileRepository,
 )
 from trellis.user_context import CurrentContextService, UserProfileService
+
+# Music domain — Spotify connection (OAuth + credentials).
+from trellis.domain_music_repo import PostgresMusicRepository
+from trellis.domain_music_service import MusicService
 
 # Second brain domain — the product. Training and learn are future modules;
 # their files exist but are not registered until rebuilt on the lean architecture.
@@ -114,6 +119,27 @@ def main() -> None:
     # recall searches across the lot. Uses the embedder above; when that's None,
     # remember() no-ops and recall reports itself unavailable. Nothing breaks.
     memory = MemoryIndex(database, embedder)
+
+    # Music domain — Spotify connection. None when unconfigured (like web_search),
+    # so the connect flow simply reports it isn't set up. Read + write scopes are
+    # requested up front so playlist creation never needs a reconnect. The domain's
+    # tools arrive with #7/#8; this wires the OAuth + credential foundation.
+    spotify_client = (
+        SpotifyClient(
+            settings.spotify_client_id,
+            settings.spotify_client_secret,
+            settings.spotify_redirect_uri,
+        )
+        if settings.spotify_client_id
+        and settings.spotify_client_secret
+        and settings.spotify_redirect_uri
+        else None
+    )
+    music_service = (
+        MusicService(PostgresMusicRepository(database), spotify_client)
+        if spotify_client is not None
+        else None
+    )
 
     summariser = None
     transcriber = None

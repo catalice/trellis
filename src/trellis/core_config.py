@@ -25,6 +25,9 @@ class Settings:
     groq_api_key: str = ""
     tavily_api_key: str = ""
     github_token: str = ""
+    spotify_client_id: str = ""
+    spotify_client_secret: str = ""
+    spotify_redirect_uri: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -61,6 +64,9 @@ class Settings:
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
             github_token=os.getenv("GITHUB_TOKEN", ""),
+            spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
+            spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
+            spotify_redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", ""),
         )
 
     def validate(self) -> None:
