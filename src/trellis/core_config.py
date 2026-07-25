@@ -24,6 +24,7 @@ class Settings:
     max_hr: int | None
     groq_api_key: str = ""
     tavily_api_key: str = ""
+    github_token: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -59,6 +60,7 @@ class Settings:
             max_hr=_int_env("TRELLIS_MAX_HR"),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
+            github_token=os.getenv("GITHUB_TOKEN", ""),
         )
 
     def validate(self) -> None:

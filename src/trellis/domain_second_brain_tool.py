@@ -914,6 +914,27 @@ WEB_SEARCH_TOOL: dict = {
     },
 }
 
+RECALL_TOOL: dict = {
+    "name": "recall",
+    "description": (
+        "Search Cat's OWN second brain by MEANING, not keywords — surfaces past "
+        "captures, efforts and seeds related to a query even when they share no words. "
+        "Use when she asks 'what have I noted about X', 'have I thought about this "
+        "before', 'what relates to this', or when a new idea might echo an existing "
+        "effort or seed worth connecting. This is memory recall, not web_search."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The idea or topic to find related notes for. A phrase or sentence works better than a single word.",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
 
 def handle_save_to_effort(
     user_id: UUID,
@@ -964,6 +985,29 @@ def handle_web_search(
         snippet = r.snippet[:200] + ("…" if len(r.snippet) > 200 else "")
         lines.append(f"- {r.title} — {r.url}\n  {snippet}")
     return "\n".join(lines) if lines else "Nothing useful found."
+
+
+def handle_recall(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    memory,
+) -> str:
+    query = str(input_dict.get("query", "")).strip()
+    if not query:
+        return "query is required."
+    matches = memory.recall(user_id, query)
+    if matches is None:
+        return "Semantic recall is unavailable right now (embeddings aren't configured)."
+    if not matches:
+        return "Nothing in your second brain relates closely to that yet."
+    lines = ["Related in your second brain:"]
+    for m in matches:
+        label = m.content[:80] + ("…" if len(m.content) > 80 else "")
+        pct = round(m.similarity * 100)
+        lines.append(f"  [{m.entity_id}] ({m.kind}, ~{pct}%) {label}")
+    return "\n".join(lines)
 
 
 def handle_cleanup_session(
@@ -1233,6 +1277,8 @@ def second_brain_tools(
         ),
     ]
     # Web search only appears if a provider is configured — no dead tool otherwise.
+    # (recall is Trellis-wide, so it's registered as an always-available tool in
+    # core_main, not here — like brain_dump.)
     if web_search is not None:
         tools.append((
             WEB_SEARCH_TOOL,

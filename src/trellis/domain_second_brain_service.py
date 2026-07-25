@@ -110,6 +110,14 @@ class VaultProjection(Protocol):
     def research_saved(self, capture: Capture) -> None: ...
 
 
+class Memory(Protocol):
+    """Semantic memory index (see infra_memory). Optional: when absent, writes
+    still succeed unindexed and recall is unavailable. remember/forget never raise
+    — indexing a row must never break the row's own write."""
+    def remember(self, user_id: UUID, entity_kind: str, entity_id: UUID, text: str) -> None: ...
+    def forget(self, entity_kind: str, entity_id: UUID) -> None: ...
+
+
 # ---------------------------------------------------------------------------
 # Result types (service-layer only — not stored)
 # ---------------------------------------------------------------------------
@@ -145,12 +153,14 @@ class BrainDumpService:
         claude: BrainDumpClaude,
         timezone: tzinfo,
         projection: VaultProjection | None = None,
+        memory: Memory | None = None,
     ) -> None:
         self._captures = capture_repo
         self._tasks = task_repo
         self._claude = claude
         self._tz = timezone
         self._projection = projection
+        self._memory = memory
 
     def process(self, user_id: UUID, raw: str, now: datetime) -> ProcessedDump:
         local = now.astimezone(self._tz)
@@ -167,6 +177,9 @@ class BrainDumpService:
             effort_id=None,
             created_at=now,
         ))
+
+        if self._memory is not None:
+            self._memory.remember(user_id, "capture", capture.id, capture.embedding_text())
 
         tasks: list[Task] = []
         if result:
@@ -200,9 +213,15 @@ class BrainDumpService:
 # ---------------------------------------------------------------------------
 
 class CaptureService:
-    def __init__(self, repo: CaptureRepository, projection: VaultProjection | None = None) -> None:
+    def __init__(
+        self,
+        repo: CaptureRepository,
+        projection: VaultProjection | None = None,
+        memory: Memory | None = None,
+    ) -> None:
         self._repo = repo
         self._projection = projection
+        self._memory = memory
 
     def list_recent(self, user_id: UUID, *, limit: int = 20) -> list[Capture]:
         return self._repo.list_recent(user_id, limit=limit)
@@ -219,11 +238,18 @@ class CaptureService:
 
     def archive(self, capture_id: UUID) -> None:
         self._repo.archive(capture_id)
+        # Archived captures leave the inbox — drop them from recall too so it
+        # never surfaces something Cat has consciously filed away.
+        if self._memory is not None:
+            self._memory.forget("capture", capture_id)
 
     def delete(self, user_id: UUID, capture_id: UUID) -> bool:
         """Erase a mis-capture (test, mistake) — tasks extracted from it are
         erased separately via their own ids; the FK just nulls their source."""
-        return self._repo.delete(user_id, capture_id)
+        deleted = self._repo.delete(user_id, capture_id)
+        if deleted and self._memory is not None:
+            self._memory.forget("capture", capture_id)
+        return deleted
 
     def save_research(self, user_id: UUID, content: str, *, effort_id: UUID, now: datetime) -> Capture:
         """Store a piece of research/notes onto an effort. Full text lands on
@@ -239,6 +265,8 @@ class CaptureService:
             effort_id=effort_id,
             created_at=now,
         ))
+        if self._memory is not None:
+            self._memory.remember(user_id, "capture", capture.id, capture.embedding_text())
         if self._projection:
             self._projection.research_saved(capture)
         return capture
@@ -249,9 +277,19 @@ class CaptureService:
 # ---------------------------------------------------------------------------
 
 class EffortService:
-    def __init__(self, repo: EffortRepository, projection: VaultProjection | None = None) -> None:
+    def __init__(
+        self,
+        repo: EffortRepository,
+        projection: VaultProjection | None = None,
+        memory: Memory | None = None,
+    ) -> None:
         self._repo = repo
         self._projection = projection
+        self._memory = memory
+
+    def _embed(self, effort: Effort) -> None:
+        if self._memory is not None:
+            self._memory.remember(effort.user_id, "effort", effort.id, effort.embedding_text())
 
     def create(
         self,
@@ -271,6 +309,7 @@ class EffortService:
             created_at=now,
             updated_at=now,
         ))
+        self._embed(effort)
         if self._projection:
             self._projection.effort_created(effort)
         return effort
@@ -291,6 +330,7 @@ class EffortService:
             created_at=now,
             updated_at=now,
         ))
+        self._embed(effort)
         if self._projection:
             self._projection.effort_created(effort)
         return effort
@@ -329,10 +369,12 @@ class TaskService:
         repo: TaskRepository,
         tz: tzinfo,
         projection: VaultProjection | None = None,
+        memory: Memory | None = None,
     ) -> None:
         self._repo = repo
         self._tz = tz
         self._projection = projection
+        self._memory = memory
 
     def _vault_refresh(self, user_id: UUID) -> None:
         if self._projection:
@@ -365,6 +407,11 @@ class TaskService:
             created_at=now,
             updated_at=now,
         ))
+        # Seeds are the associative gold — half-formed curiosities that should
+        # resurface when a new thought rhymes with them. Todos are transient, so
+        # only seeds get filed into the meaning index.
+        if task.kind == TaskKind.SEED and self._memory is not None:
+            self._memory.remember(user_id, "seed", task.id, task.embedding_text())
         self._vault_refresh(user_id)
         return task
 
@@ -423,6 +470,10 @@ class TaskService:
         if due is not None:
             kwargs["due_at"] = _parse_local_due(due, self._tz)
         updated = self._repo.update(task_id, **kwargs)
+        # A dropped seed should stop surfacing in recall (e.g. one that just
+        # graduated into an effort — the effort carries the meaning now).
+        if updated.status == TaskStatus.DROPPED and self._memory is not None:
+            self._memory.forget("seed", task_id)
         self._vault_refresh(user_id)
         return updated
 
@@ -431,6 +482,8 @@ class TaskService:
         if task is None or task.user_id != user_id:
             raise TaskNotFoundError(task_id)
         dropped = self._repo.update(task_id, status=TaskStatus.DROPPED, updated_at=now)
+        if self._memory is not None:
+            self._memory.forget("seed", task_id)
         self._vault_refresh(user_id)
         return dropped
 
@@ -440,6 +493,8 @@ class TaskService:
         never have existed is deleted so it cannot pollute history."""
         deleted = self._repo.delete(user_id, task_id)
         if deleted:
+            if self._memory is not None:
+                self._memory.forget("seed", task_id)
             self._vault_refresh(user_id)
         return deleted
 

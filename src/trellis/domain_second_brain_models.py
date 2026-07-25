@@ -105,6 +105,23 @@ class Capture:
     effort_id: UUID | None                # set during cleanup or auto-detected
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+    @staticmethod
+    def compose_embedding_text(
+        summary: str | None, synthesis: str | None, raw: str | None
+    ) -> str:
+        """The text a capture is embedded from — its meaning, richest first,
+        de-duplicated. Single source of truth, shared by embed-on-write and the
+        backfill script so the two can never drift apart."""
+        seen: list[str] = []
+        for part in (summary, synthesis, raw):
+            text = (part or "").strip()
+            if text and text not in seen:
+                seen.append(text)
+        return "\n".join(seen)
+
+    def embedding_text(self) -> str:
+        return self.compose_embedding_text(self.summary, self.synthesis, self.raw)
+
 
 # ---------------------------------------------------------------------------
 # Effort — forms from recurring themes; not declared, emerged
@@ -123,6 +140,20 @@ class Effort:
 
     def describe(self) -> str:
         return f"{self.title} ({self.intensity.value})"
+
+    @staticmethod
+    def compose_embedding_text(title: str | None, notes: str | None) -> str:
+        """The text an effort is embedded from. Single source of truth (see
+        Capture.compose_embedding_text) — shared by embed-on-write and backfill."""
+        seen: list[str] = []
+        for part in (title, notes):
+            text = (part or "").strip()
+            if text and text not in seen:
+                seen.append(text)
+        return "\n".join(seen)
+
+    def embedding_text(self) -> str:
+        return self.compose_embedding_text(self.title, self.notes)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +182,21 @@ class Task:
             and self.due_at < now
             and self.status == TaskStatus.OPEN
         )
+
+    @staticmethod
+    def compose_embedding_text(title: str | None, description: str | None) -> str:
+        """The text a task/seed is embedded from. Single source of truth (see
+        Capture.compose_embedding_text) — shared by embed-on-write and backfill.
+        Only seeds are actually filed into the meaning index; todos are transient."""
+        seen: list[str] = []
+        for part in (title, description):
+            text = (part or "").strip()
+            if text and text not in seen:
+                seen.append(text)
+        return "\n".join(seen)
+
+    def embedding_text(self) -> str:
+        return self.compose_embedding_text(self.title, self.description)
 
 
 @dataclass(frozen=True)

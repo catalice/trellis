@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from trellis.core_assembler import Assembler
 from trellis.core_config import Settings
+from trellis.infra_memory import MemoryIndex
 from trellis.postgres import PostgresDatabase
 from trellis.domain_second_brain_service import ReminderService
 
@@ -51,6 +52,7 @@ class TelegramTrellis:
         assembler: Assembler,
         reminders: ReminderService | None = None,
         transcriber: Transcriber | None = None,
+        memory: MemoryIndex | None = None,
         checkin_pings: bool = True,
     ):
         self.settings = settings
@@ -58,6 +60,7 @@ class TelegramTrellis:
         self.assembler = assembler
         self.reminders = reminders
         self.transcriber = transcriber
+        self.memory = memory
         self.checkin_pings = checkin_pings
         self._reminder_delivery_task: asyncio.Task | None = None
         self.logger = logging.getLogger(__name__)
@@ -196,7 +199,9 @@ class TelegramTrellis:
         await self._respond(update, user_id, transcript)
 
     async def _respond(self, update: Update, user_id, text: str) -> None:
-        await update.message.chat.send_action("typing")
+        # A real "working" message, not just the typing indicator — sent now and
+        # edited into the final reply, so there's visible feedback the whole turn.
+        placeholder = await update.message.reply_text("🧠 on it…")
         try:
             reply = await asyncio.to_thread(
                 self.assembler.handle_turn, user_id, text
@@ -205,10 +210,31 @@ class TelegramTrellis:
             self.logger.exception("Oracle failed for user %s", user_id)
             reply = "Something went wrong. Nothing was changed — please try again."
 
-        await update.message.reply_text(
-            reply or "Something went wrong — no response was generated. Please try again.",
-            parse_mode="Markdown",
-        )
+        final = reply or "Something went wrong — no response was generated. Please try again."
+        try:
+            await placeholder.edit_text(final, parse_mode="Markdown")
+        except Exception:
+            # Edit can fail (reply too long for one message, a Markdown quirk) —
+            # fall back to a fresh send so the answer always lands.
+            self.logger.warning("Editing placeholder failed; sending fresh", exc_info=True)
+            await update.message.reply_text(final, parse_mode="Markdown")
+
+        await self._maybe_alert_embed_failures(update)
+
+    async def _maybe_alert_embed_failures(self, update: Update) -> None:
+        """One-time heads-up when embeds have been failing in a row (dead token,
+        endpoint down). Single blips stay silent — the text is saved and sitting
+        in this chat, and the backfill sweeps it up. Checked after the turn, so no
+        concurrent turn is mutating the failure counter."""
+        if self.memory is None or not self.memory.take_failure_alert():
+            return
+        try:
+            await update.message.reply_text(
+                "⚠️ Heads up — I haven't been able to file the last few into "
+                "semantic memory, so recall may be stale. Worth a look when you can."
+            )
+        except Exception:
+            self.logger.warning("Failed to send embed-failure alert", exc_info=True)
 
     def _user(self, update: Update):
         telegram_user_id = update.effective_user.id
