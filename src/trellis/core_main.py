@@ -136,7 +136,7 @@ def main() -> None:
         else None
     )
     music_service = (
-        MusicService(PostgresMusicRepository(database), spotify_client)
+        MusicService(PostgresMusicRepository(database), spotify_client, memory)
         if spotify_client is not None
         else None
     )

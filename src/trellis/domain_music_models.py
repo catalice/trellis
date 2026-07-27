@@ -20,3 +20,40 @@ class SpotifyCredentials:
         """True if the access token is expired (or within `leeway` of it), so the
         caller should refresh before using it."""
         return now >= self.expires_at - timedelta(seconds=leeway_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtistRef:
+    id: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Track:
+    """A track from the user's Spotify library (metadata only — the embedding
+    lives in the shared memory_index, keyed by this track's stored UUID)."""
+    spotify_id: str
+    name: str
+    artists: tuple[ArtistRef, ...]
+    album_name: str | None
+    genres: tuple[str, ...]
+    popularity: int | None
+    external_url: str | None
+    preview_url: str | None
+
+    @staticmethod
+    def compose_embedding_text(
+        name: str, artist_names: list[str], genres: list[str]
+    ) -> str:
+        """The text a track is embedded from — name, artists, genres. Single source
+        of truth (like Capture/Effort.compose_embedding_text), shared by the sync's
+        embed step so it can never drift. Spotify's own audio-features/recommendation
+        endpoints are gone, so meaning is built from this text, not acoustics."""
+        who = ", ".join(n for n in artist_names if n) or "unknown artist"
+        genre_text = ", ".join(g for g in genres if g) or "unknown"
+        return f"{name} by {who} — genres: {genre_text}"
+
+    def embedding_text(self) -> str:
+        return self.compose_embedding_text(
+            self.name, [a.name for a in self.artists], list(self.genres)
+        )

@@ -8,8 +8,9 @@ knows or cares who embeds.
 
 Current implementation: GitHub Models (https://models.inference.ai.azure.com) —
 the OpenAI-compatible embeddings endpoint, model text-embedding-3-small (1536
-dims). Auth is a GitHub token (GITHUB_TOKEN). The free tier is rate-limited, so
-inputs are sent in modest batches.
+dims). Auth is a GitHub token (GITHUB_TOKEN). The free tier caps *requests*
+(15/min, 150/day), not size (~64k tokens/request), so one call = one request and
+bulk writers batch by token budget (see infra_memory.remember_many).
 """
 from __future__ import annotations
 
@@ -24,7 +25,6 @@ _log = logging.getLogger(__name__)
 _EMBEDDINGS_URL = "https://models.inference.ai.azure.com/embeddings"
 _MODEL = "text-embedding-3-small"
 _DIMENSIONS = 1536
-_MAX_BATCH = 16
 _TIMEOUT = 30.0
 
 
@@ -43,19 +43,15 @@ class GitHubModelsEmbedder:
         self._api_key = api_key
 
     def embed(self, texts: Sequence[str]) -> list[list[float]] | None:
+        """One embedding request for the given texts. The free tier caps *requests*,
+        not size (~64k tokens/request), so callers batch by token budget and keep the
+        request count low. Returns None on failure (never raises)."""
         if not self._api_key:
             return None
-        if not texts:
+        batch = list(texts)
+        if not batch:
             return []
-
-        vectors: list[list[float]] = []
-        for start in range(0, len(texts), _MAX_BATCH):
-            batch = list(texts[start : start + _MAX_BATCH])
-            embedded = self._embed_batch(batch)
-            if embedded is None:
-                return None
-            vectors.extend(embedded)
-        return vectors
+        return self._embed_batch(batch)
 
     def _embed_batch(self, batch: list[str]) -> list[list[float]] | None:
         try:

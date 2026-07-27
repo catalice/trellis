@@ -28,7 +28,9 @@ _log = logging.getLogger(__name__)
 
 _AUTH_URL = "https://accounts.spotify.com/authorize"
 _TOKEN_URL = "https://accounts.spotify.com/api/token"
+_API_URL = "https://api.spotify.com/v1"
 _TIMEOUT = 20.0
+_PAGE = 50            # Spotify's max page size for the list endpoints
 
 # Requested up front — read for sync, write so playlist creation needs no reconnect.
 SCOPES = " ".join((
@@ -47,6 +49,20 @@ class SpotifyToken:
     refresh_token: str
     scope: str
     expires_in: int          # seconds from issue until the access token expires
+
+
+@dataclass(frozen=True)
+class SpotifyTrackData:
+    """A track as returned by the Web API (raw metadata; the domain maps this to
+    domain_music_models.Track). Artists are (id, name) pairs so genres can be
+    looked up by artist id."""
+    spotify_id: str
+    name: str
+    artists: tuple[tuple[str, str], ...]
+    album_name: str | None
+    popularity: int | None
+    external_url: str | None
+    preview_url: str | None
 
 
 class SpotifyOAuth(Protocol):
@@ -127,3 +143,122 @@ class SpotifyClient:
             scope=body.get("scope", ""),
             expires_in=int(body.get("expires_in", 3600)),
         )
+
+    # -- Web API data (current api.spotify.com/v1 endpoints; Feb-2026 migration
+    #    renamed playlist tracks -> items, which is reflected below) --------------
+
+    def _api_get(self, access_token: str, path: str, params: dict | None = None) -> dict | None:
+        try:
+            response = httpx.get(
+                f"{_API_URL}{path}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params,
+                timeout=_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception:
+            _log.warning("Spotify GET %s failed", path, exc_info=True)
+            return None
+
+    @staticmethod
+    def _parse_track(raw: dict | None) -> "SpotifyTrackData | None":
+        if not raw or not raw.get("id") or not raw.get("name"):
+            return None
+        artists = tuple(
+            (a.get("id", ""), a.get("name", ""))
+            for a in (raw.get("artists") or [])
+            if a.get("name")
+        )
+        album = raw.get("album") or {}
+        return SpotifyTrackData(
+            spotify_id=raw["id"],
+            name=raw["name"],
+            artists=artists,
+            album_name=album.get("name"),
+            popularity=raw.get("popularity"),
+            external_url=(raw.get("external_urls") or {}).get("spotify"),
+            preview_url=raw.get("preview_url"),
+        )
+
+    def _paged_tracks(
+        self, access_token: str, path: str, max_items: int, *, track_key: str | None
+    ) -> list[SpotifyTrackData] | None:
+        """Page through a list endpoint. track_key names the wrapper field holding
+        the track ('track' for saved/playlist... , 'item' for the Feb-2026 playlist
+        /items shape); None means each item IS the track (top tracks)."""
+        out: list[SpotifyTrackData] = []
+        offset = 0
+        while len(out) < max_items:
+            data = self._api_get(access_token, path, {"limit": _PAGE, "offset": offset})
+            if data is None:
+                return out or None
+            items = data.get("items") or []
+            for item in items:
+                raw = item.get(track_key) if track_key else item
+                track = self._parse_track(raw)
+                if track is not None:
+                    out.append(track)
+            if len(items) < _PAGE:
+                break
+            offset += _PAGE
+        return out[:max_items]
+
+    def get_saved_tracks(self, access_token: str, max_items: int = 300) -> list[SpotifyTrackData] | None:
+        return self._paged_tracks(access_token, "/me/tracks", max_items, track_key="track")
+
+    def get_top_tracks(
+        self, access_token: str, time_range: str, max_items: int = 100
+    ) -> list[SpotifyTrackData] | None:
+        return self._paged_tracks(
+            access_token, f"/me/top/tracks?time_range={time_range}", max_items, track_key=None
+        )
+
+    def get_recently_played(self, access_token: str, limit: int = 50) -> list[SpotifyTrackData] | None:
+        data = self._api_get(access_token, "/me/player/recently-played", {"limit": min(limit, 50)})
+        if data is None:
+            return None
+        out: list[SpotifyTrackData] = []
+        for item in data.get("items") or []:
+            track = self._parse_track(item.get("track"))
+            if track is not None:
+                out.append(track)
+        return out
+
+    def get_user_playlists(self, access_token: str, limit: int = 20) -> list[tuple[str, str]] | None:
+        data = self._api_get(access_token, "/me/playlists", {"limit": min(limit, 50)})
+        if data is None:
+            return None
+        return [
+            (p["id"], p.get("name", ""))
+            for p in (data.get("items") or [])
+            if p and p.get("id")
+        ]
+
+    def get_playlist_items(
+        self, access_token: str, playlist_id: str, max_items: int = 50
+    ) -> list[SpotifyTrackData] | None:
+        # /playlists/{id}/items (the /tracks endpoint was retired Feb 2026); the
+        # nested track sits under 'item', not 'track'.
+        return self._paged_tracks(
+            access_token,
+            f"/playlists/{playlist_id}/items"
+            "?fields=items(item(id,name,artists,album(name),popularity,preview_url,external_urls)),next",
+            max_items,
+            track_key="item",
+        )
+
+    def get_artists_genres(self, access_token: str, artist_ids: list[str]) -> dict[str, list[str]]:
+        """Map artist id -> genres, batching by 50. Best-effort: on failure (e.g. a
+        dev-mode quota 403) an artist just gets no genres, and the sync proceeds."""
+        genres: dict[str, list[str]] = {}
+        unique = [a for a in dict.fromkeys(artist_ids) if a]
+        for start in range(0, len(unique), 50):
+            batch = unique[start:start + 50]
+            data = self._api_get(access_token, "/artists", {"ids": ",".join(batch)})
+            if data is None:
+                continue
+            for artist in data.get("artists") or []:
+                if artist and artist.get("id"):
+                    genres[artist["id"]] = list(artist.get("genres") or [])
+        return genres

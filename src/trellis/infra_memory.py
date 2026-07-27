@@ -29,6 +29,30 @@ _RECALL_LIMIT = 8
 # (dead token / endpoint down) rather than a one-off blip.
 _FAILURE_ALERT_THRESHOLD = 3
 
+# Bulk embedding batches by token budget: one request holds ~64k tokens, so a
+# batch is capped by an approximate char budget (~4 chars/token) and an item
+# count. Hundreds of short rows (e.g. tracks) then cost a single request.
+_BATCH_CHAR_BUDGET = 200_000
+_BATCH_ITEM_CAP = 512
+
+
+def _batches(rows: list) -> "list[list]":
+    """Split rows into embed-batches respecting the char + item caps. Each row is
+    (user_id, entity_kind, entity_id, text); batching is by text length."""
+    out: list[list] = []
+    chunk: list = []
+    chars = 0
+    for row in rows:
+        length = len(row[3])
+        if chunk and (len(chunk) >= _BATCH_ITEM_CAP or chars + length > _BATCH_CHAR_BUDGET):
+            out.append(chunk)
+            chunk, chars = [], 0
+        chunk.append(row)
+        chars += length
+    if chunk:
+        out.append(chunk)
+    return out
+
 
 @dataclass(frozen=True)
 class SemanticMatch:
@@ -83,39 +107,40 @@ class MemoryIndex:
             return False
 
     def remember_many(self, items: "list[tuple[UUID, str, UUID, str]]") -> int:
-        """Batch-file many cards in as few embedding REQUESTS as possible: the
-        embedder batches internally, so N rows cost ~ceil(N / batch) requests, not
-        N. That's what a backfill wants — GitHub Models' free tier caps *requests*
-        (15/min, 150/day), not size (64k tokens/request). items are
-        (user_id, entity_kind, entity_id, text); returns how many were filed. A
-        failed embed files none — re-run later, it's idempotent."""
+        """Batch-file many cards in as few embedding requests as possible. The free
+        tier caps *requests* (15/min, 150/day), not size (~64k tokens/request), so
+        rows are chunked by token budget — hundreds of short rows fit in one request.
+        Each chunk's successes are stored before the next, so a rate-limit mid-run
+        just leaves the rest for a re-run (idempotent upsert). items are
+        (user_id, entity_kind, entity_id, text); returns how many were filed."""
         rows = [(u, k, e, (t or "").strip()) for (u, k, e, t) in items]
         rows = [r for r in rows if r[3]]
         if self._embedder is None or not rows:
             return 0
-        try:
-            vectors = self._embedder.embed([r[3] for r in rows])
-        except Exception:
-            _log.warning("batch embed failed", exc_info=True)
-            vectors = None
-        if not vectors or len(vectors) != len(rows):
-            self._consecutive_failures += 1
-            return 0
-        self._consecutive_failures = 0
         filed = 0
-        try:
-            with self._db.connect() as conn:
-                with conn.cursor() as cur:
-                    for (user_id, entity_kind, entity_id, content), vector in zip(rows, vectors):
-                        cur.execute(
-                            self._UPSERT_SQL,
-                            (user_id, entity_kind, entity_id, content, to_pgvector_literal(vector)),
-                        )
-                        filed += 1
-            return filed
-        except Exception:
-            _log.warning("memory_index batch upsert failed", exc_info=True)
-            return filed
+        for chunk in _batches(rows):
+            try:
+                vectors = self._embedder.embed([r[3] for r in chunk])
+            except Exception:
+                _log.warning("batch embed failed", exc_info=True)
+                vectors = None
+            if not vectors or len(vectors) != len(chunk):
+                self._consecutive_failures += 1
+                break  # rate-limited / failed — stop; a re-run fills the rest
+            self._consecutive_failures = 0
+            try:
+                with self._db.connect() as conn:
+                    with conn.cursor() as cur:
+                        for (user_id, entity_kind, entity_id, content), vector in zip(chunk, vectors):
+                            cur.execute(
+                                self._UPSERT_SQL,
+                                (user_id, entity_kind, entity_id, content, to_pgvector_literal(vector)),
+                            )
+                filed += len(chunk)
+            except Exception:
+                _log.warning("memory_index batch upsert failed", exc_info=True)
+                break
+        return filed
 
     def forget(self, entity_kind: str, entity_id: UUID) -> None:
         """Drop an entity's card — call when the underlying thing is deleted or
