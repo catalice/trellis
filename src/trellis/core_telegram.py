@@ -11,7 +11,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from trellis.core_assembler import Assembler
 from trellis.core_config import Settings
 from trellis.infra_memory import MemoryIndex
-from trellis.postgres import PostgresDatabase
+from trellis.infra_postgres import PostgresDatabase
 from trellis.domain_second_brain_service import ReminderService
 
 # (audio_bytes) -> transcript

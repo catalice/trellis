@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-from trellis.user_context import CurrentContextService
+from trellis.core_profile import CurrentContextService
 
 _log = logging.getLogger(__name__)
 

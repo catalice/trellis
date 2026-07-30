@@ -5,7 +5,7 @@ from datetime import datetime, tzinfo
 from typing import Any
 from uuid import UUID
 
-from trellis.postgres import PostgresDatabase
+from trellis.infra_postgres import PostgresDatabase
 
 
 @dataclass(frozen=True)

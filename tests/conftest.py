@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from testcontainers.postgres import PostgresContainer
 
-from trellis.postgres import PostgresDatabase
+from trellis.infra_postgres import PostgresDatabase
 
 MIGRATIONS_DIR = Path(__file__).parent.parent / "src" / "trellis" / "migrations"
 

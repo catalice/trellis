@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from uuid import UUID, uuid4
 
-from trellis.user_context import (
-    AnchorService,
+from trellis.core_profile import (
     CurrentContext,
     CurrentContextService,
-    TrainingAnchor,
     UserProfile,
     UserProfileService,
 )
@@ -18,21 +15,6 @@ from trellis.user_context import (
 # ---------------------------------------------------------------------------
 # In-memory fakes
 # ---------------------------------------------------------------------------
-
-class FakeAnchorRepository:
-    def __init__(self):
-        self._anchors: list[TrainingAnchor] = []
-
-    def list_active(self, user_id: UUID) -> list[TrainingAnchor]:
-        return [a for a in self._anchors if a.user_id == user_id]
-
-    def save(self, anchor: TrainingAnchor) -> TrainingAnchor:
-        self._anchors.append(anchor)
-        return anchor
-
-    def deactivate(self, anchor_id: UUID) -> None:
-        self._anchors = [a for a in self._anchors if a.id != anchor_id]
-
 
 class FakeUserProfileRepository:
     def __init__(self):
@@ -56,68 +38,6 @@ class FakeCurrentContextRepository:
     def upsert(self, context: CurrentContext) -> CurrentContext:
         self._contexts[context.user_id] = context
         return context
-
-
-# ---------------------------------------------------------------------------
-# AnchorService
-# ---------------------------------------------------------------------------
-
-class TestAnchorService(unittest.TestCase):
-    def setUp(self):
-        self.repo = FakeAnchorRepository()
-        self.service = AnchorService(self.repo)
-        self.user_id = uuid4()
-
-    def test_set_creates_anchor(self):
-        anchor = self.service.set(self.user_id, day_of_week=0, kind="strength", label="PT")
-        self.assertEqual(0, anchor.day_of_week)
-        self.assertEqual("PT", anchor.label)
-        self.assertEqual(1, len(self.service.list(self.user_id)))
-
-    def test_set_deduplicates_same_day_and_kind(self):
-        self.service.set(self.user_id, day_of_week=0, kind="strength", label="Old PT")
-        self.service.set(self.user_id, day_of_week=0, kind="strength", label="New PT")
-        anchors = self.service.list(self.user_id)
-        self.assertEqual(1, len(anchors))
-        self.assertEqual("New PT", anchors[0].label)
-
-    def test_set_does_not_deduplicate_different_kind(self):
-        self.service.set(self.user_id, day_of_week=0, kind="strength", label="PT")
-        self.service.set(self.user_id, day_of_week=0, kind="social_run", label="Club run")
-        self.assertEqual(2, len(self.service.list(self.user_id)))
-
-    def test_set_does_not_deduplicate_different_day(self):
-        self.service.set(self.user_id, day_of_week=0, kind="strength", label="PT Mon")
-        self.service.set(self.user_id, day_of_week=3, kind="strength", label="PT Thu")
-        self.assertEqual(2, len(self.service.list(self.user_id)))
-
-    def test_remove_deactivates_anchor(self):
-        anchor = self.service.set(self.user_id, day_of_week=2, kind="social_run", label="Wed run")
-        self.service.remove(anchor.id)
-        self.assertEqual(0, len(self.service.list(self.user_id)))
-
-    def test_summary_for_coach_returns_none_when_empty(self):
-        self.assertIsNone(self.service.summary_for_coach(self.user_id))
-
-    def test_summary_for_coach_describes_anchors(self):
-        self.service.set(self.user_id, day_of_week=0, kind="strength", label="PT", time_of_day="09:00")
-        summary = self.service.summary_for_coach(self.user_id)
-        self.assertIn("Mon", summary)
-        self.assertIn("PT", summary)
-        self.assertIn("09:00", summary)
-
-    def test_hard_constraint_shown_as_soft_when_false(self):
-        self.service.set(self.user_id, day_of_week=2, kind="social_run",
-                         label="Wed run", is_hard_constraint=False)
-        summary = self.service.summary_for_coach(self.user_id)
-        self.assertIn("(soft)", summary)
-
-    def test_deduplication_is_per_user(self):
-        other_user = uuid4()
-        self.service.set(self.user_id, day_of_week=0, kind="strength", label="PT")
-        self.service.set(other_user, day_of_week=0, kind="strength", label="Other PT")
-        self.assertEqual(1, len(self.service.list(self.user_id)))
-        self.assertEqual(1, len(self.service.list(other_user)))
 
 
 # ---------------------------------------------------------------------------

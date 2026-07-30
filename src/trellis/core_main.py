@@ -21,13 +21,14 @@ from trellis.infra_embeddings import GitHubModelsEmbedder
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_obsidian import ObsidianVault
 from trellis.infra_search import TavilySearch
-from trellis.postgres import (
+from trellis.infra_postgres import PostgresDatabase
+from trellis.core_profile import (
+    CurrentContextService,
     PostgresCurrentContextRepository,
-    PostgresDatabase,
     PostgresPreferencesRepository,
     PostgresUserProfileRepository,
+    UserProfileService,
 )
-from trellis.user_context import CurrentContextService, UserProfileService
 
 # Second brain domain — the product. Training and learn are future modules;
 # their files exist but are not registered until rebuilt on the lean architecture.
