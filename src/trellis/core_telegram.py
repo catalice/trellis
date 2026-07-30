@@ -17,7 +17,7 @@ from trellis.domain_second_brain_service import ReminderService
 # (audio_bytes) -> transcript
 Transcriber = Callable[[bytes], str]
 
-# Check-in pings. Chrome, not content: the real conversation happens when Cat
+# Check-in pings. Chrome, not content: the real conversation happens when the user
 # replies (through the oracle). Rotated deterministically by day of year.
 # Design rule: ignoring a ping costs nothing and is never mentioned.
 _MORNING_PINGS = (

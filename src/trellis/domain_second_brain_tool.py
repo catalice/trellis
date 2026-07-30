@@ -33,7 +33,7 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 BRAIN_DUMP_TOOL: dict = {
     "name": "brain_dump",
     "description": (
-        "Capture anything Cat wants to offload from her working memory — "
+        "Capture anything the user wants to offload from their working memory — "
         "ideas, tasks, questions, things she wants to remember, half-formed thoughts. "
         "Always available, regardless of what else is happening. "
         "Raw text is preserved exactly. Claude will synthesise, surface tasks, "
@@ -44,7 +44,7 @@ BRAIN_DUMP_TOOL: dict = {
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The raw dump — exactly what Cat said or wrote. Don't clean it up before sending.",
+                "description": "The raw dump — exactly what the user said or wrote. Don't clean it up before sending.",
             }
         },
         "required": ["text"],
@@ -80,7 +80,7 @@ CREATE_TASK_TOOL: dict = {
     "name": "create_task",
     "description": (
         "Create a task or seed directly (when not part of a brain dump). "
-        "kind='todo' for admin Cat owes; kind='seed' for curiosity she might "
+        "kind='todo' for admin the user owes; kind='seed' for curiosity they might "
         "feed — explorations with zero obligation, never urgent."
     ),
     "input_schema": {
@@ -249,7 +249,7 @@ UPDATE_GOAL_TOOL: dict = {
 LOG_STATE_TOOL: dict = {
     "name": "log_state",
     "description": (
-        "Log how Cat is doing right now — energy, mood, and body/context events. "
+        "Log how the user is doing right now — energy, mood, and body/context events. "
         "Call whenever she describes her state (answering a check-in or spontaneously), "
         "or mentions taking meds, sleep, or her period. Multiple logs per day are "
         "expected; the within-day curve is the point. Derive scores from her words; "
@@ -319,7 +319,7 @@ DELETE_ENTRY_TOOL: dict = {
         "Erase a record that should never have existed: a duplicate task, a wrong "
         "tracking entry (state or meds/sleep/period event), a test or mis-capture. "
         "Completely removes it — use ONLY for mistakes, never for decisions: "
-        "a task Cat decided against gets update_task status='dropped' instead. "
+        "a task the user decided against gets update_task status='dropped' instead. "
         "Corrections are delete + re-log. Get IDs from second_brain_get first. "
         "Erasing a capture does NOT erase tasks extracted from it — erase those "
         "by their own ids. Deleting a task also deletes reminders attached to it."
@@ -868,7 +868,7 @@ def handle_delete_entry(
 SAVE_TO_EFFORT_TOOL: dict = {
     "name": "save_to_effort",
     "description": (
-        "Keep research, notes, or findings onto an Effort — an area Cat is "
+        "Keep research, notes, or findings onto an Effort — an area the user is "
         "actively exploring (its own page in her vault that accumulates over time). "
         "Use this the moment there's something worth keeping from a research "
         "conversation, instead of offering to 'save to a seed'. Finds the effort "
@@ -917,7 +917,7 @@ WEB_SEARCH_TOOL: dict = {
 RECALL_TOOL: dict = {
     "name": "recall",
     "description": (
-        "Search Cat's OWN second brain by MEANING, not keywords — surfaces past "
+        "Search the user's OWN second brain by MEANING, not keywords — surfaces past "
         "captures, efforts and seeds related to a query even when they share no words. "
         "Use when she asks 'what have I noted about X', 'have I thought about this "
         "before', 'what relates to this', or when a new idea might echo an existing "

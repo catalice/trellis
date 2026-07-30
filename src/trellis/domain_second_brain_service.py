@@ -239,7 +239,7 @@ class CaptureService:
     def archive(self, capture_id: UUID) -> None:
         self._repo.archive(capture_id)
         # Archived captures leave the inbox — drop them from recall too so it
-        # never surfaces something Cat has consciously filed away.
+        # never surfaces something the user has consciously filed away.
         if self._memory is not None:
             self._memory.forget("capture", capture_id)
 

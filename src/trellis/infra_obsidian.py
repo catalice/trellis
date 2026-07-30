@@ -1,7 +1,7 @@
 """
 Obsidian vault projection — the visible window into the second brain.
 
-Write-only (version 1): Trellis writes, Cat reads. The DB is the source of
+Write-only (version 1): Trellis writes, the user reads. The DB is the source of
 truth; edits made in Obsidian do not sync back.
 
 Vault layout (see the path constants below):
@@ -14,7 +14,7 @@ Vault layout (see the path constants below):
 Capture notes hold inputs and one-line receipts of what each input produced —
 records of events, never live data (data echoes go stale; receipts stay true).
 Current truth lives only in the rewritten views. Capture notes and effort pages
-are append-only: anything Cat writes there is never touched.
+are append-only: anything the user writes there is never touched.
 
 Every public method swallows and logs failures — a vault write must never
 break the bot.
@@ -63,7 +63,7 @@ _UPCOMING_REMINDER_DAYS = 14
 _RECENTLY_COMPLETED_LIMIT = 8
 _TRACKING_DAYS = 14
 
-# Vault layout — Cat's chosen structure. Change here, nowhere else.
+# Vault layout — the user's chosen structure. Change here, nowhere else.
 _DAILY_DIR = "Calendar/Captures"
 _TASKS_PATH = "Calendar/Tasks.md"
 _SEEDS_PATH = "Calendar/Seeds.md"

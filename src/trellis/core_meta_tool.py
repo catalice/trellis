@@ -21,7 +21,7 @@ _log = logging.getLogger(__name__)
 UPDATE_CONTEXT_TOOL = {
     "name": "update_current_context",
     "description": (
-        "Update current context — what's going on in Cat's life right now "
+        "Update current context — what's going on in the user's life right now "
         "that Trellis should know about. Use any combination of fields."
     ),
     "input_schema": {
