@@ -61,6 +61,17 @@ from trellis.domain_second_brain_tool import (
     second_brain_tools,
 )
 
+# Training domain — lean running coach (slice 1: goal -> plan -> today/week).
+from trellis.domain_training_claude import TrainingClaude
+from trellis.domain_training_repo import PostgresTrainingRepository
+from trellis.domain_training_service import TrainingService
+from trellis.domain_training_tool import (
+    TRAINING_SIGNALS,
+    training_context_loader,
+    training_snapshot,
+    training_tools,
+)
+
 
 # --- Permanent context loaders --------------------------------------------
 
@@ -156,6 +167,15 @@ def main() -> None:
     cleanup_service = CleanupService(capture_repo, effort_repo, brain_dump_claude)
     state_service = StateService(state_repo, settings.timezone, projection=vault)
 
+    # --- Training domain (reads goals from the second brain; stores its own plan) ---
+    training_claude = TrainingClaude(anthropic_client, settings.anthropic_model)
+    training_service = TrainingService(
+        PostgresTrainingRepository(database),
+        goal_service,
+        training_claude,
+        settings.timezone,
+    )
+
     # --- Registry ---
     # Register ALL domains before constructing Assembler.
     # The router snapshots signals at Assembler init — domains added after are invisible.
@@ -176,6 +196,13 @@ def main() -> None:
             tz=settings.timezone,
         ),
         SECOND_BRAIN_SIGNALS,
+    )
+
+    registry.add_domain(
+        "training",
+        training_context_loader(training_service, goal_service),
+        training_tools(training_service),
+        TRAINING_SIGNALS,
     )
 
     oracle = Oracle(client=anthropic_client, model=settings.anthropic_model)
@@ -212,6 +239,7 @@ def main() -> None:
             ("profile", _profile_loader(profile_service)),
             ("current_context", _current_context_loader(context_service)),
             ("snapshot", second_brain_snapshot(task_service, reminder_service, state_service)),
+            ("training_snapshot", training_snapshot(training_service)),
         ],
         always_tools=always_tools,
         summariser=summariser,
