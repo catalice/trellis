@@ -65,6 +65,15 @@ class SpotifyTrackData:
     preview_url: str | None
 
 
+@dataclass(frozen=True)
+class CreatedPlaylist:
+    """A playlist just created on Spotify — its id (to add tracks) and the public
+    URL to hand the user."""
+    playlist_id: str
+    name: str
+    external_url: str | None
+
+
 class SpotifyOAuth(Protocol):
     def authorize_url(self, state: str) -> str | None: ...
     def exchange_code(self, code: str) -> "SpotifyToken | None": ...
@@ -262,3 +271,54 @@ class SpotifyClient:
                 if artist and artist.get("id"):
                     genres[artist["id"]] = list(artist.get("genres") or [])
         return genres
+
+    # -- Web API writes (playlists) -------------------------------------------
+
+    def _api_post(self, access_token: str, path: str, body: dict) -> dict | None:
+        try:
+            response = httpx.post(
+                f"{_API_URL}{path}",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=_TIMEOUT,
+            )
+            response.raise_for_status()
+            return response.json() if response.content else {}
+        except Exception:
+            _log.warning("Spotify POST %s failed", path, exc_info=True)
+            return None
+
+    def create_playlist(
+        self, access_token: str, name: str, description: str = ""
+    ) -> CreatedPlaylist | None:
+        # POST /me/playlists — the old /users/{id}/playlists was retired in the
+        # Feb 2026 migration and /me/playlists needs no caller user id. Private by
+        # default; playlist-modify-private scope is requested up front.
+        data = self._api_post(
+            access_token, "/me/playlists",
+            {"name": name, "description": description, "public": False},
+        )
+        if not data or not data.get("id"):
+            return None
+        return CreatedPlaylist(
+            playlist_id=data["id"],
+            name=data.get("name", name),
+            external_url=(data.get("external_urls") or {}).get("spotify"),
+        )
+
+    def add_tracks_to_playlist(
+        self, access_token: str, playlist_id: str, spotify_track_ids: list[str]
+    ) -> bool:
+        # POST /playlists/{id}/items (the /tracks endpoint was retired Feb 2026;
+        # the body shape is unchanged). Batches of 100 per Spotify's limit.
+        if not spotify_track_ids:
+            return True
+        for start in range(0, len(spotify_track_ids), 100):
+            batch = spotify_track_ids[start:start + 100]
+            uris = [f"spotify:track:{tid}" for tid in batch]
+            if self._api_post(access_token, f"/playlists/{playlist_id}/items", {"uris": uris}) is None:
+                return False
+        return True

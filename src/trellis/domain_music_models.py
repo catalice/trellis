@@ -57,3 +57,21 @@ class Track:
         return self.compose_embedding_text(
             self.name, [a.name for a in self.artists], list(self.genres)
         )
+
+
+@dataclass(frozen=True, slots=True)
+class StoredTrack:
+    """A track already synced to the library, carrying its internal UUID (the
+    meaning-index key) and spotify_id (needed to add it to a playlist). Returned
+    by recommendations so the companion can talk about tracks and act on them."""
+    id: UUID
+    spotify_id: str
+    name: str
+    artist_names: tuple[str, ...]
+    genres: tuple[str, ...]
+
+    def describe(self) -> str:
+        """A one-line label — 'name — artist1, artist2'. Presentation-neutral;
+        the tool handler decides final formatting."""
+        who = ", ".join(n for n in self.artist_names if n)
+        return f"{self.name} — {who}" if who else self.name

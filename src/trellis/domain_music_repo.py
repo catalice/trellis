@@ -11,7 +11,7 @@ from uuid import UUID
 
 from psycopg2.extras import Json, RealDictCursor
 
-from trellis.domain_music_models import SpotifyCredentials, Track
+from trellis.domain_music_models import SpotifyCredentials, StoredTrack, Track
 
 
 class PostgresMusicRepository:
@@ -82,6 +82,42 @@ class PostgresMusicRepository:
                     )
                     for row in cur.fetchall()
                 ]
+
+    def get_tracks_by_ids(self, user_id: UUID, ids: list[UUID]) -> list[StoredTrack]:
+        """Load stored tracks by internal UUID, preserving the order of `ids` (so a
+        recall-ranked list of ids stays ranked). Unknown ids are skipped."""
+        if not ids:
+            return []
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, spotify_id, name, artists, genres
+                    FROM spotify_tracks
+                    WHERE user_id = %s AND id = ANY(%s)
+                    """,
+                    (user_id, [str(i) for i in ids]),
+                )
+                by_id = {
+                    row["id"]: StoredTrack(
+                        id=row["id"],
+                        spotify_id=row["spotify_id"],
+                        name=row["name"],
+                        artist_names=tuple(a.get("name", "") for a in (row["artists"] or [])),
+                        genres=tuple(row["genres"] or []),
+                    )
+                    for row in cur.fetchall()
+                }
+        return [by_id[i] for i in ids if i in by_id]
+
+    def track_count(self, user_id: UUID) -> int:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM spotify_tracks WHERE user_id = %s",
+                    (user_id,),
+                )
+                return int(cur.fetchone()[0])
 
     def save_credentials(self, c: SpotifyCredentials) -> None:
         with self._db.connect() as conn:

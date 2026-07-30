@@ -30,9 +30,15 @@ from trellis.postgres import (
 )
 from trellis.user_context import CurrentContextService, UserProfileService
 
-# Music domain — Spotify connection (OAuth + credentials).
+# Music domain — Spotify connection + creative companion.
+from trellis.domain_music_claude import MusicClaude
 from trellis.domain_music_repo import PostgresMusicRepository
 from trellis.domain_music_service import MusicService
+from trellis.domain_music_tool import (
+    MUSIC_SIGNALS,
+    music_context_loader,
+    music_tools,
+)
 
 # Second brain domain — the product. Training and learn are future modules;
 # their files exist but are not registered until rebuilt on the lean architecture.
@@ -136,7 +142,12 @@ def main() -> None:
         else None
     )
     music_service = (
-        MusicService(PostgresMusicRepository(database), spotify_client, memory)
+        MusicService(
+            PostgresMusicRepository(database),
+            spotify_client,
+            memory,
+            MusicClaude(anthropic_client, settings.anthropic_model),
+        )
         if spotify_client is not None
         else None
     )
@@ -203,6 +214,16 @@ def main() -> None:
         ),
         SECOND_BRAIN_SIGNALS,
     )
+
+    # Music domain — only when Spotify is configured, so there are no dead tools
+    # and no music routing when the integration isn't set up.
+    if music_service is not None:
+        registry.add_domain(
+            "music",
+            music_context_loader(music_service),
+            music_tools(music_service),
+            MUSIC_SIGNALS,
+        )
 
     oracle = Oracle(client=anthropic_client, model=settings.anthropic_model)
 

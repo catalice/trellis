@@ -158,10 +158,21 @@ class MemoryIndex:
 
     # -- read -----------------------------------------------------------------
 
-    def recall(self, user_id: UUID, query: str, *, limit: int = _RECALL_LIMIT) -> list[SemanticMatch] | None:
+    def recall(
+        self,
+        user_id: UUID,
+        query: str,
+        *,
+        limit: int = _RECALL_LIMIT,
+        entity_kind: str | None = None,
+    ) -> list[SemanticMatch] | None:
         """Find the cards closest in meaning to `query`. Returns None when recall
         is unavailable (no embedder, or the query itself couldn't be embedded) so
-        the caller can say so; [] means it searched and nothing was close."""
+        the caller can say so; [] means it searched and nothing was close.
+
+        entity_kind, when given, scopes the search to one kind (e.g. 'track' for
+        music recommendations); None (default) searches across everything, so
+        existing callers are unaffected."""
         clean = (query or "").strip()
         if self._embedder is None or not clean:
             return None
@@ -169,18 +180,24 @@ class MemoryIndex:
         if vector is None:
             return None
         literal = to_pgvector_literal(vector)
+        params: list[Any] = [literal, user_id]
+        kind_clause = ""
+        if entity_kind is not None:
+            kind_clause = "AND entity_kind = %s"
+            params.append(entity_kind)
+        params += [literal, limit]
         with self._db.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
+                    f"""
                     SELECT entity_kind, entity_id, content,
                            1 - (embedding <=> %s::vector) AS similarity
                     FROM memory_index
-                    WHERE user_id = %s AND embedding IS NOT NULL
+                    WHERE user_id = %s AND embedding IS NOT NULL {kind_clause}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
-                    (literal, user_id, literal, limit),
+                    params,
                 )
                 return [
                     SemanticMatch(kind=row[0], entity_id=row[1], content=row[2], similarity=float(row[3]))
