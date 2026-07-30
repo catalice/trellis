@@ -755,6 +755,7 @@ dependencies = [
     { name = "garminconnect" },
     { name = "groq" },
     { name = "psycopg2-binary" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "python-telegram-bot", extra = ["job-queue"] },
 ]
@@ -769,9 +770,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.75,<1" },
-    { name = "garminconnect", specifier = ">=0.2,<1" },
+    { name = "garminconnect", specifier = ">=0.3,<1" },
     { name = "groq", specifier = ">=0.29,<1" },
     { name = "psycopg2-binary", specifier = ">=2.9.10,<3" },
+    { name = "pydantic", specifier = ">=2,<3" },
     { name = "python-dotenv", specifier = ">=1.0,<2" },
     { name = "python-telegram-bot", extras = ["job-queue"], specifier = ">=22,<23" },
 ]

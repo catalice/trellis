@@ -290,17 +290,28 @@ def _activity_date(activity: Any, tz: tzinfo) -> date | None:
 # per km), hr ("140-150" bpm). repeat needs times + nested steps.
 # ---------------------------------------------------------------------------
 
-_SPORT_RUNNING = {"sportTypeId": 1, "sportTypeKey": "running"}
-_STEP_TYPES = {
-    "warmup": 1, "cooldown": 2, "interval": 3, "run": 3,
-    "recovery": 4, "rest": 5, "repeat": 6,
+# Step kinds -> Garmin (id, key), matching garminconnect.workout.StepType.
+_STEP_KIND = {
+    "warmup": (1, "warmup"), "cooldown": (2, "cooldown"),
+    "interval": (3, "interval"), "run": (3, "interval"),
+    "recovery": (4, "recovery"), "rest": (5, "rest"),
 }
-_STEP_TYPE_KEYS = {1: "warmup", 2: "cooldown", 3: "interval", 4: "recovery", 5: "rest", 6: "repeat"}
+# When neither duration nor distance is given, estimate this many seconds for the
+# duration total (Garmin recomputes on device; this is only for estimatedDuration).
+_OPEN_STEP_SECONDS = 60
+_DEFAULT_PACE_SECS_PER_KM = 360  # ~6:00/km, only for estimating distance-step time
 
 
 def build_garmin_workout(spec: dict) -> dict:
-    """Spec -> Garmin Connect workout JSON (dict) for garminconnect.add_workout.
-    Raises WorkoutSpecError on anything malformed — never returns junk."""
+    """Spec -> a VALID Garmin Connect workout dict, built on garminconnect's own
+    typed models (so the format is correct by construction, pydantic-validated).
+    Raises WorkoutSpecError on anything malformed — never returns junk.
+    Ready for garminconnect.Garmin.upload_workout."""
+    try:
+        from garminconnect.workout import ExecutableStep, RepeatGroup, RunningWorkout, WorkoutSegment
+    except Exception as exc:  # workout extra / pydantic missing
+        raise WorkoutSpecError(f"workout builder unavailable: {exc}") from exc
+
     if not isinstance(spec, dict):
         raise WorkoutSpecError("workout spec must be an object")
     name = str(spec.get("name") or "Trellis workout").strip()[:80]
@@ -309,16 +320,26 @@ def build_garmin_workout(spec: dict) -> dict:
         raise WorkoutSpecError("workout needs a non-empty 'steps' list")
 
     counter = _Counter()
-    workout_steps = [_build_step(s, counter) for s in steps]
-    return {
-        "sportType": dict(_SPORT_RUNNING),
-        "workoutName": name,
-        "workoutSegments": [{
-            "segmentOrder": 1,
-            "sportType": dict(_SPORT_RUNNING),
-            "workoutSteps": workout_steps,
-        }],
-    }
+    total_secs = 0.0
+    workout_steps = []
+    for s in steps:
+        model, secs = _build_step(s, counter, ExecutableStep, RepeatGroup)
+        workout_steps.append(model)
+        total_secs += secs
+
+    try:
+        workout = RunningWorkout(
+            workoutName=name,
+            estimatedDurationInSecs=int(round(total_secs)),
+            workoutSegments=[WorkoutSegment(
+                segmentOrder=1,
+                sportType={"sportTypeId": 1, "sportTypeKey": "running", "displayOrder": 1},
+                workoutSteps=workout_steps,
+            )],
+        )
+    except Exception as exc:  # pydantic validation = malformed spec
+        raise WorkoutSpecError(f"couldn't build a valid workout: {exc}") from exc
+    return workout.to_dict()
 
 
 class _Counter:
@@ -330,7 +351,8 @@ class _Counter:
         return self.n
 
 
-def _build_step(step: dict, counter: _Counter) -> dict:
+def _build_step(step: dict, counter: _Counter, ExecutableStep, RepeatGroup):
+    """Return (model, estimated_seconds). Model is an ExecutableStep or RepeatGroup."""
     if not isinstance(step, dict):
         raise WorkoutSpecError("each step must be an object")
     kind = str(step.get("kind", "interval")).strip().lower()
@@ -343,53 +365,61 @@ def _build_step(step: dict, counter: _Counter) -> dict:
         if not isinstance(nested, list) or not nested:
             raise WorkoutSpecError("a repeat step needs a non-empty nested 'steps' list")
         order = counter.next()
-        child_steps = [_build_step(s, counter) for s in nested]
-        return {
-            "type": "RepeatGroupDTO",
-            "stepOrder": order,
-            "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
-            "numberOfIterations": times,
-            "smartRepeat": False,
-            "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
-            "endConditionValue": times,
-            "workoutSteps": child_steps,
-        }
+        children = []
+        child_secs = 0.0
+        for s in nested:
+            m, sec = _build_step(s, counter, ExecutableStep, RepeatGroup)
+            children.append(m)
+            child_secs += sec
+        group = RepeatGroup(
+            stepOrder=order,
+            stepType={"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6},
+            numberOfIterations=times,
+            smartRepeat=False,
+            workoutSteps=children,
+        )
+        return group, child_secs * times
 
-    step_type_id = _STEP_TYPES.get(kind)
-    if step_type_id is None:
+    kind_pair = _STEP_KIND.get(kind)
+    if kind_pair is None:
         raise WorkoutSpecError(f"unknown step kind '{kind}'")
+    step_type_id, step_type_key = kind_pair
 
-    end_cond, end_val = _end_condition(step)
+    end_cond, end_val, est_secs = _end_condition(step)
     target_type_id, target_key, v1, v2 = _target(step)
-    out: dict[str, Any] = {
-        "type": "ExecutableStepDTO",
+    fields: dict[str, Any] = {
         "stepOrder": counter.next(),
-        "stepType": {"stepTypeId": step_type_id, "stepTypeKey": _STEP_TYPE_KEYS[step_type_id]},
+        "stepType": {"stepTypeId": step_type_id, "stepTypeKey": step_type_key, "displayOrder": step_type_id},
         "endCondition": end_cond,
         "endConditionValue": end_val,
-        "targetType": {"workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": target_key},
+        "targetType": {"workoutTargetTypeId": target_type_id, "workoutTargetTypeKey": target_key, "displayOrder": target_type_id},
         "targetValueOne": v1,
         "targetValueTwo": v2,
     }
     note = step.get("note")
     if note:
-        out["description"] = str(note)[:512]
-    return out
+        fields["description"] = str(note)[:512]
+    return ExecutableStep(**fields), est_secs
 
 
-def _end_condition(step: dict) -> tuple[dict, float | None]:
+def _end_condition(step: dict) -> tuple[dict, float | None, float]:
+    """Return (endCondition dict, endConditionValue, estimated_seconds)."""
     if step.get("duration"):
         seconds = _parse_duration_seconds(str(step["duration"]))
         if seconds is None:
             raise WorkoutSpecError(f"couldn't read duration '{step['duration']}'")
-        return {"conditionTypeId": 2, "conditionTypeKey": "time"}, float(seconds)
+        return ({"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": True},
+                float(seconds), float(seconds))
     if step.get("distance"):
         meters = _parse_distance_meters(str(step["distance"]))
         if meters is None:
             raise WorkoutSpecError(f"couldn't read distance '{step['distance']}'")
-        return {"conditionTypeId": 3, "conditionTypeKey": "distance"}, float(meters)
+        est = meters / 1000.0 * _DEFAULT_PACE_SECS_PER_KM
+        return ({"conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": True},
+                float(meters), est)
     # Neither given -> open step, advanced by the lap button.
-    return {"conditionTypeId": 1, "conditionTypeKey": "lap.button"}, None
+    return ({"conditionTypeId": 1, "conditionTypeKey": "lap.button", "displayOrder": 1, "displayable": True},
+            None, float(_OPEN_STEP_SECONDS))
 
 
 def _target(step: dict) -> tuple[int, str, float | None, float | None]:

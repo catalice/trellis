@@ -48,7 +48,6 @@ class TestBuildGarminWorkout(unittest.TestCase):
         rpt = steps[1]
         self.assertEqual(rpt["type"], "RepeatGroupDTO")
         self.assertEqual(rpt["numberOfIterations"], 6)
-        self.assertEqual(rpt["endConditionValue"], 6)
         self.assertEqual(len(rpt["workoutSteps"]), 2)
         interval = rpt["workoutSteps"][0]
         self.assertEqual(interval["endCondition"]["conditionTypeKey"], "distance")
@@ -82,7 +81,28 @@ class TestBuildGarminWorkout(unittest.TestCase):
         w = build_garmin_workout({"name": "Open", "steps": [{"kind": "warmup"}]})
         step = _steps(w)[0]
         self.assertEqual(step["endCondition"]["conditionTypeKey"], "lap.button")
-        self.assertIsNone(step["endConditionValue"])
+        self.assertIsNone(step.get("endConditionValue"))
+
+    def test_output_validates_against_garmin_model(self):
+        """The real guarantee: our output is a VALID Garmin workout — built on and
+        checked against garminconnect's own pydantic model, so the format can't
+        silently drift from what Garmin accepts."""
+        from garminconnect.workout import RunningWorkout
+        specs = [
+            {"name": "Easy", "steps": [{"kind": "run", "distance": "5km", "pace": "6:00-6:30"}]},
+            {"name": "6x400", "steps": [
+                {"kind": "warmup", "duration": "10min"},
+                {"kind": "repeat", "times": 6, "steps": [
+                    {"kind": "interval", "distance": "400m", "pace": "4:20-4:40"},
+                    {"kind": "recovery", "duration": "90s"}]},
+                {"kind": "cooldown", "duration": "10min"}]},
+            {"name": "Tempo", "steps": [
+                {"kind": "warmup", "duration": "15min"},
+                {"kind": "interval", "duration": "20min", "hr": "150-165"},
+                {"kind": "cooldown", "duration": "10min"}]},
+        ]
+        for spec in specs:
+            RunningWorkout.model_validate(build_garmin_workout(spec))  # raises if invalid
 
     def test_distance_units_km_and_mi(self):
         w = build_garmin_workout({"name": "d", "steps": [
