@@ -364,6 +364,22 @@ class _DirectConnectionRepo(Protocol):
     def get_session_dump(self, user_id: UUID) -> str | None: ...
 
 
+class GarminActivityReader:
+    """Recent RUNNING activities for the coach's run log — recent + small, via the
+    health worker. NOT bulk history (that's the CSV baseline path)."""
+
+    def __init__(self, connection_repository: _DirectConnectionRepo, client: "GarminClient"):
+        self._connections = connection_repository
+        self._client = client
+
+    def recent_running_activities(self, user_id: UUID, *, limit: int = 20) -> list[GarminActivity]:
+        dump = self._connections.get_session_dump(user_id)
+        if not dump:
+            raise RuntimeError("Garmin not connected. Use /garmin_setup to connect.")
+        activities = self._client.activities(dump, limit=max(1, min(limit, 50)))
+        return [a for a in activities if "run" in (a.activity_type or "").lower()]
+
+
 # ---------------------------------------------------------------------------
 # Connection management (setup + status)
 # ---------------------------------------------------------------------------

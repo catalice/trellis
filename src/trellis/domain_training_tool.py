@@ -119,6 +119,49 @@ PROVIDE_TRAINING_DATA_TOOL: dict = {
     },
 }
 
+PUSH_TO_WATCH_TOOL: dict = {
+    "name": "push_to_watch",
+    "description": (
+        "Push a STRUCTURED workout to the user's Garmin watch and schedule it on a real date, "
+        "so they just open Garmin and press start (no translating the plan into action). Author "
+        "the session as a spec; supports warmup/cooldown, intervals/sprints, tempo, long runs, "
+        "recovery, and repeat blocks, with pace or HR targets."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "date": {"type": "string", "description": "The real date to schedule it on (YYYY-MM-DD) — use this week's real dates."},
+            "workout": {
+                "type": "object",
+                "description": (
+                    'The workout spec: {"name": "6x400m intervals", "steps": [ ... ]}. Each step has '
+                    '"kind" (warmup|cooldown|interval|run|recovery|rest|repeat) and EITHER "duration" '
+                    '("10min"/"90s"/"45:00") OR "distance" ("400m"/"5km") or neither (open, press lap). '
+                    'Optional "note", "pace" ("4:30-4:50" per km), "hr" ("140-150"). A "repeat" step needs '
+                    '"times" (int) and nested "steps". Example: {"name":"6x400m","steps":[{"kind":"warmup",'
+                    '"duration":"10min"},{"kind":"repeat","times":6,"steps":[{"kind":"interval","distance":'
+                    '"400m","pace":"4:20-4:40"},{"kind":"recovery","duration":"90s"}]},{"kind":"cooldown","duration":"10min"}]}'
+                ),
+            },
+        },
+        "required": ["date", "workout"],
+    },
+}
+
+IMPORT_RECENT_RUNS_TOOL: dict = {
+    "name": "import_recent_runs",
+    "description": (
+        "Pull the user's RECENT runs from Garmin and log any new ones, so you can review from what "
+        "they actually did. Recent activities only — for full history ask them for a Garmin CSV export."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "How many recent activities to check (default 20)."},
+        },
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Handlers
@@ -230,6 +273,54 @@ def handle_log_run(user_id: UUID, input_dict: dict, now: datetime, *, training_s
     return f"Logged: {run.ran_on.isoformat()}{dist} — {run.note}"
 
 
+def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+    workout = input_dict.get("workout")
+    if isinstance(workout, str):
+        try:
+            workout = json.loads(workout)
+        except json.JSONDecodeError:
+            return "The workout needs to be an object with a name and steps."
+    if not isinstance(workout, dict):
+        return "The workout needs to be an object with a name and steps."
+    raw_date = str(input_dict.get("date", "")).strip()
+    try:
+        on_date = date.fromisoformat(raw_date)
+    except ValueError:
+        return "I need a real date (YYYY-MM-DD) to schedule it — use one of this week's dates."
+    try:
+        name = training_service.push_workout_to_watch(user_id, workout, on_date)
+    except ValueError as exc:  # WorkoutSpecError
+        return f"That workout spec didn't work: {exc}. Check the steps and try again."
+    except RuntimeError as exc:
+        return str(exc)
+    except Exception:
+        _log.warning("push_to_watch failed", exc_info=True)
+        return "Couldn't push to Garmin just now — try again in a moment."
+    return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
+
+
+def handle_import_recent_runs(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+    limit = input_dict.get("limit")
+    try:
+        limit = int(limit) if limit is not None else 20
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        logged = training_service.import_recent_runs(user_id, now=now, limit=limit)
+    except RuntimeError as exc:
+        return str(exc)
+    except Exception:
+        _log.warning("import_recent_runs failed", exc_info=True)
+        return "Couldn't reach Garmin just now — try again in a moment."
+    if not logged:
+        return "No new runs to import — the log's already up to date."
+    lines = [f"Imported {len(logged)} run(s) from Garmin:"]
+    for r in logged:
+        dist = f" — {r.distance_km}km" if r.distance_km is not None else ""
+        lines.append(f"  {r.ran_on.isoformat()}{dist}: {r.note}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Context loader (Tier 1b) + snapshot (Tier 2)
 # ---------------------------------------------------------------------------
@@ -317,6 +408,10 @@ def training_tools(training_service) -> list[tuple[dict, Any]]:
          lambda uid, inp, now: handle_log_run(uid, inp, now, training_service=training_service)),
         (PROVIDE_TRAINING_DATA_TOOL,
          lambda uid, inp, now: handle_provide_training_data(uid, inp, now, training_service=training_service)),
+        (PUSH_TO_WATCH_TOOL,
+         lambda uid, inp, now: handle_push_to_watch(uid, inp, now, training_service=training_service)),
+        (IMPORT_RECENT_RUNS_TOOL,
+         lambda uid, inp, now: handle_import_recent_runs(uid, inp, now, training_service=training_service)),
     ]
 
 

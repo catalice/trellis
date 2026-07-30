@@ -63,6 +63,12 @@ from trellis.domain_second_brain_tool import (
 )
 
 # Training domain — lean running coach (Claude + tools; coaching happens in the turn).
+from trellis.infra_garmin import (
+    GarminActivityReader,
+    GarminClient,
+    GarminDirectService,
+    PostgresGarminConnectionRepository,
+)
 from trellis.domain_training_repo import PostgresTrainingRepository
 from trellis.domain_training_service import TrainingService
 from trellis.domain_training_tool import (
@@ -168,10 +174,26 @@ def main() -> None:
     state_service = StateService(state_repo, settings.timezone, projection=vault)
 
     # --- Training domain (reads goals from the second brain; stores its own plan) ---
+    # Garmin push (workouts -> watch) + recent-run read. Gated: needs the secret key
+    # (to decrypt the stored session) and, for reads, a health-worker URL. Absent ->
+    # the coach still plans; push/import tools just say "connect Garmin first".
+    garmin_push = None
+    garmin_read = None
+    if settings.trellis_secret_key.strip():
+        garmin_connections = PostgresGarminConnectionRepository(database, settings.trellis_secret_key)
+        garmin_push = GarminDirectService(garmin_connections)
+        if settings.health_worker_url.strip() and settings.health_worker_secret.strip():
+            garmin_read = GarminActivityReader(
+                garmin_connections,
+                GarminClient(settings.health_worker_url, settings.health_worker_secret),
+            )
+
     training_service = TrainingService(
         PostgresTrainingRepository(database),
         goal_service,
         settings.timezone,
+        garmin_push=garmin_push,
+        garmin_read=garmin_read,
     )
 
     # --- Registry ---
