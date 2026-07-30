@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from typing import Callable
 
 from telegram import Update
@@ -17,21 +17,11 @@ from trellis.domain_second_brain_service import ReminderService
 # (audio_bytes) -> transcript
 Transcriber = Callable[[bytes], str]
 
-# Check-in pings. Chrome, not content: the real conversation happens when the user
-# replies (through the oracle). Rotated deterministically by day of year.
-# Design rule: ignoring a ping costs nothing and is never mentioned.
-_MORNING_PINGS = (
-    "Morning — how are you landing today? One line or a voice note.",
-    "Quick pulse: how's the morning treating you?",
-    "Morning check-in — how's the energy, how's the mood?",
-)
-_EVENING_PINGS = (
-    "Evening — what was the shape of today?",
-    "Day's done. How did it go, start to finish?",
-    "Evening check-in — tell me today's story in a line or a ramble.",
-)
-_MORNING_PING_TIME = time(9, 0)
-_EVENING_PING_TIME = time(21, 0)
+# NOTE: check-ins are NOT hardcoded here. When the user wants a morning/evening
+# check-in, the oracle creates a real recurring reminder (set_reminder, recur_daily)
+# — persisted, user-owned, editable, and surviving restarts. There is deliberately
+# no baked-in ping schedule; that was removed because it wasn't tied to the user's
+# choice and silently died on restart.
 
 
 def make_transcriber(groq_client, model: str = "whisper-large-v3-turbo") -> Transcriber:
@@ -53,7 +43,6 @@ class TelegramTrellis:
         reminders: ReminderService | None = None,
         transcriber: Transcriber | None = None,
         memory: MemoryIndex | None = None,
-        checkin_pings: bool = True,
     ):
         self.settings = settings
         self.database = database
@@ -61,7 +50,6 @@ class TelegramTrellis:
         self.reminders = reminders
         self.transcriber = transcriber
         self.memory = memory
-        self.checkin_pings = checkin_pings
         self._reminder_delivery_task: asyncio.Task | None = None
         self.logger = logging.getLogger(__name__)
 
@@ -78,35 +66,7 @@ class TelegramTrellis:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.message)
         )
         application.add_handler(MessageHandler(filters.VOICE, self.voice))
-        if self.checkin_pings and self.settings.telegram_allowed_users:
-            if application.job_queue is None:
-                self.logger.warning("Check-in pings disabled: job-queue extra not installed")
-            else:
-                application.job_queue.run_daily(
-                    self._send_morning_ping,
-                    time=_MORNING_PING_TIME.replace(tzinfo=self.settings.timezone),
-                    name="morning_checkin",
-                )
-                application.job_queue.run_daily(
-                    self._send_evening_ping,
-                    time=_EVENING_PING_TIME.replace(tzinfo=self.settings.timezone),
-                    name="evening_checkin",
-                )
         return application
-
-    async def _send_morning_ping(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await self._send_ping(context, _MORNING_PINGS)
-
-    async def _send_evening_ping(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await self._send_ping(context, _EVENING_PINGS)
-
-    async def _send_ping(self, context: ContextTypes.DEFAULT_TYPE, lines: tuple[str, ...]) -> None:
-        text = lines[datetime.now(self.settings.timezone).timetuple().tm_yday % len(lines)]
-        for telegram_id in self.settings.telegram_allowed_users:
-            try:
-                await context.bot.send_message(chat_id=telegram_id, text=text)
-            except Exception:
-                self.logger.warning("check-in ping failed for %s", telegram_id, exc_info=True)
 
     async def _post_init(self, application: Application) -> None:
         if self.reminders is None:
