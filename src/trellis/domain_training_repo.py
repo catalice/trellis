@@ -11,7 +11,7 @@ from uuid import UUID
 
 from psycopg2.extras import Json, RealDictCursor
 
-from trellis.domain_training_models import TrainingPlan
+from trellis.domain_training_models import RunLog, TrainingPlan
 
 _log = logging.getLogger(__name__)
 
@@ -19,6 +19,8 @@ _log = logging.getLogger(__name__)
 class TrainingRepository(Protocol):
     def get(self, user_id: UUID) -> TrainingPlan | None: ...
     def upsert(self, record: TrainingPlan) -> TrainingPlan: ...
+    def add_run(self, run: RunLog) -> RunLog: ...
+    def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]: ...
 
 
 class PostgresTrainingRepository:
@@ -49,6 +51,32 @@ class PostgresTrainingRepository:
                 )
         return record
 
+    def add_run(self, run: RunLog) -> RunLog:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO training_runs (id, user_id, ran_on, note, distance_km, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (run.id, run.user_id, run.ran_on, run.note, run.distance_km, run.created_at),
+                )
+        return run
+
+    def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM training_runs
+                    WHERE user_id = %s
+                    ORDER BY ran_on DESC, created_at DESC
+                    LIMIT %s
+                    """,
+                    (user_id, limit),
+                )
+                return [_run_row(r) for r in cur.fetchall()]
+
 
 def _row(row: dict) -> TrainingPlan:
     return TrainingPlan(
@@ -57,4 +85,15 @@ def _row(row: dict) -> TrainingPlan:
         baseline=row.get("baseline"),
         plan=row.get("plan") or {},
         updated_at=row["updated_at"],
+    )
+
+
+def _run_row(row: dict) -> RunLog:
+    return RunLog(
+        id=row["id"],
+        user_id=row["user_id"],
+        ran_on=row["ran_on"],
+        note=row["note"],
+        distance_km=float(row["distance_km"]) if row.get("distance_km") is not None else None,
+        created_at=row["created_at"],
     )

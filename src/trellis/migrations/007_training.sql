@@ -12,3 +12,17 @@ CREATE TABLE IF NOT EXISTS training_plan (
     plan       JSONB NOT NULL DEFAULT '{}'::jsonb,  -- Claude-authored: rough arc + current week
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Completed runs — the coach plans the next run from the last ones. Lean: date,
+-- plain-words note, optional distance. Recorded when the user says they ran.
+CREATE TABLE IF NOT EXISTS training_runs (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID NOT NULL REFERENCES trellis_users(id) ON DELETE CASCADE,
+    ran_on      DATE NOT NULL,
+    note        TEXT NOT NULL,
+    distance_km NUMERIC(6, 2),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS training_runs_user_date_idx
+    ON training_runs(user_id, ran_on DESC);

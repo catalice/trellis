@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
 
-from trellis.domain_training_claude import TRAINING_COACH_PERSONA
+from trellis.domain_training_claude import TRAINING_COACH_GUIDANCE
 
 _log = logging.getLogger(__name__)
 
@@ -35,12 +35,13 @@ TRAINING_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["plan", "week", "today", "baseline"],
+                "enum": ["plan", "week", "today", "baseline", "history"],
                 "description": (
                     "plan: the arc + the stored week. "
                     "week: this week's REAL dates (weekday->date) plus any stored sessions. "
                     "today: today's stored session. "
-                    "baseline: the stored fitness baseline."
+                    "baseline: the stored fitness baseline. "
+                    "history: recent completed runs — read before reviewing a week or planning the next."
                 ),
             }
         },
@@ -72,6 +73,33 @@ SAVE_TRAINING_PLAN_TOOL: dict = {
             },
         },
         "required": ["plan"],
+    },
+}
+
+LOG_RUN_TOOL: dict = {
+    "name": "log_run",
+    "description": (
+        "Record a run the user completed, so it shapes what you plan next. Use when they "
+        "tell you they ran ('finished my 5k, felt strong'). Defaults to today unless they "
+        "say otherwise."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "note": {
+                "type": "string",
+                "description": "What they did, in plain words — e.g. 'easy 5k, felt strong, HR stayed low'.",
+            },
+            "date": {
+                "type": "string",
+                "description": "Optional ISO date (YYYY-MM-DD) if it wasn't today.",
+            },
+            "distance_km": {
+                "type": "number",
+                "description": "Optional distance in km if known.",
+            },
+        },
+        "required": ["note"],
     },
 }
 
@@ -134,7 +162,17 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
             return "No baseline yet. Ask for their Garmin data or what they can currently run."
         return f"Baseline: {plan.baseline}"
 
-    return "Unknown request. Use what: plan, week, today, or baseline."
+    if what == "history":
+        runs = training_service.recent_runs(user_id)
+        if not runs:
+            return "No runs logged yet. When they tell you they ran, record it with log_run."
+        lines = ["Recent runs (most recent first):"]
+        for r in runs:
+            dist = f" — {r.distance_km}km" if r.distance_km is not None else ""
+            lines.append(f"  {r.ran_on.isoformat()}{dist}: {r.note}")
+        return "\n".join(lines)
+
+    return "Unknown request. Use what: plan, week, today, baseline, or history."
 
 
 def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
@@ -167,6 +205,31 @@ def handle_provide_training_data(user_id: UUID, input_dict: dict, now: datetime,
     return "Parsed baseline (interpret and summarise for the user, then save it):\n" + json.dumps(summary, indent=2)
 
 
+def handle_log_run(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+    note = str(input_dict.get("note", "")).strip()
+    if not note:
+        return "Nothing to log — what run did they do?"
+    ran_on = None
+    raw_date = str(input_dict.get("date", "")).strip()
+    if raw_date:
+        try:
+            ran_on = date.fromisoformat(raw_date)
+        except ValueError:
+            ran_on = None  # fall back to today
+    distance = input_dict.get("distance_km")
+    try:
+        distance = float(distance) if distance is not None else None
+    except (TypeError, ValueError):
+        distance = None
+    try:
+        run = training_service.log_run(user_id, note, now=now, ran_on=ran_on, distance_km=distance)
+    except Exception:
+        _log.warning("log_run failed", exc_info=True)
+        return "Couldn't log that run just now — try again in a moment."
+    dist = f" ({run.distance_km}km)" if run.distance_km is not None else ""
+    return f"Logged: {run.ran_on.isoformat()}{dist} — {run.note}"
+
+
 # ---------------------------------------------------------------------------
 # Context loader (Tier 1b) + snapshot (Tier 2)
 # ---------------------------------------------------------------------------
@@ -176,7 +239,7 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
     the stored plan + THIS WEEK's real dates, so the coach speaks from reality and
     never invents dates."""
     def loader(user_id: UUID, now: datetime) -> str | None:
-        parts: list[str] = [TRAINING_COACH_PERSONA]
+        parts: list[str] = [TRAINING_COACH_GUIDANCE]
 
         try:
             goals = goal_reader.list_training_goals(user_id)
@@ -250,6 +313,8 @@ def training_tools(training_service) -> list[tuple[dict, Any]]:
          lambda uid, inp, now: handle_training_get(uid, inp, now, training_service=training_service)),
         (SAVE_TRAINING_PLAN_TOOL,
          lambda uid, inp, now: handle_save_training_plan(uid, inp, now, training_service=training_service)),
+        (LOG_RUN_TOOL,
+         lambda uid, inp, now: handle_log_run(uid, inp, now, training_service=training_service)),
         (PROVIDE_TRAINING_DATA_TOOL,
          lambda uid, inp, now: handle_provide_training_data(uid, inp, now, training_service=training_service)),
     ]
