@@ -48,9 +48,12 @@ def tracking_context_loader(
             _log.warning("tracking_context: health load failed", exc_info=True)
 
         try:
-            cycle_status = cycle_service.get_status(user_id, today)
-            if cycle_status:
-                parts.append(cycle_status)
+            cycle = cycle_service.get_status(user_id, today)
+            if cycle is not None:
+                parts.append(
+                    f"Cycle: {cycle.phase} (day {cycle.cycle_day}). "
+                    f"Period started {cycle.period_start.isoformat()}."
+                )
         except Exception:
             _log.warning("tracking_context: cycle load failed", exc_info=True)
 

@@ -1098,6 +1098,13 @@ class CycleRepository(Protocol):
     def last_period_start(self, user_id: UUID) -> CycleEvent | None: ...
 
 
+@dataclass(frozen=True)
+class CycleStatus:
+    phase: str            # e.g. "follicular", "ovulation window", "late luteal / period due"
+    cycle_day: int
+    period_start: date
+
+
 class CycleService:
     def __init__(self, repository: CycleRepository) -> None:
         self.repository = repository
@@ -1132,17 +1139,19 @@ class CycleService:
         if cycle_day <= 24: return "luteal"
         return "late_luteal"
 
-    def get_status(self, user_id: UUID, today: date) -> str:
+    def get_status(self, user_id: UUID, today: date) -> CycleStatus | None:
+        """Current cycle phase + day, or None if no period start is recorded.
+        Formatting for display belongs to the caller (see tracking_context)."""
         last_period = self.repository.last_period_start(user_id)
         if last_period is None:
-            return "Cycle: no period start recorded yet."
+            return None
         cycle_day = (today - last_period.occurred_on).days + 1
-        if cycle_day <= 5: phase = f"menstruation (day {cycle_day})"
-        elif cycle_day <= 13: phase = f"follicular (day {cycle_day})"
-        elif cycle_day <= 16: phase = f"ovulation window (day {cycle_day})"
-        elif cycle_day <= 28: phase = f"luteal (day {cycle_day})"
-        else: phase = f"late luteal / period due (day {cycle_day})"
-        return f"Cycle: {phase}. Period started {last_period.occurred_on.isoformat()}."
+        if cycle_day <= 5: phase = "menstruation"
+        elif cycle_day <= 13: phase = "follicular"
+        elif cycle_day <= 16: phase = "ovulation window"
+        elif cycle_day <= 28: phase = "luteal"
+        else: phase = "late luteal / period due"
+        return CycleStatus(phase=phase, cycle_day=cycle_day, period_start=last_period.occurred_on)
 
 
 # ---------------------------------------------------------------------------

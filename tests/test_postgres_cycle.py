@@ -86,5 +86,7 @@ def test_get_status_end_to_end(pg_database: PostgresDatabase):
     service.record_period_start(user_id, date(2026, 6, 1))
     status = service.get_status(user_id, date(2026, 6, 10))
 
-    assert "day 10" in status
-    assert "follicular" in status
+    assert status is not None
+    assert status.cycle_day == 10
+    assert status.phase == "follicular"
+    assert status.period_start == date(2026, 6, 1)
