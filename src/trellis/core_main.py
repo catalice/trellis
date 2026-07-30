@@ -62,8 +62,7 @@ from trellis.domain_second_brain_tool import (
     second_brain_tools,
 )
 
-# Training domain — lean running coach (slice 1: goal -> plan -> today/week).
-from trellis.domain_training_claude import TrainingClaude
+# Training domain — lean running coach (Claude + tools; coaching happens in the turn).
 from trellis.domain_training_repo import PostgresTrainingRepository
 from trellis.domain_training_service import TrainingService
 from trellis.domain_training_tool import (
@@ -169,11 +168,9 @@ def main() -> None:
     state_service = StateService(state_repo, settings.timezone, projection=vault)
 
     # --- Training domain (reads goals from the second brain; stores its own plan) ---
-    training_claude = TrainingClaude(anthropic_client, settings.anthropic_model)
     training_service = TrainingService(
         PostgresTrainingRepository(database),
         goal_service,
-        training_claude,
         settings.timezone,
     )
 

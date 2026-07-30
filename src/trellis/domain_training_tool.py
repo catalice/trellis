@@ -1,48 +1,26 @@
 """
-Tool schemas + handlers for the training (running) domain.
+Tools for the running coach — the coach's hands. The coaching itself happens in the
+oracle turn (persona in domain_training_claude); these just let it read context and
+persist the plan.
 
 Handler signature: (user_id, input_dict, now) -> str
-Context loader: training_context_loader (Tier 1b, carries the coach persona)
+Context loader: training_context_loader (Tier 1b — carries the coach persona)
 Snapshot: training_snapshot (Tier 2 — today's run, existence only)
 Registration: training_tools(...)
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, Callable
 from uuid import UUID
 
-from trellis.domain_training_models import PlannedSession, SessionStatus
-from trellis.domain_training_service import TrainingNotConnectedError
+from trellis.domain_training_claude import TRAINING_COACH_PERSONA
 
 _log = logging.getLogger(__name__)
 
 ContextLoader = Callable[[UUID, datetime], "str | None"]
-
-
-# ---------------------------------------------------------------------------
-# Coach persona — DRAFT (rides the context loader, like the music companion).
-# Loaded only when training is the routed domain. Voice to be shaped with the user.
-# ---------------------------------------------------------------------------
-
-TRAINING_COACH_PERSONA = """\
-You are the user's running coach. Your job is to carry the plan so they don't have to \
-think — they should never have to decide "what run is today", because you already \
-know, and it's building toward their goal. (Use their name and anything you know \
-about them from their profile; never assume a gender.)
-
-How to coach:
-- Hold the structure. There's a plan and a goal; keep them pointed at it. When they \
-ask what's on, tell them plainly and with a bit of belief in them.
-- Guide, don't limit — but don't coddle either. Adapt around real life, yet know the \
-difference between "genuinely needs to back off" and "just doesn't fancy it", and \
-hold the line on the second. A missed easy run isn't a crisis; drifting off the goal is.
-- Be honest and a little demanding. They asked for this to actually WORK — so make it \
-work. Encourage effort, don't reflexively hand out rest days.
-- Talk about their actual plan and today's session, not running in the abstract.
-- Warm, direct, in their corner. Celebrate the runs done; nudge the ones dodged.\
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -51,17 +29,18 @@ work. Encourage effort, don't reflexively hand out rest days.
 
 TRAINING_GET_TOOL: dict = {
     "name": "training_get",
-    "description": "Retrieve the running plan. Use before telling the user what to run or what's coming up.",
+    "description": "Read the running plan before telling the user what's on. Use this so you speak from what's actually stored, not memory.",
     "input_schema": {
         "type": "object",
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["today", "week", "plan"],
+                "enum": ["plan", "week", "today", "baseline"],
                 "description": (
-                    "today: today's scheduled session. "
-                    "week: this week's sessions (Mon-Sun). "
-                    "plan: the active plan's shape + the next couple of weeks."
+                    "plan: the arc + the stored week. "
+                    "week: this week's REAL dates (weekday->date) plus any stored sessions. "
+                    "today: today's stored session. "
+                    "baseline: the stored fitness baseline."
                 ),
             }
         },
@@ -69,34 +48,46 @@ TRAINING_GET_TOOL: dict = {
     },
 }
 
-BUILD_TRAINING_PLAN_TOOL: dict = {
-    "name": "build_training_plan",
+SAVE_TRAINING_PLAN_TOOL: dict = {
+    "name": "save_training_plan",
     "description": (
-        "Generate a fresh running plan from the user's training goal(s). Use when they have "
-        "no plan yet, want to start over, or their goal has changed. Reads the goal "
-        "from the second brain — they must have set a training goal first."
+        "Persist the plan you've designed or adjusted. Author it from the REAL dates you "
+        "were given (never invent dates). Call whenever you create or change the arc or the "
+        "week, so it survives to next time."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "days_per_week": {
-                "type": "integer",
-                "description": "How many days a week the user wants to run (1-7). Default 4 if unsure.",
-            }
+            "plan": {
+                "type": "object",
+                "description": (
+                    'The plan doc: {"arc": "<phases, weeks to goal, where they are now>", '
+                    '"week": [{"date": "YYYY-MM-DD", "type": "easy|long|intervals|tempo|recovery|rest", '
+                    '"detail": "what to do"}, ...]} using this week\'s real dates.'
+                ),
+            },
+            "baseline": {
+                "type": "string",
+                "description": "Optional: a short fitness baseline summary to store/update.",
+            },
         },
+        "required": ["plan"],
     },
 }
 
-MARK_SESSION_TOOL: dict = {
-    "name": "mark_session",
-    "description": "Mark a training session done or skipped. Get its id from training_get first.",
+PROVIDE_TRAINING_DATA_TOOL: dict = {
+    "name": "provide_training_data",
+    "description": (
+        "Parse a Garmin activity-export CSV the user pasted/provided into a running baseline "
+        "(weekly volume, paces, HR, longest run). Read the returned numbers, then summarise "
+        "them back to the user and save with save_training_plan(baseline=...)."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "session_id": {"type": "string", "description": "The session's id."},
-            "status": {"type": "string", "enum": ["done", "skipped"]},
+            "csv": {"type": "string", "description": "The raw CSV text of the Garmin activity export."},
         },
-        "required": ["session_id", "status"],
+        "required": ["csv"],
     },
 }
 
@@ -111,84 +102,69 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
     if what == "today":
         session = training_service.todays_session(user_id, now)
         if session is None:
-            plan = training_service.active_plan(user_id)
-            if plan is None:
-                return "No training plan yet. Set a running goal, then I'll build one."
-            return "Nothing scheduled for today in the current plan."
+            return "Nothing stored for today. If there's no plan yet, offer to build one."
         return "Today: " + _fmt_session(session)
 
     if what == "week":
-        sessions = training_service.this_week(user_id, now)
-        if not sessions:
-            plan = training_service.active_plan(user_id)
-            if plan is None:
-                return "No training plan yet. Set a running goal, then I'll build one."
-            return "No sessions scheduled this week."
-        lines = ["This week:"]
-        lines.extend("  " + _fmt_session(s) for s in sessions)
+        real = training_service.current_week(now)
+        stored = {s.get("date"): s for s in training_service.week_sessions(user_id)}
+        lines = ["This week (real dates):"]
+        for day in real:
+            marker = " <- today" if day["is_today"] else ""
+            s = stored.get(day["date"])
+            planned = f"  {_fmt_session(s)}" if s else "  (nothing planned yet)"
+            lines.append(f"{day['weekday']} {day['date']}{marker}:{planned[1:] if s else planned}")
         return "\n".join(lines)
 
     if what == "plan":
-        plan = training_service.active_plan(user_id)
-        if plan is None:
-            return "No active training plan. Set a running goal and I'll build one."
-        lines = []
-        if plan.rationale:
-            lines.append(f"Plan: {plan.rationale}")
-        upcoming = training_service.upcoming(user_id, now)
-        if upcoming:
-            lines.append("Coming up:")
-            lines.extend("  " + _fmt_session(s) for s in upcoming)
-        if training_service.is_plan_stale(user_id):
-            lines.append("(Heads up: the goal has changed since this plan was built — worth rebuilding.)")
-        return "\n".join(lines) if lines else "Plan is active but has no sessions."
+        plan = training_service.get_plan(user_id)
+        if plan is None or not plan.plan:
+            return "No plan stored yet. Understand their goal + starting point, then build one."
+        arc = plan.plan.get("arc") or "(no arc summary yet)"
+        lines = [f"Arc: {arc}"]
+        sessions = training_service.week_sessions(user_id)
+        if sessions:
+            lines.append("Stored week:")
+            lines.extend("  " + _fmt_session(s) for s in sessions)
+        return "\n".join(lines)
 
-    return "Unknown request. Use what: today, week, or plan."
+    if what == "baseline":
+        plan = training_service.get_plan(user_id)
+        if plan is None or not plan.baseline:
+            return "No baseline yet. Ask for their Garmin data or what they can currently run."
+        return f"Baseline: {plan.baseline}"
+
+    return "Unknown request. Use what: plan, week, today, or baseline."
 
 
-def handle_build_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
-    days = input_dict.get("days_per_week")
+def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+    plan = input_dict.get("plan")
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except json.JSONDecodeError:
+            return "The plan needs to be a JSON object with 'arc' and 'week'."
+    if not isinstance(plan, dict):
+        return "The plan needs to be a JSON object with 'arc' and 'week'."
+    baseline = input_dict.get("baseline")
+    baseline = str(baseline) if baseline is not None else None
     try:
-        days_per_week = int(days) if days is not None else 4
-    except (TypeError, ValueError):
-        days_per_week = 4
-
-    try:
-        plan = training_service.build_plan_from_goal(user_id, now=now, days_per_week=days_per_week)
-    except TrainingNotConnectedError:
-        return (
-            "No running goal set yet — add one first (a race, a distance, or just "
-            "'run 3x a week'), then I'll build the plan around it."
-        )
-    if plan is None:
-        return "I couldn't put a plan together just now. Try again in a moment."
-
-    lines = []
-    if plan.rationale:
-        lines.append(f"Built your plan: {plan.rationale}")
-    week = training_service.this_week(user_id, now)
-    if week:
-        lines.append("This week:")
-        lines.extend("  " + _fmt_session(s) for s in week)
-    return "\n".join(lines) if lines else "Plan built."
+        goals = training_service.training_goals(user_id)
+        goal_id = goals[0].id if goals else None
+        training_service.save_plan(user_id, plan=plan, baseline=baseline, goal_id=goal_id)
+    except Exception:
+        _log.warning("save_training_plan failed", exc_info=True)
+        return "Couldn't save the plan just now — try again in a moment."
+    n = len([s for s in plan.get("week", []) if isinstance(s, dict)])
+    return f"Saved the plan ({n} day(s) this week)."
 
 
-def handle_mark_session(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
-    raw_id = str(input_dict.get("session_id", "")).strip()
-    try:
-        session_id = UUID(raw_id)
-    except ValueError:
-        return "That doesn't look like a valid session id."
-    try:
-        status = SessionStatus(str(input_dict.get("status", "")).strip())
-    except ValueError:
-        return "Status must be 'done' or 'skipped'."
-    try:
-        session = training_service.mark_session(user_id, session_id, status)
-    except LookupError:
-        return "Couldn't find that session."
-    verb = "done" if status == SessionStatus.DONE else "skipped"
-    return f"Marked {verb}: {_fmt_session(session)}"
+def handle_provide_training_data(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+    csv_text = str(input_dict.get("csv", "")).strip()
+    if not csv_text:
+        return "No CSV content received."
+    summary = training_service.parse_garmin_csv(csv_text)
+    return "Parsed baseline (interpret and summarise for the user, then save it):\n" + json.dumps(summary, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +172,9 @@ def handle_mark_session(user_id: UUID, input_dict: dict, now: datetime, *, train
 # ---------------------------------------------------------------------------
 
 def training_context_loader(training_service, goal_reader) -> ContextLoader:
-    """Loaded only when training is routed. Carries the coach persona plus the
-    active goal and this week's shape, so the coach speaks from the real plan."""
+    """Loaded only when training is routed. Carries the coach persona + the goal +
+    the stored plan + THIS WEEK's real dates, so the coach speaks from reality and
+    never invents dates."""
     def loader(user_id: UUID, now: datetime) -> str | None:
         parts: list[str] = [TRAINING_COACH_PERSONA]
 
@@ -205,21 +182,32 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
             goals = goal_reader.list_training_goals(user_id)
             if goals:
                 parts.append("Training goal(s):\n" + "\n".join(f"  {g.summary()}" for g in goals))
+            else:
+                parts.append("No training goal set yet — help them define a realistic one.")
         except Exception:
             _log.warning("training_context: goals load failed", exc_info=True)
 
         try:
-            plan = training_service.active_plan(user_id)
-            if plan is None:
-                parts.append("No active plan yet — offer to build one from their goal.")
+            plan = training_service.get_plan(user_id)
+            if plan is None or not plan.plan:
+                parts.append("No plan stored yet — understand their starting point, then build one.")
             else:
-                week = training_service.this_week(user_id, now)
-                if week:
-                    parts.append("This week:\n" + "\n".join(f"  {_fmt_session(s)}" for s in week))
-                if training_service.is_plan_stale(user_id):
-                    parts.append("NOTE: goal changed since the plan was built — suggest rebuilding.")
+                if plan.plan.get("arc"):
+                    parts.append("Arc: " + str(plan.plan["arc"]))
+                if plan.baseline:
+                    parts.append("Baseline: " + plan.baseline)
         except Exception:
             _log.warning("training_context: plan load failed", exc_info=True)
+
+        # Always give the real calendar so runs land on real days.
+        try:
+            week = training_service.current_week(now)
+            parts.append(
+                "This week's real dates:\n"
+                + "\n".join(f"  {d['weekday']} {d['date']}" + (" (today)" if d["is_today"] else "") for d in week)
+            )
+        except Exception:
+            _log.warning("training_context: week dates failed", exc_info=True)
 
         return "[Training]\n" + "\n\n".join(parts)
 
@@ -234,9 +222,9 @@ def training_snapshot(training_service) -> ContextLoader:
         except Exception:
             _log.warning("training_snapshot failed", exc_info=True)
             return None
-        if session is None or session.status != SessionStatus.PLANNED:
+        if not session:
             return None
-        return f"Today's run: {session.session_type.value} — {session.description[:50]}"
+        return f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
 
     return loader
 
@@ -248,7 +236,7 @@ def training_snapshot(training_service) -> ContextLoader:
 TRAINING_SIGNALS: list[str] = [
     "run", "running", "ran", "jog", "training", "train",
     "workout", "session", "long run", "easy run", "intervals", "tempo",
-    "pace", "mileage", "marathon", "5k", "10k", "half marathon", "race",
+    "pace", "mileage", "marathon", "5k", "10k", "half marathon", "race", "coach",
 ]
 
 
@@ -258,18 +246,12 @@ TRAINING_SIGNALS: list[str] = [
 
 def training_tools(training_service) -> list[tuple[dict, Any]]:
     return [
-        (
-            TRAINING_GET_TOOL,
-            lambda uid, inp, now: handle_training_get(uid, inp, now, training_service=training_service),
-        ),
-        (
-            BUILD_TRAINING_PLAN_TOOL,
-            lambda uid, inp, now: handle_build_training_plan(uid, inp, now, training_service=training_service),
-        ),
-        (
-            MARK_SESSION_TOOL,
-            lambda uid, inp, now: handle_mark_session(uid, inp, now, training_service=training_service),
-        ),
+        (TRAINING_GET_TOOL,
+         lambda uid, inp, now: handle_training_get(uid, inp, now, training_service=training_service)),
+        (SAVE_TRAINING_PLAN_TOOL,
+         lambda uid, inp, now: handle_save_training_plan(uid, inp, now, training_service=training_service)),
+        (PROVIDE_TRAINING_DATA_TOOL,
+         lambda uid, inp, now: handle_provide_training_data(uid, inp, now, training_service=training_service)),
     ]
 
 
@@ -277,19 +259,11 @@ def training_tools(training_service) -> list[tuple[dict, Any]]:
 # Formatting
 # ---------------------------------------------------------------------------
 
-def _fmt_session(s: PlannedSession) -> str:
-    day = s.scheduled_date.strftime("%a %d %b")
-    bits = [f"{day} — {s.session_type.value}"]
-    if s.description:
-        bits.append(s.description)
-    extras = []
-    if s.planned_distance_km is not None:
-        extras.append(f"{s.planned_distance_km:g}km")
-    if s.planned_duration_min is not None:
-        extras.append(f"{s.planned_duration_min}min")
-    line = ": ".join(bits)
-    if extras:
-        line += f" ({', '.join(extras)})"
-    if s.status != SessionStatus.PLANNED:
-        line += f" [{s.status.value}]"
-    return f"[{s.id}] {line}"
+def _fmt_session(s: dict) -> str:
+    stype = s.get("type", "run")
+    detail = s.get("detail", "")
+    day = s.get("date", "")
+    line = f"{day} — {stype}"
+    if detail:
+        line += f": {detail}"
+    return line
