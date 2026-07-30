@@ -321,11 +321,16 @@ class GarminDirectService:
         except Exception as exc:
             raise RuntimeError(f"Failed to load Garmin session: {exc}") from exc
 
-    def push_workout(self, user_id: UUID, workout_json: str) -> str:
+    def push_workout(self, user_id: UUID, workout_json: Any) -> str:
         try:
             client = self._connect(user_id)
-            result = client.add_workout(workout_json)
-            return str(result.get("workoutId", result))
+            # garminconnect >=0.3 renamed add_workout -> upload_workout; it takes
+            # the workout JSON dict our builder produces and returns the created
+            # workout (with its id).
+            result = client.upload_workout(workout_json)
+            if isinstance(result, dict):
+                return str(result.get("workoutId") or result.get("workoutIdStr") or result)
+            return str(result)
         except RuntimeError:
             raise
         except Exception as exc:
