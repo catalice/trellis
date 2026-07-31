@@ -35,7 +35,7 @@ TRAINING_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["plan", "week", "today", "baseline", "history", "run_detail"],
+                "enum": ["plan", "week", "today", "baseline", "history", "run_detail", "readiness"],
                 "description": (
                     "plan: the arc + the stored week. "
                     "week: this week's REAL dates (weekday->date) plus any stored sessions. "
@@ -44,7 +44,10 @@ TRAINING_GET_TOOL: dict = {
                     "history: recent completed runs — read before reviewing a week or planning the next. "
                     "run_detail: one recent run's per-split/lap breakdown (pace + HR per rep) from "
                     "Garmin, so you can see how the intervals/pacing/HR actually went ('how did my "
-                    "intervals go?'). Use the 'which' field to pick which recent run."
+                    "intervals go?'). Use the 'which' field to pick which recent run. "
+                    "readiness: the latest synced Garmin health (sleep, HRV, body battery, resting HR, "
+                    "stress) — read it before judging how hard to push this week. It IS available when "
+                    "Garmin is connected; fetch it here rather than assuming you don't have it."
                 ),
             },
             "which": {
@@ -192,7 +195,19 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
             return "No run found to review. Sync Garmin first, or check the number."
         return _fmt_run_detail(detail)
 
-    return "Unknown request. Use what: plan, week, today, baseline, history, or run_detail."
+    if what == "readiness":
+        health = None
+        try:
+            health = training_service.recent_health(user_id)
+        except Exception:
+            _log.warning("readiness load failed", exc_info=True)
+        line = _fmt_health(health)
+        if line is None:
+            return ("No synced Garmin health yet. If Garmin is connected, sync_garmin refreshes it; "
+                    "otherwise ask them how they slept / how they feel.")
+        return "Readiness — " + line
+
+    return "Unknown request. Use what: plan, week, today, baseline, history, run_detail, or readiness."
 
 
 def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
@@ -258,6 +273,33 @@ def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, traini
         days = result.get("health_records")
         bits.append(f"health up to {result['health_through']}" + (f" ({days} day(s))" if days else ""))
     return "Synced Garmin — " + ", ".join(bits) + "."
+
+
+def _fmt_health(health: "dict | None") -> "str | None":
+    """One-line readiness summary from recent_health(), or None if there's nothing.
+    Shared by training_get(readiness), the context loader, and the snapshot so the
+    coach speaks about health consistently."""
+    if not health:
+        return None
+    bits = []
+    if health.get("date"):
+        bits.append(f"as of {health['date']}")
+    if health.get("sleep_score") is not None:
+        bits.append(f"sleep score {health['sleep_score']}")
+    if health.get("sleep_hours") is not None:
+        bits.append(f"{health['sleep_hours']}h sleep")
+    if health.get("hrv_last_night") is not None:
+        hrv = f"HRV {health['hrv_last_night']}"
+        if health.get("hrv_status"):
+            hrv += f" ({health['hrv_status']})"
+        bits.append(hrv)
+    if health.get("body_battery_high") is not None:
+        bits.append(f"body battery {health['body_battery_high']}")
+    if health.get("resting_hr") is not None:
+        bits.append(f"resting HR {health['resting_hr']}")
+    if health.get("avg_stress") is not None:
+        bits.append(f"stress {health['avg_stress']}")
+    return ", ".join(bits) if bits else None
 
 
 def _fmt_run_detail(detail: dict) -> str:
@@ -331,28 +373,9 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
         # Recent health/readiness (if Garmin health is synced) — so the coach can
         # factor sleep/HRV/body battery into the week. Best-effort, skipped if none.
         try:
-            health = training_service.recent_health(user_id)
-            if health:
-                bits = []
-                if health.get("date"):
-                    bits.append(f"as of {health['date']}")
-                if health.get("sleep_score") is not None:
-                    bits.append(f"sleep score {health['sleep_score']}")
-                if health.get("sleep_hours") is not None:
-                    bits.append(f"{health['sleep_hours']}h sleep")
-                if health.get("hrv_last_night") is not None:
-                    hrv = f"HRV {health['hrv_last_night']}"
-                    if health.get("hrv_status"):
-                        hrv += f" ({health['hrv_status']})"
-                    bits.append(hrv)
-                if health.get("body_battery_high") is not None:
-                    bits.append(f"body battery {health['body_battery_high']}")
-                if health.get("resting_hr") is not None:
-                    bits.append(f"resting HR {health['resting_hr']}")
-                if health.get("avg_stress") is not None:
-                    bits.append(f"stress {health['avg_stress']}")
-                if bits:
-                    parts.append("Recent health/readiness: " + ", ".join(bits))
+            line = _fmt_health(training_service.recent_health(user_id))
+            if line:
+                parts.append("Recent health/readiness: " + line)
         except Exception:
             _log.warning("training_context: health load failed", exc_info=True)
 
@@ -372,16 +395,26 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
 
 
 def training_snapshot(training_service) -> ContextLoader:
-    """Tier 2 — today's run, existence only, always loaded."""
+    """Tier 2 — always loaded every turn (not gated by routing). Surfaces today's
+    run (if planned) and the latest Garmin readiness (if synced), so the coach
+    always knows this data exists and never denies having it."""
     def loader(user_id: UUID, now: datetime) -> str | None:
+        lines: list[str] = []
         try:
             session = training_service.todays_session(user_id, now)
+            if session:
+                lines.append(
+                    f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
+                )
         except Exception:
-            _log.warning("training_snapshot failed", exc_info=True)
-            return None
-        if not session:
-            return None
-        return f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
+            _log.warning("training_snapshot session failed", exc_info=True)
+        try:
+            health = _fmt_health(training_service.recent_health(user_id))
+            if health:
+                lines.append(f"Garmin readiness ({health}) — available via training_get(readiness)")
+        except Exception:
+            _log.warning("training_snapshot health failed", exc_info=True)
+        return "\n".join(lines) if lines else None
 
     return loader
 

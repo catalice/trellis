@@ -217,7 +217,11 @@ class Assembler:
     ) -> tuple[list[dict], dict[str, Callable[[dict], str]]]:
         seen: set[str] = set()
         raw: list[tuple[dict, Callable]] = []
-        for schema, handler in list(self._always_tools) + self._registry.tools_for(domains):
+        # ALL domain tools are always available — the model decides what to call
+        # from the tool descriptions. Keyword routing (the `domains` arg) shapes
+        # CONTEXT only, never which tools exist. This stops the model denying a
+        # capability (e.g. Garmin) just because the message missed a keyword.
+        for schema, handler in list(self._always_tools) + self._registry.all_tools():
             if schema["name"] not in seen:
                 seen.add(schema["name"])
                 raw.append((schema, handler))

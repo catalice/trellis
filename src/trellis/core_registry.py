@@ -69,5 +69,16 @@ class TrellisRegistry:
                 result.extend(d.tools)
         return result
 
+    def all_tools(self) -> list[tuple[ToolSchema, ToolHandler]]:
+        """Every registered domain's tools. Tool AVAILABILITY is never gated by
+        keyword routing — the model always sees every tool and decides what to call
+        from the tool descriptions. (Keyword routing still shapes CONTEXT only.)
+        This prevents the model from denying a capability just because a message
+        didn't happen to match a domain's keywords."""
+        result: list[tuple[ToolSchema, ToolHandler]] = []
+        for d in self._domains.values():
+            result.extend(d.tools)
+        return result
+
     def domain_names(self) -> list[str]:
         return list(self._domains.keys())
