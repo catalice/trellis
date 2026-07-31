@@ -171,15 +171,34 @@ class TelegramTrellis:
             reply = "Something went wrong. Nothing was changed — please try again."
 
         final = reply or "Something went wrong — no response was generated. Please try again."
-        try:
-            await placeholder.edit_text(final, parse_mode="Markdown")
-        except Exception:
-            # Edit can fail (reply too long for one message, a Markdown quirk) —
-            # fall back to a fresh send so the answer always lands.
-            self.logger.warning("Editing placeholder failed; sending fresh", exc_info=True)
-            await update.message.reply_text(final, parse_mode="Markdown")
-
+        await self._deliver(update, placeholder, final)
         await self._maybe_alert_embed_failures(update)
+
+    async def _deliver(self, update: Update, placeholder, text: str) -> None:
+        """Land the reply no matter what. Try Markdown first; if Telegram can't
+        parse it (an unbalanced * or _ in natural text) OR the edit fails, fall
+        back to PLAIN text — which can never fail to parse — so a reply is never
+        lost to a formatting quirk."""
+        # 1. edit the placeholder, formatted.
+        try:
+            await placeholder.edit_text(text, parse_mode="Markdown")
+            return
+        except Exception:
+            pass
+        # 2. edit the placeholder, plain (handles the Markdown-parse case).
+        try:
+            await placeholder.edit_text(text)
+            return
+        except Exception:
+            self.logger.warning("Editing placeholder failed; sending fresh", exc_info=True)
+        # 3. edit impossible (e.g. too long) — send fresh, formatted then plain.
+        try:
+            await update.message.reply_text(text, parse_mode="Markdown")
+        except Exception:
+            try:
+                await update.message.reply_text(text)
+            except Exception:
+                self.logger.warning("Failed to deliver reply", exc_info=True)
 
     async def _maybe_alert_embed_failures(self, update: Update) -> None:
         """One-time heads-up when embeds have been failing in a row (dead token,
