@@ -29,21 +29,28 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 
 TRAINING_GET_TOOL: dict = {
     "name": "training_get",
-    "description": "Read the running plan before telling the user what's on. Use this so you speak from what's actually stored, not memory.",
+    "description": "Read the running plan (or a run's detail) before telling the user what's on. Use this so you speak from what's actually stored, not memory.",
     "input_schema": {
         "type": "object",
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["plan", "week", "today", "baseline", "history"],
+                "enum": ["plan", "week", "today", "baseline", "history", "run_detail"],
                 "description": (
                     "plan: the arc + the stored week. "
                     "week: this week's REAL dates (weekday->date) plus any stored sessions. "
                     "today: today's stored session. "
                     "baseline: the stored fitness baseline. "
-                    "history: recent completed runs — read before reviewing a week or planning the next."
+                    "history: recent completed runs — read before reviewing a week or planning the next. "
+                    "run_detail: one recent run's per-split/lap breakdown (pace + HR per rep) from "
+                    "Garmin, so you can see how the intervals/pacing/HR actually went ('how did my "
+                    "intervals go?'). Use the 'which' field to pick which recent run."
                 ),
-            }
+            },
+            "which": {
+                "type": "integer",
+                "description": "For run_detail only: which recent run (0 = most recent, default; 1 = the one before).",
+            },
         },
         "required": ["what"],
     },
@@ -103,22 +110,6 @@ LOG_RUN_TOOL: dict = {
     },
 }
 
-PROVIDE_TRAINING_DATA_TOOL: dict = {
-    "name": "provide_training_data",
-    "description": (
-        "Parse a Garmin activity-export CSV the user pasted/provided into a running baseline "
-        "(weekly volume, paces, HR, longest run). Read the returned numbers, then summarise "
-        "them back to the user and save with save_training_plan(baseline=...)."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "csv": {"type": "string", "description": "The raw CSV text of the Garmin activity export."},
-        },
-        "required": ["csv"],
-    },
-}
-
 PUSH_TO_WATCH_TOOL: dict = {
     "name": "push_to_watch",
     "description": (
@@ -148,36 +139,14 @@ PUSH_TO_WATCH_TOOL: dict = {
     },
 }
 
-IMPORT_RECENT_RUNS_TOOL: dict = {
-    "name": "import_recent_runs",
+SYNC_GARMIN_TOOL: dict = {
+    "name": "sync_garmin",
     "description": (
-        "Pull the user's RECENT runs from Garmin and log any new ones, so you can review from what "
-        "they actually did. Recent activities only — for full history ask them for a Garmin CSV export."
+        "Refresh the user's Garmin data now: pull recent runs into the log and update recent "
+        "health/readiness (sleep, HRV, body battery). This also runs automatically once a day — "
+        "use it when they want their latest data reflected right away ('sync my Garmin')."
     ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "limit": {"type": "integer", "description": "How many recent activities to check (default 20)."},
-        },
-    },
-}
-
-REVIEW_RUN_TOOL: dict = {
-    "name": "review_run",
-    "description": (
-        "Get the full DETAIL of a recent run from Garmin — the per-split/lap breakdown (pace and HR "
-        "per rep) plus the overall summary — so you can see how the intervals, pacing and HR actually "
-        "went and coach from it. Use when reviewing a session ('how did my intervals go?')."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "which": {
-                "type": "integer",
-                "description": "Which recent run: 0 = most recent (default), 1 = the one before, etc.",
-            },
-        },
-    },
+    "input_schema": {"type": "object", "properties": {}},
 }
 
 
@@ -233,7 +202,24 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
             lines.append(f"  {r.ran_on.isoformat()}{dist}: {r.note}")
         return "\n".join(lines)
 
-    return "Unknown request. Use what: plan, week, today, baseline, or history."
+    if what == "run_detail":
+        which = input_dict.get("which")
+        try:
+            which = max(0, int(which)) if which is not None else 0
+        except (TypeError, ValueError):
+            which = 0
+        try:
+            detail = training_service.review_run(user_id, which=which)
+        except RuntimeError as exc:
+            return str(exc)
+        except Exception:
+            _log.warning("run_detail failed", exc_info=True)
+            return "Couldn't reach Garmin just now — try again in a moment."
+        if detail is None:
+            return "No run found to review. Sync Garmin first, or check the number."
+        return _fmt_run_detail(detail)
+
+    return "Unknown request. Use what: plan, week, today, baseline, history, or run_detail."
 
 
 def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
@@ -256,14 +242,6 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
         return "Couldn't save the plan just now — try again in a moment."
     n = len([s for s in plan.get("week", []) if isinstance(s, dict)])
     return f"Saved the plan ({n} day(s) this week)."
-
-
-def handle_provide_training_data(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
-    csv_text = str(input_dict.get("csv", "")).strip()
-    if not csv_text:
-        return "No CSV content received."
-    summary = training_service.parse_garmin_csv(csv_text)
-    return "Parsed baseline (interpret and summarise for the user, then save it):\n" + json.dumps(summary, indent=2)
 
 
 def handle_log_run(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
@@ -317,44 +295,24 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, trai
     return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
 
 
-def handle_import_recent_runs(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
-    limit = input_dict.get("limit")
+def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
     try:
-        limit = int(limit) if limit is not None else 20
-    except (TypeError, ValueError):
-        limit = 20
-    try:
-        logged = training_service.import_recent_runs(user_id, now=now, limit=limit)
+        result = training_service.sync_garmin(user_id, now=now)
     except RuntimeError as exc:
         return str(exc)
     except Exception:
-        _log.warning("import_recent_runs failed", exc_info=True)
+        _log.warning("sync_garmin failed", exc_info=True)
         return "Couldn't reach Garmin just now — try again in a moment."
-    if not logged:
-        return "No new runs to import — the log's already up to date."
-    lines = [f"Imported {len(logged)} run(s) from Garmin:"]
-    for r in logged:
-        dist = f" — {r.distance_km}km" if r.distance_km is not None else ""
-        lines.append(f"  {r.ran_on.isoformat()}{dist}: {r.note}")
-    return "\n".join(lines)
+    bits = []
+    new_runs = result.get("new_runs") or 0
+    bits.append(f"{new_runs} new run(s)" if new_runs else "no new runs")
+    if result.get("health_through"):
+        days = result.get("health_records")
+        bits.append(f"health up to {result['health_through']}" + (f" ({days} day(s))" if days else ""))
+    return "Synced Garmin — " + ", ".join(bits) + "."
 
 
-def handle_review_run(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
-    which = input_dict.get("which")
-    try:
-        which = int(which) if which is not None else 0
-    except (TypeError, ValueError):
-        which = 0
-    which = max(0, which)
-    try:
-        detail = training_service.review_run(user_id, which=which)
-    except RuntimeError as exc:
-        return str(exc)
-    except Exception:
-        _log.warning("review_run failed", exc_info=True)
-        return "Couldn't reach Garmin just now — try again in a moment."
-    if detail is None:
-        return "No run found to review. Import recent runs from Garmin first, or check the number."
+def _fmt_run_detail(detail: dict) -> str:
     o = detail["overall"]
     head = o.get("name") or "run"
     bits = []
@@ -503,14 +461,10 @@ def training_tools(training_service) -> list[tuple[dict, Any]]:
          lambda uid, inp, now: handle_save_training_plan(uid, inp, now, training_service=training_service)),
         (LOG_RUN_TOOL,
          lambda uid, inp, now: handle_log_run(uid, inp, now, training_service=training_service)),
-        (PROVIDE_TRAINING_DATA_TOOL,
-         lambda uid, inp, now: handle_provide_training_data(uid, inp, now, training_service=training_service)),
         (PUSH_TO_WATCH_TOOL,
          lambda uid, inp, now: handle_push_to_watch(uid, inp, now, training_service=training_service)),
-        (IMPORT_RECENT_RUNS_TOOL,
-         lambda uid, inp, now: handle_import_recent_runs(uid, inp, now, training_service=training_service)),
-        (REVIEW_RUN_TOOL,
-         lambda uid, inp, now: handle_review_run(uid, inp, now, training_service=training_service)),
+        (SYNC_GARMIN_TOOL,
+         lambda uid, inp, now: handle_sync_garmin(uid, inp, now, training_service=training_service)),
     ]
 
 

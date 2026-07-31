@@ -43,6 +43,7 @@ class TelegramTrellis:
         reminders: ReminderService | None = None,
         transcriber: Transcriber | None = None,
         memory: MemoryIndex | None = None,
+        daily_garmin_sync: Callable[[], None] | None = None,
     ):
         self.settings = settings
         self.database = database
@@ -50,7 +51,9 @@ class TelegramTrellis:
         self.reminders = reminders
         self.transcriber = transcriber
         self.memory = memory
+        self._daily_garmin_sync = daily_garmin_sync
         self._reminder_delivery_task: asyncio.Task | None = None
+        self._garmin_sync_task: asyncio.Task | None = None
         self.logger = logging.getLogger(__name__)
 
     def build(self) -> Application:
@@ -69,21 +72,36 @@ class TelegramTrellis:
         return application
 
     async def _post_init(self, application: Application) -> None:
-        if self.reminders is None:
-            return
-        self._reminder_delivery_task = asyncio.create_task(
-            self._deliver_due_reminders_loop(application)
-        )
+        if self.reminders is not None:
+            self._reminder_delivery_task = asyncio.create_task(
+                self._deliver_due_reminders_loop(application)
+            )
+        if self._daily_garmin_sync is not None:
+            self._garmin_sync_task = asyncio.create_task(self._garmin_sync_loop())
 
     async def _post_shutdown(self, application: Application) -> None:
-        if self._reminder_delivery_task is None:
-            return
-        self._reminder_delivery_task.cancel()
-        try:
-            await self._reminder_delivery_task
-        except asyncio.CancelledError:
-            pass
-        self._reminder_delivery_task = None
+        for attr in ("_reminder_delivery_task", "_garmin_sync_task"):
+            task = getattr(self, attr)
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            setattr(self, attr, None)
+
+    async def _garmin_sync_loop(self) -> None:
+        """Refresh Garmin data for connected users once a day (health/readiness +
+        recent runs). Blocking work runs off the event loop; failures never crash the
+        bot. A short initial delay keeps startup snappy."""
+        await asyncio.sleep(60)
+        while True:
+            try:
+                await asyncio.to_thread(self._daily_garmin_sync)
+            except Exception:
+                self.logger.exception("Daily Garmin sync failed")
+            await asyncio.sleep(24 * 3600)
 
     async def _deliver_due_reminders_loop(self, application: Application) -> None:
         while True:

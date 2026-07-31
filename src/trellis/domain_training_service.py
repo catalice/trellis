@@ -2,17 +2,14 @@
 Training service — thin. The coaching judgment lives in the oracle turn (see
 domain_training_claude); this only: persists the plan, reads the goal from the
 second brain, OWNS THE CALENDAR (the real dates of this week — so the coach never
-invents them), and parses a Garmin CSV into a baseline summary. Returns typed data
-only — string formatting belongs to the tool handler.
+invents them), refreshes Garmin data, and builds structured workouts. Returns
+typed data only — string formatting belongs to the tool handler.
 """
 from __future__ import annotations
 
-import csv
-import io
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone, tzinfo
-from statistics import median
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -46,6 +43,12 @@ class HealthReader(Protocol):
     def latest_daily_health(self, user_id: UUID) -> Any: ...
 
 
+class GarminSyncPort(Protocol):
+    """Refresh synced Garmin data (daily health + activities + details) for a user
+    (see infra_garmin.GarminSyncService). Returns a summary with record counts."""
+    def sync_recent(self, user_id: UUID, *, days: int) -> Any: ...
+
+
 class WorkoutSpecError(ValueError):
     """The coach's workout spec couldn't be turned into a Garmin workout."""
 
@@ -60,6 +63,7 @@ class TrainingService:
         garmin_push: GarminWorkoutPort | None = None,
         garmin_read: GarminActivityPort | None = None,
         health_reader: HealthReader | None = None,
+        garmin_sync: GarminSyncPort | None = None,
     ) -> None:
         self._repo = repo
         self._goals = goals
@@ -67,6 +71,7 @@ class TrainingService:
         self._garmin_push = garmin_push
         self._garmin_read = garmin_read
         self._health = health_reader
+        self._garmin_sync = garmin_sync
 
     # -- plan (persist what the coach authors) --------------------------------
 
@@ -157,6 +162,44 @@ class TrainingService:
             )))
         return logged
 
+    def sync_garmin(self, user_id: UUID, *, now: datetime, days: int = 3) -> dict:
+        """Refresh this user's Garmin data: recent runs into the training log AND
+        recent daily health/activities/details into the health store. One shared
+        path for the on-demand tool and the daily background job. Best-effort per
+        part; raises RuntimeError only if the user isn't connected at all."""
+        if self._garmin_read is None and self._garmin_sync is None:
+            raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
+        result: dict[str, Any] = {"new_runs": 0, "health_records": None, "health_through": None}
+        connection_errors = 0
+        attempts = 0
+
+        if self._garmin_sync is not None:
+            attempts += 1
+            try:
+                summary = self._garmin_sync.sync_recent(user_id, days=days)
+                result["health_records"] = getattr(summary, "daily_health_records", None)
+                end = getattr(summary, "end_date", None)
+                result["health_through"] = end.isoformat() if end is not None else None
+            except RuntimeError:
+                connection_errors += 1
+            except Exception:
+                _log.warning("sync_garmin: health sync failed", exc_info=True)
+
+        if self._garmin_read is not None:
+            attempts += 1
+            try:
+                new = self.import_recent_runs(user_id, now=now, limit=20)
+                result["new_runs"] = len(new)
+            except RuntimeError:
+                connection_errors += 1
+            except Exception:
+                _log.warning("sync_garmin: run import failed", exc_info=True)
+
+        # If every part we tried failed because the user isn't connected, surface it.
+        if attempts and connection_errors == attempts:
+            raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
+        return result
+
     def review_run(self, user_id: UUID, *, which: int = 0) -> dict | None:
         """Full detail for one recent run (which=0 is the most recent): the overall
         summary + a per-split breakdown (pace + HR per lap/rep), so the coach can see
@@ -243,64 +286,6 @@ class TrainingService:
                 return s
         return None
 
-    # -- baseline from a Garmin activity export CSV (deterministic) ------------
-
-    def parse_garmin_csv(self, csv_text: str) -> dict:
-        """Parse a Garmin Connect activity-export CSV into a compact running baseline.
-        Deterministic + defensive: running rows only, tolerant of missing/renamed
-        columns and unit quirks. The coach interprets the numbers; this just extracts."""
-        try:
-            reader = csv.DictReader(io.StringIO(csv_text))
-            rows = list(reader)
-        except Exception:
-            _log.warning("parse_garmin_csv: could not read CSV", exc_info=True)
-            return {"error": "couldn't read that CSV"}
-
-        def col(row: dict, *names: str) -> str:
-            for key, val in row.items():
-                if key and key.strip().lower() in names:
-                    return (val or "").strip()
-            return ""
-
-        runs: list[dict] = []
-        for row in rows:
-            atype = col(row, "activity type").lower()
-            if "run" not in atype:
-                continue
-            d = _parse_date(col(row, "date"))
-            dist = _parse_float(col(row, "distance"))
-            runs.append({
-                "date": d,
-                "distance": dist,
-                "avg_hr": _parse_float(col(row, "avg hr")),
-                "max_hr": _parse_float(col(row, "max hr")),
-                "pace": col(row, "avg pace"),
-            })
-
-        dated = [r for r in runs if r["date"] is not None]
-        distances = [r["distance"] for r in runs if r["distance"]]
-        hrs = [r["avg_hr"] for r in runs if r["avg_hr"]]
-        summary: dict[str, Any] = {"total_runs": len(runs)}
-        if not runs:
-            summary["note"] = "no running activities found in the file"
-            return summary
-
-        if dated:
-            first, last = min(r["date"] for r in dated), max(r["date"] for r in dated)
-            summary["date_range"] = f"{first.isoformat()} to {last.isoformat()}"
-            weeks = max(1, ((last - first).days / 7) or 1)
-            if distances:
-                summary["avg_km_per_week"] = round(sum(distances) / weeks, 1)
-        if distances:
-            summary["total_km"] = round(sum(distances), 1)
-            summary["longest_run_km"] = round(max(distances), 1)
-            summary["typical_run_km"] = round(median(distances), 1)
-        if hrs:
-            summary["avg_hr"] = round(sum(hrs) / len(hrs))
-            summary["max_avg_hr"] = round(max(hrs))
-        summary["unit_note"] = "distances as given by the export (km or mi per the account)"
-        return summary
-
 
 # ---------------------------------------------------------------------------
 # Parse helpers
@@ -314,18 +299,6 @@ def _parse_float(value: str) -> float | None:
         return float(cleaned) if cleaned else None
     except ValueError:
         return None
-
-
-def _parse_date(value: str) -> date | None:
-    if not value:
-        return None
-    head = value.strip().split(" ")[0]
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(head, fmt).date()
-        except ValueError:
-            continue
-    return None
 
 
 def _activity_date(activity: Any, tz: tzinfo) -> date | None:

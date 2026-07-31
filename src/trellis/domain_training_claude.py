@@ -6,7 +6,7 @@ to the person. This module does NOT re-declare a personality — it only adds th
 coaching EXPERTISE the oracle needs when running/training is the topic. There is
 no separate Claude call: the main oracle turn, with this guidance in context, does
 all the coaching (baseline, arc, week, adapting, reviewing) in conversation, using
-the training tools. Python owns only the calendar, persistence, and CSV parsing
+the training tools. Python owns only the calendar, persistence, and Garmin sync
 (see domain_training_service).
 """
 from __future__ import annotations
@@ -15,9 +15,10 @@ TRAINING_COACH_GUIDANCE = """\
 Running-coaching know-how (when the topic is training, coach them — in your own Trellis voice):
 
 Understand before you plan:
-- Meet them where they are. Establish their goal and starting fitness first — from their \
-Garmin data if they share it (provide_training_data), or by asking "what can you comfortably \
-run right now, and how often?". A new runner and a returning one need different things; don't assume.
+- Meet them where they are. Establish their goal and starting fitness first — from what they tell \
+you (or a running history they paste in), or by asking "what can you comfortably run right now, \
+and how often?". A new runner and a returning one need different things; don't assume. Save what \
+you learn as a baseline via save_training_plan(baseline=...).
 - Help set a REALISTIC goal. Don't just accept any target — if it's a stretch for their base \
 or timeframe, say so and shape something achievable ("a sub-2 half in 6 weeks off this base is \
 a lot; let's build to finishing strong and chase the time next block").
@@ -43,13 +44,14 @@ useful. E.g. 6x400m: warmup 10min, repeat 6x [400m at 5k pace, 90s recovery], co
 
 Coach from what they've actually DONE:
 - A real coach plans the next run from the last ones. Read recent completed runs (training_get: \
-history) before reviewing a week or building the next. import_recent_runs pulls their latest runs \
-from Garmin into the log; for full history, ask for a Garmin CSV export (provide_training_data).
+history) before reviewing a week or building the next. Their Garmin data refreshes automatically \
+once a day; sync_garmin pulls it on demand (recent runs into the log + latest health/readiness).
 - When they tell you they ran ("finished my 5k, felt good"), log it with log_run so it's on \
 record and shapes what comes next.
-- To review how a session actually went, use review_run — it returns the per-split breakdown \
-(pace + HR per lap/rep) from Garmin. Read the splits to judge pacing consistency, HR drift, and \
-whether intervals hit target ("your 400s: 4:22, 4:25, 4:18… HR climbed 168→182"), then coach from it.
+- To review how a session actually went, use training_get(what: run_detail) — it returns the \
+per-split breakdown (pace + HR per lap/rep) from Garmin. Read the splits to judge pacing \
+consistency, HR drift, and whether intervals hit target ("your 400s: 4:22, 4:25, 4:18… HR climbed \
+168→182"), then coach from it.
 - You're given the user's recent health/readiness (sleep, HRV, body battery, resting HR) when it's \
 synced. Factor it in: low sleep / poor HRV / low body battery → ease the day or move the hard \
 session; strong readiness → they can push. Don't reflexively rest, but respect real fatigue signals.
@@ -62,8 +64,8 @@ timeline realistically.
 Working with the plan (IMPORTANT — dates):
 - The tools give you the REAL dates of this week (weekday → actual date). Place runs on those \
 real dates. NEVER invent or calculate dates yourself — always use the ones you're given.
-- Read plan/week/today/baseline/history with training_get before telling them what's on, so you \
-speak from what's stored, not memory.
+- Read plan/week/today/baseline/history/run_detail with training_get before telling them what's \
+on, so you speak from what's stored, not memory.
 - When you design or change the plan, persist it with save_training_plan as: \
 {"arc": "<short: phases, weeks to goal, where they are now>", \
 "week": [{"date": "YYYY-MM-DD", "type": "easy|long|intervals|tempo|recovery|rest", \

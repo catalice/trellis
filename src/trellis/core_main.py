@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -67,6 +67,7 @@ from trellis.infra_garmin import (
     GarminActivityReader,
     GarminClient,
     GarminDirectService,
+    GarminSyncService,
     PostgresGarminConnectionRepository,
 )
 from trellis.infra_tracking import PostgresHealthRepository
@@ -175,24 +176,31 @@ def main() -> None:
     state_service = StateService(state_repo, settings.timezone, projection=vault)
 
     # --- Training domain (reads goals from the second brain; stores its own plan) ---
-    # Garmin push (workouts -> watch) + recent-run read. Gated: needs the secret key
-    # (to decrypt the stored session) and, for reads, a health-worker URL. Absent ->
-    # the coach still plans; push/import tools just say "connect Garmin first".
+    # Garmin push (workouts -> watch) + recent-run read + data sync. Gated: needs the
+    # secret key (to decrypt the stored session) and, for reads/sync, a health-worker
+    # URL. Absent -> the coach still plans; the Garmin tools just say "connect first".
+    #
+    # Recent health/readiness (sleep, HRV, body battery) — synced by the health worker;
+    # the coach reads the latest to factor into planning. Always available as a reader;
+    # returns None per-user when there's no synced health yet.
+    health_reader = PostgresHealthRepository(database)
+
     garmin_push = None
     garmin_read = None
+    garmin_sync = None
     if settings.trellis_secret_key.strip():
         garmin_connections = PostgresGarminConnectionRepository(database, settings.trellis_secret_key)
         garmin_push = GarminDirectService(garmin_connections)
         if settings.health_worker_url.strip() and settings.health_worker_secret.strip():
-            garmin_read = GarminActivityReader(
-                garmin_connections,
-                GarminClient(settings.health_worker_url, settings.health_worker_secret),
+            garmin_client = GarminClient(
+                settings.health_worker_url, settings.health_worker_secret, timeout=120.0,
             )
-
-    # Recent health/readiness (sleep, HRV, body battery) — synced by the health
-    # worker; the coach reads the latest to factor into planning. Always available
-    # as a reader; returns None per-user when there's no synced health yet.
-    health_reader = PostgresHealthRepository(database)
+            garmin_read = GarminActivityReader(garmin_connections, garmin_client)
+            garmin_sync = GarminSyncService(
+                connection_repository=garmin_connections,
+                health_repository=health_reader,
+                client=garmin_client,
+            )
 
     training_service = TrainingService(
         PostgresTrainingRepository(database),
@@ -201,6 +209,7 @@ def main() -> None:
         garmin_push=garmin_push,
         garmin_read=garmin_read,
         health_reader=health_reader,
+        garmin_sync=garmin_sync,
     )
 
     # --- Registry ---
@@ -288,6 +297,22 @@ def main() -> None:
         ],
     )
 
+    # Daily background Garmin refresh — keeps each connected user's health/readiness
+    # and recent runs current without them asking. Best-effort per user (non-connected
+    # users just raise "connect first", which we swallow). Same path as the on-demand
+    # sync_garmin tool. Only wired when Garmin sync is configured.
+    daily_garmin_sync = None
+    if garmin_sync is not None:
+        def daily_garmin_sync() -> None:
+            now = datetime.now(timezone.utc)
+            for uid, _telegram_id in database.list_users():
+                try:
+                    training_service.sync_garmin(uid, now=now, days=3)
+                except Exception:
+                    logging.getLogger("trellis.core_main").debug(
+                        "daily garmin sync skipped for %s", uid, exc_info=True
+                    )
+
     application = TelegramTrellis(
         settings,
         database,
@@ -295,6 +320,7 @@ def main() -> None:
         reminder_service,
         transcriber=transcriber,
         memory=memory,
+        daily_garmin_sync=daily_garmin_sync,
     ).build()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
