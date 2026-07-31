@@ -282,34 +282,44 @@ class ObsidianVault:
                     key=lambda s: s.felt_at,
                 )
                 day_events = by_day_events.get(day, [])
-                line = f"**{day.strftime('%a %d %b')}**"
+                # Day header + the energy/mood timeline on its own line.
+                parts.append(f"**{day.strftime('%a %d %b')}**")
                 timeline = _timeline(day_states, self._tz)
                 if timeline:
-                    line += f"  `{timeline}`"
+                    parts.append(f"`{timeline}`")
 
-                extras = []
+                # Group the day's events, then emit each as its own labelled line
+                # (clearer + scannable than one crammed clause).
+                meds, sleeps, cycle_notes = [], [], []
                 for e in day_events:
                     if e.event_type == TrackingEventType.MEDS:
                         t = e.occurred_at.astimezone(self._tz).strftime("%H:%M")
-                        extras.append(f"{e.detail or 'meds'} {t}")
+                        meds.append(f"{e.detail or 'meds'} {t}")
                     elif e.event_type == TrackingEventType.SLEEP:
                         bits = []
                         if e.value is not None:
                             bits.append(f"{e.value:g}h")
                         if e.detail:
                             bits.append(e.detail)
-                        extras.append("slept " + " ".join(bits) if bits else "sleep logged")
+                        sleeps.append(" ".join(bits) if bits else "logged")
                     elif e.event_type == TrackingEventType.PERIOD_START:
-                        extras.append("period started")
+                        cycle_notes.append("period started")
                     elif e.event_type == TrackingEventType.PERIOD_END:
-                        extras.append("period ended")
+                        cycle_notes.append("period ended")
+
+                cycle_day = None
                 if period_start is not None:
                     delta = (day - period_start.occurred_at.astimezone(self._tz).date()).days
                     if 0 <= delta < 60:
-                        extras.append(f"cycle d{delta + 1}")
-                if extras:
-                    line += "  — " + ", ".join(extras)
-                parts.append(line)
+                        cycle_day = delta + 1
+
+                if meds:
+                    parts.append(f"**Meds:** {', '.join(meds)}")
+                if sleeps:
+                    parts.append(f"**Sleep:** {', '.join(sleeps)}")
+                if cycle_day is not None or cycle_notes:
+                    cyc = ([f"day {cycle_day}"] if cycle_day is not None else []) + cycle_notes
+                    parts.append(f"**Cycle:** {' · '.join(cyc)}")
 
                 for s in day_states:
                     t = s.felt_at.astimezone(self._tz).strftime("%H:%M")
