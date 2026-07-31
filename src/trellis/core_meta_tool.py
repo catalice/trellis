@@ -90,7 +90,7 @@ SAVE_PREFERENCES_TOOL = {
         "properties": {
             "domain": {
                 "type": "string",
-                "enum": ["second_brain", "training", "learn"],
+                "enum": ["second_brain", "move", "learn"],
                 "description": "Which domain these preferences apply to.",
             },
             "content": {

@@ -27,15 +27,15 @@ UID = uuid4()
 
 
 class TestRouter:
-    SIGNALS = {"second_brain": ["task", "remind"], "training": ["run", "garmin"]}
+    SIGNALS = {"second_brain": ["task", "remind"], "move": ["run", "garmin"]}
 
     def test_matches_signal(self):
         r = Router(self.SIGNALS, default_domain="second_brain")
-        assert r.route("how was my run") == {"training"}
+        assert r.route("how was my run") == {"move"}
 
     def test_multiple_domains(self):
         r = Router(self.SIGNALS, default_domain="second_brain")
-        assert r.route("task list before my run") == {"second_brain", "training"}
+        assert r.route("task list before my run") == {"second_brain", "move"}
 
     def test_unmatched_goes_to_default(self):
         r = Router(self.SIGNALS, default_domain="second_brain")

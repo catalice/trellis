@@ -11,7 +11,7 @@ from uuid import UUID
 
 from psycopg2.extras import Json, RealDictCursor
 
-from trellis.domain_training_models import RunLog, TrainingPlan
+from trellis.domain_move_models import RunLog, TrainingPlan
 
 _log = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class TrainingRepository(Protocol):
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]: ...
 
 
-class PostgresTrainingRepository:
+class PostgresMoveRepository:
     def __init__(self, database: Any) -> None:
         self._db = database
 

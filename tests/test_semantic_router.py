@@ -17,11 +17,11 @@ import unittest
 
 from trellis.infra_router import SemanticRouter
 from trellis.domain_second_brain_tool import SECOND_BRAIN_DESCRIPTION
-from trellis.domain_training_tool import TRAINING_DESCRIPTION
+from trellis.domain_move_tool import MOVE_DESCRIPTION
 
 DESCRIPTIONS = {
     "second_brain": SECOND_BRAIN_DESCRIPTION,
-    "training": TRAINING_DESCRIPTION,
+    "move": MOVE_DESCRIPTION,
 }
 
 
@@ -53,15 +53,15 @@ def _router(mapping, **kw) -> SemanticRouter:
 
 
 class TestRoutingLogic(unittest.TestCase):
-    # Room description vectors: training -> x-axis, second_brain -> y-axis.
-    BASE = {TRAINING_DESCRIPTION: [1.0, 0.0, 0.0], SECOND_BRAIN_DESCRIPTION: [0.0, 1.0, 0.0]}
+    # Room description vectors: move -> x-axis, second_brain -> y-axis.
+    BASE = {MOVE_DESCRIPTION: [1.0, 0.0, 0.0], SECOND_BRAIN_DESCRIPTION: [0.0, 1.0, 0.0]}
 
     def _map(self, msg, vec):
         return {**self.BASE, msg: vec}
 
-    def test_clear_training_routes_training_only(self):
+    def test_clear_move_routes_move_only(self):
         r = _router(self._map("m", [1.0, 0.0, 0.0]))
-        self.assertEqual(r.route("m"), {"training"})
+        self.assertEqual(r.route("m"), {"move"})
 
     def test_clear_second_brain_routes_second_brain_only(self):
         r = _router(self._map("m", [0.0, 1.0, 0.0]))
@@ -70,7 +70,7 @@ class TestRoutingLogic(unittest.TestCase):
     def test_ambiguous_loads_both(self):
         # Equidistant from both -> within close margin -> both rooms.
         r = _router(self._map("m", [0.7, 0.7, 0.0]))
-        self.assertEqual(r.route("m"), {"training", "second_brain"})
+        self.assertEqual(r.route("m"), {"move", "second_brain"})
 
     def test_weak_match_routes_empty(self):
         # Orthogonal to both room vectors -> top score 0 < min_score -> empty.
@@ -78,9 +78,9 @@ class TestRoutingLogic(unittest.TestCase):
         self.assertEqual(r.route("m"), set())
 
     def test_clearly_ahead_not_ambiguous(self):
-        # Strong training, weak-but-nonzero second_brain beyond the close margin.
+        # Strong move, weak-but-nonzero second_brain beyond the close margin.
         r = _router(self._map("m", [1.0, 0.1, 0.0]))
-        self.assertEqual(r.route("m"), {"training"})
+        self.assertEqual(r.route("m"), {"move"})
 
     def test_embedder_down_uses_fallback(self):
         r = SemanticRouter(DESCRIPTIONS, BrokenEmbedder(), fallback=_KeywordFallback())
@@ -88,7 +88,7 @@ class TestRoutingLogic(unittest.TestCase):
 
     def test_embedder_down_no_fallback_loads_all(self):
         r = SemanticRouter(DESCRIPTIONS, BrokenEmbedder())
-        self.assertEqual(r.route("anything"), {"second_brain", "training"})
+        self.assertEqual(r.route("anything"), {"second_brain", "move"})
 
     def test_room_vectors_embedded_once(self):
         calls = {"n": 0}
@@ -108,15 +108,15 @@ class TestRoutingLogic(unittest.TestCase):
 
 # --- Layer 2: live proof against the real (local) embedder -----------------
 
-# message -> expected room in the ROUTE result. "training"/"second_brain" = that
+# message -> expected room in the ROUTE result. "move"/"second_brain" = that
 # room must be routed. "BORDERLINE" = genuinely ambiguous with the current
 # descriptions (informational only — printed, not asserted; these are the
 # description-tuning candidates surfaced by the real score table).
 LIVE_CASES = [
-    # clear training — distinctive running language
-    ("6x400m intervals felt awful", "training"),
-    ("did I sleep ok for a run tomorrow?", "training"),
-    ("push my long run to sunday", "training"),
+    # clear move — distinctive running language
+    ("6x400m intervals felt awful", "move"),
+    ("did I sleep ok for a run tomorrow?", "move"),
+    ("push my long run to sunday", "move"),
     # clear second_brain / big-brain
     ("add milk to my shopping list", "second_brain"),
     ("remind me to call the dentist", "second_brain"),
@@ -146,18 +146,18 @@ class TestLiveRouting(unittest.TestCase):
             self.skipTest("local embedder unavailable — skipping live check")
 
         print("\n\n=== SEMANTIC ROUTER — real score table (local bge-small) ===")
-        print(f"{'message':<38} {'training':>9} {'2nd_brain':>10}  -> routed")
+        print(f"{'message':<38} {'move':>9} {'2nd_brain':>10}  -> routed")
         mismatches = []
         for msg, expected in LIVE_CASES:
             scores = router.scores(msg)
             if scores is None:
                 self.skipTest("embedder went unavailable mid-run")
             routed = router.route(msg)
-            t, sb = scores.get("training", 0.0), scores.get("second_brain", 0.0)
+            t, sb = scores.get("move", 0.0), scores.get("second_brain", 0.0)
             tag = "  (borderline)" if expected == "BORDERLINE" else ""
             print(f"{msg[:37]:<38} {t:>9.3f} {sb:>10.3f}  -> {sorted(routed) or '[]'}{tag}")
             # Assert only the CLEAR cases: the expected room must be in the route.
-            if expected in ("training", "second_brain") and expected not in routed:
+            if expected in ("move", "second_brain") and expected not in routed:
                 mismatches.append((msg, expected, sorted(routed), round(t, 3), round(sb, 3)))
         print("=== borderline rows are description-tuning candidates, not failures ===\n")
         self.assertEqual(

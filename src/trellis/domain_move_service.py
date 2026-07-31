@@ -1,6 +1,6 @@
 """
 Training service — thin. The coaching judgment lives in the oracle turn (see
-domain_training_claude); this only: persists the plan, reads the goal from the
+domain_move_claude); this only: persists the plan, reads the goal from the
 second brain, OWNS THE CALENDAR (the real dates of this week — so the coach never
 invents them), refreshes Garmin data, and builds structured workouts. Returns
 typed data only — string formatting belongs to the tool handler.
@@ -13,8 +13,8 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from trellis.domain_training_models import RunLog, TrainingPlan
-from trellis.domain_training_repo import TrainingRepository
+from trellis.domain_move_models import RunLog, TrainingPlan
+from trellis.domain_move_repo import TrainingRepository
 
 _log = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class WorkoutSpecError(ValueError):
     """The coach's workout spec couldn't be turned into a Garmin workout."""
 
 
-class TrainingService:
+class MoveService:
     def __init__(
         self,
         repo: TrainingRepository,

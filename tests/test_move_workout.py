@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import unittest
 
-from trellis.domain_training_service import (
+from trellis.domain_move_service import (
     WorkoutSpecError,
     build_garmin_workout,
 )

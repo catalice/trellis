@@ -71,13 +71,13 @@ from trellis.infra_garmin import (
     PostgresGarminConnectionRepository,
 )
 from trellis.infra_tracking import PostgresHealthRepository
-from trellis.domain_training_repo import PostgresTrainingRepository
-from trellis.domain_training_service import TrainingService
-from trellis.domain_training_tool import (
-    TRAINING_SIGNALS,
-    training_context_loader,
-    training_snapshot,
-    training_tools,
+from trellis.domain_move_repo import PostgresMoveRepository
+from trellis.domain_move_service import MoveService
+from trellis.domain_move_tool import (
+    MOVE_SIGNALS,
+    move_context_loader,
+    move_snapshot,
+    move_tools,
 )
 
 
@@ -203,8 +203,8 @@ def main() -> None:
                 client=garmin_client,
             )
 
-    training_service = TrainingService(
-        PostgresTrainingRepository(database),
+    move_service = MoveService(
+        PostgresMoveRepository(database),
         goal_service,
         settings.timezone,
         garmin_push=garmin_push,
@@ -236,10 +236,10 @@ def main() -> None:
     )
 
     registry.add_domain(
-        "training",
-        training_context_loader(training_service, goal_service),
-        training_tools(training_service),
-        TRAINING_SIGNALS,
+        "move",
+        move_context_loader(move_service, goal_service),
+        move_tools(move_service),
+        MOVE_SIGNALS,
     )
 
     oracle = Oracle(client=anthropic_client, model=settings.anthropic_model)
@@ -276,7 +276,7 @@ def main() -> None:
             ("profile", _profile_loader(profile_service)),
             ("current_context", _current_context_loader(context_service)),
             ("snapshot", second_brain_snapshot(task_service, reminder_service, state_service)),
-            ("training_snapshot", training_snapshot(training_service)),
+            ("move_snapshot", move_snapshot(move_service)),
         ],
         always_tools=always_tools,
         summariser=summariser,
@@ -308,7 +308,7 @@ def main() -> None:
             now = datetime.now(timezone.utc)
             for uid, _telegram_id in database.list_users():
                 try:
-                    training_service.sync_garmin(uid, now=now, days=3)
+                    move_service.sync_garmin(uid, now=now, days=3)
                 except Exception:
                     logging.getLogger("trellis.core_main").debug(
                         "daily garmin sync skipped for %s", uid, exc_info=True

@@ -7,11 +7,11 @@ coaching EXPERTISE the oracle needs when running/training is the topic. There is
 no separate Claude call: the main oracle turn, with this guidance in context, does
 all the coaching (baseline, arc, week, adapting, reviewing) in conversation, using
 the training tools. Python owns only the calendar, persistence, and Garmin sync
-(see domain_training_service).
+(see domain_move_service).
 """
 from __future__ import annotations
 
-TRAINING_COACH_GUIDANCE = """\
+MOVE_COACH_GUIDANCE = """\
 Running-coaching know-how (when the topic is training, coach them — in your own Trellis voice):
 
 Understand before you plan:

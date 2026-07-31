@@ -1,12 +1,12 @@
 """
 Tools for the running coach — the coach's hands. The coaching itself happens in the
-oracle turn (persona in domain_training_claude); these just let it read context and
+oracle turn (persona in domain_move_claude); these just let it read context and
 persist the plan.
 
 Handler signature: (user_id, input_dict, now) -> str
-Context loader: training_context_loader (Tier 1b — carries the coach persona)
-Snapshot: training_snapshot (Tier 2 — today's run, existence only)
-Registration: training_tools(...)
+Context loader: move_context_loader (Tier 1b — carries the coach persona)
+Snapshot: move_snapshot (Tier 2 — today's run, existence only)
+Registration: move_tools(...)
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
 
-from trellis.domain_training_claude import TRAINING_COACH_GUIDANCE
+from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
 
 _log = logging.getLogger(__name__)
 
@@ -130,18 +130,18 @@ SYNC_GARMIN_TOOL: dict = {
 # Handlers
 # ---------------------------------------------------------------------------
 
-def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
     what = str(input_dict.get("what", ""))
 
     if what == "today":
-        session = training_service.todays_session(user_id, now)
+        session = move_service.todays_session(user_id, now)
         if session is None:
             return "Nothing stored for today. If there's no plan yet, offer to build one."
         return "Today: " + _fmt_session(session)
 
     if what == "week":
-        real = training_service.current_week(now)
-        stored = {s.get("date"): s for s in training_service.week_sessions(user_id)}
+        real = move_service.current_week(now)
+        stored = {s.get("date"): s for s in move_service.week_sessions(user_id)}
         lines = ["This week (real dates):"]
         for day in real:
             marker = " <- today" if day["is_today"] else ""
@@ -151,25 +151,25 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
         return "\n".join(lines)
 
     if what == "plan":
-        plan = training_service.get_plan(user_id)
+        plan = move_service.get_plan(user_id)
         if plan is None or not plan.plan:
             return "No plan stored yet. Understand their goal + starting point, then build one."
         arc = plan.plan.get("arc") or "(no arc summary yet)"
         lines = [f"Arc: {arc}"]
-        sessions = training_service.week_sessions(user_id)
+        sessions = move_service.week_sessions(user_id)
         if sessions:
             lines.append("Stored week:")
             lines.extend("  " + _fmt_session(s) for s in sessions)
         return "\n".join(lines)
 
     if what == "baseline":
-        plan = training_service.get_plan(user_id)
+        plan = move_service.get_plan(user_id)
         if plan is None or not plan.baseline:
             return "No baseline yet. Ask for their Garmin data or what they can currently run."
         return f"Baseline: {plan.baseline}"
 
     if what == "history":
-        runs = training_service.recent_runs(user_id)
+        runs = move_service.recent_runs(user_id)
         if not runs:
             return "No runs logged yet — sync_garmin pulls recent runs from their watch."
         lines = ["Recent runs (most recent first):"]
@@ -185,7 +185,7 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
         except (TypeError, ValueError):
             which = 0
         try:
-            detail = training_service.review_run(user_id, which=which)
+            detail = move_service.review_run(user_id, which=which)
         except RuntimeError as exc:
             return str(exc)
         except Exception:
@@ -198,7 +198,7 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
     if what == "readiness":
         health = None
         try:
-            health = training_service.recent_health(user_id)
+            health = move_service.recent_health(user_id)
         except Exception:
             _log.warning("readiness load failed", exc_info=True)
         line = _fmt_health(health)
@@ -210,7 +210,7 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
     return "Unknown request. Use what: plan, week, today, baseline, history, run_detail, or readiness."
 
 
-def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
     plan = input_dict.get("plan")
     if isinstance(plan, str):
         try:
@@ -222,9 +222,9 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
     baseline = input_dict.get("baseline")
     baseline = str(baseline) if baseline is not None else None
     try:
-        goals = training_service.training_goals(user_id)
+        goals = move_service.training_goals(user_id)
         goal_id = goals[0].id if goals else None
-        training_service.save_plan(user_id, plan=plan, baseline=baseline, goal_id=goal_id)
+        move_service.save_plan(user_id, plan=plan, baseline=baseline, goal_id=goal_id)
     except Exception:
         _log.warning("save_training_plan failed", exc_info=True)
         return "Couldn't save the plan just now — try again in a moment."
@@ -232,7 +232,7 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
     return f"Saved the plan ({n} day(s) this week)."
 
 
-def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
     workout = input_dict.get("workout")
     if isinstance(workout, str):
         try:
@@ -247,7 +247,7 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, trai
     except ValueError:
         return "I need a real date (YYYY-MM-DD) to schedule it — use one of this week's dates."
     try:
-        name = training_service.push_workout_to_watch(user_id, workout, on_date)
+        name = move_service.push_workout_to_watch(user_id, workout, on_date)
     except ValueError as exc:  # WorkoutSpecError
         return f"That workout spec didn't work: {exc}. Check the steps and try again."
     except RuntimeError as exc:
@@ -258,9 +258,9 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, trai
     return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
 
 
-def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
     try:
-        result = training_service.sync_garmin(user_id, now=now)
+        result = move_service.sync_garmin(user_id, now=now)
     except RuntimeError as exc:
         return str(exc)
     except Exception:
@@ -342,12 +342,12 @@ def _fmt_run_detail(detail: dict) -> str:
 # Context loader (Tier 1b) + snapshot (Tier 2)
 # ---------------------------------------------------------------------------
 
-def training_context_loader(training_service, goal_reader) -> ContextLoader:
+def move_context_loader(move_service, goal_reader) -> ContextLoader:
     """Loaded only when training is routed. Carries the coach persona + the goal +
     the stored plan + THIS WEEK's real dates, so the coach speaks from reality and
     never invents dates."""
     def loader(user_id: UUID, now: datetime) -> str | None:
-        parts: list[str] = [TRAINING_COACH_GUIDANCE]
+        parts: list[str] = [MOVE_COACH_GUIDANCE]
 
         try:
             goals = goal_reader.list_training_goals(user_id)
@@ -359,7 +359,7 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
             _log.warning("training_context: goals load failed", exc_info=True)
 
         try:
-            plan = training_service.get_plan(user_id)
+            plan = move_service.get_plan(user_id)
             if plan is None or not plan.plan:
                 parts.append("No plan stored yet — understand their starting point, then build one.")
             else:
@@ -373,7 +373,7 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
         # Recent health/readiness (if Garmin health is synced) — so the coach can
         # factor sleep/HRV/body battery into the week. Best-effort, skipped if none.
         try:
-            line = _fmt_health(training_service.recent_health(user_id))
+            line = _fmt_health(move_service.recent_health(user_id))
             if line:
                 parts.append("Recent health/readiness: " + line)
         except Exception:
@@ -381,7 +381,7 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
 
         # Always give the real calendar so runs land on real days.
         try:
-            week = training_service.current_week(now)
+            week = move_service.current_week(now)
             parts.append(
                 "This week's real dates:\n"
                 + "\n".join(f"  {d['weekday']} {d['date']}" + (" (today)" if d["is_today"] else "") for d in week)
@@ -394,26 +394,26 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
     return loader
 
 
-def training_snapshot(training_service) -> ContextLoader:
+def move_snapshot(move_service) -> ContextLoader:
     """Tier 2 — always loaded every turn (not gated by routing). Surfaces today's
     run (if planned) and the latest Garmin readiness (if synced), so the coach
     always knows this data exists and never denies having it."""
     def loader(user_id: UUID, now: datetime) -> str | None:
         lines: list[str] = []
         try:
-            session = training_service.todays_session(user_id, now)
+            session = move_service.todays_session(user_id, now)
             if session:
                 lines.append(
                     f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
                 )
         except Exception:
-            _log.warning("training_snapshot session failed", exc_info=True)
+            _log.warning("move_snapshot session failed", exc_info=True)
         try:
-            health = _fmt_health(training_service.recent_health(user_id))
+            health = _fmt_health(move_service.recent_health(user_id))
             if health:
                 lines.append(f"Garmin readiness ({health}) — available via training_get(readiness)")
         except Exception:
-            _log.warning("training_snapshot health failed", exc_info=True)
+            _log.warning("move_snapshot health failed", exc_info=True)
         return "\n".join(lines) if lines else None
 
     return loader
@@ -423,7 +423,7 @@ def training_snapshot(training_service) -> ContextLoader:
 # Routing signals
 # ---------------------------------------------------------------------------
 
-TRAINING_SIGNALS: list[str] = [
+MOVE_SIGNALS: list[str] = [
     "run", "running", "ran", "jog", "training", "train",
     "workout", "session", "long run", "easy run", "intervals", "tempo",
     "pace", "mileage", "marathon", "5k", "10k", "half marathon", "race", "coach",
@@ -431,7 +431,7 @@ TRAINING_SIGNALS: list[str] = [
 
 # Self-description for semantic routing (the running-coach room). Embedded and
 # matched against a message by MEANING — lists the KINDS of things it handles.
-TRAINING_DESCRIPTION: str = (
+MOVE_DESCRIPTION: str = (
     "The running coach. Training plans and what to run this week or today; workouts and "
     "sessions — easy runs, long runs, intervals, sprints, tempo; pace and heart rate; "
     "building fitness toward a race or distance; recovery and readiness (sleep, HRV, body "
@@ -444,16 +444,16 @@ TRAINING_DESCRIPTION: str = (
 # Registration factory
 # ---------------------------------------------------------------------------
 
-def training_tools(training_service) -> list[tuple[dict, Any]]:
+def move_tools(move_service) -> list[tuple[dict, Any]]:
     return [
         (TRAINING_GET_TOOL,
-         lambda uid, inp, now: handle_training_get(uid, inp, now, training_service=training_service)),
+         lambda uid, inp, now: handle_training_get(uid, inp, now, move_service=move_service)),
         (SAVE_TRAINING_PLAN_TOOL,
-         lambda uid, inp, now: handle_save_training_plan(uid, inp, now, training_service=training_service)),
+         lambda uid, inp, now: handle_save_training_plan(uid, inp, now, move_service=move_service)),
         (PUSH_TO_WATCH_TOOL,
-         lambda uid, inp, now: handle_push_to_watch(uid, inp, now, training_service=training_service)),
+         lambda uid, inp, now: handle_push_to_watch(uid, inp, now, move_service=move_service)),
         (SYNC_GARMIN_TOOL,
-         lambda uid, inp, now: handle_sync_garmin(uid, inp, now, training_service=training_service)),
+         lambda uid, inp, now: handle_sync_garmin(uid, inp, now, move_service=move_service)),
     ]
 
 
