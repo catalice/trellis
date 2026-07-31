@@ -17,9 +17,9 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, "src")
 from trellis.domain_second_brain_models import Capture, Effort, Task
-from trellis.infra_embeddings import GitHubModelsEmbedder
+from trellis.infra_embeddings import LocalEmbedder
 from trellis.infra_memory import MemoryIndex
-from trellis.postgres import PostgresDatabase
+from trellis.infra_postgres import PostgresDatabase
 
 # Host-reachable URL for the running container (compose exposes 5432 -> 5433).
 DB_URL = os.getenv(
@@ -29,13 +29,9 @@ DB_URL = os.getenv(
 
 def main() -> int:
     load_dotenv()
-    token = os.getenv("GITHUB_TOKEN", "")
-    if not token:
-        print("GITHUB_TOKEN missing — set it in .env first.")
-        return 1
-
+    # Local embedder — no key needed.
     database = PostgresDatabase(DB_URL)
-    memory = MemoryIndex(database, GitHubModelsEmbedder(token))
+    memory = MemoryIndex(database, LocalEmbedder())
 
     # (entity_kind, entity_id, user_id, text) for everything not yet filed.
     targets: list[tuple[str, object, object, str]] = []

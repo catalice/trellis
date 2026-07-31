@@ -17,7 +17,7 @@ from trellis.core_oracle import Oracle
 from trellis.core_registry import TrellisRegistry
 from trellis.core_summariser import make_summariser
 from trellis.core_telegram import TelegramTrellis, make_transcriber
-from trellis.infra_embeddings import GitHubModelsEmbedder
+from trellis.infra_embeddings import LocalEmbedder
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_obsidian import ObsidianVault
 from trellis.infra_search import TavilySearch
@@ -124,10 +124,11 @@ def main() -> None:
     # Web search — read-only window on the outside world. None if no key configured.
     web_search = TavilySearch(settings.tavily_api_key) if settings.tavily_api_key else None
 
-    # Embeddings — semantic memory. None if no token configured: writes still
-    # save (with a NULL embedding, caught up by the backfill), and recall simply
-    # reports itself unavailable. Nothing breaks when it's absent.
-    embedder = GitHubModelsEmbedder(settings.github_token) if settings.github_token else None
+    # Embeddings — semantic memory, LOCAL (fastembed/bge-small). No key, no
+    # network, no rate limits — always available. The model loads lazily on first
+    # embed. Any failure degrades gracefully (embed returns None -> NULL embedding,
+    # recall reports unavailable), nothing crashes.
+    embedder = LocalEmbedder()
 
     # The one Trellis-wide meaning index — every domain files cards here and
     # recall searches across the lot. Uses the embedder above; when that's None,
