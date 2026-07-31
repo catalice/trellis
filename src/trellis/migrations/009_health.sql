@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS health_sync_runs (
     provider TEXT NOT NULL DEFAULT 'garmin'
         CHECK (provider IN ('garmin', 'self_report')),
     sync_kind TEXT NOT NULL
-        CHECK (sync_kind IN ('daily_health', 'activities')),
+        CHECK (sync_kind IN ('daily_health', 'activities', 'activity_details')),
     status TEXT NOT NULL DEFAULT 'running'
         CHECK (status IN ('running', 'succeeded', 'failed')),
     start_date DATE,
@@ -81,6 +81,24 @@ CREATE TABLE IF NOT EXISTS garmin_activities (
 
 CREATE INDEX IF NOT EXISTS garmin_activities_user_start_idx
     ON garmin_activities(user_id, start_time_epoch_seconds DESC);
+
+CREATE TABLE IF NOT EXISTS garmin_activity_details (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES trellis_users(id) ON DELETE CASCADE,
+    activity_id TEXT NOT NULL,
+    raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    splits JSONB NOT NULL DEFAULT '{}'::jsonb,
+    split_summaries JSONB NOT NULL DEFAULT '{}'::jsonb,
+    typed_splits JSONB NOT NULL DEFAULT '{}'::jsonb,
+    exercise_sets JSONB NOT NULL DEFAULT '{}'::jsonb,
+    sync_run_id UUID REFERENCES health_sync_runs(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, activity_id)
+);
+
+CREATE INDEX IF NOT EXISTS garmin_activity_details_user_idx
+    ON garmin_activity_details(user_id, activity_id);
 
 CREATE TABLE IF NOT EXISTS health_self_reports (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
