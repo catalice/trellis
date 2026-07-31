@@ -69,6 +69,7 @@ from trellis.infra_garmin import (
     GarminDirectService,
     PostgresGarminConnectionRepository,
 )
+from trellis.infra_tracking import PostgresHealthRepository
 from trellis.domain_training_repo import PostgresTrainingRepository
 from trellis.domain_training_service import TrainingService
 from trellis.domain_training_tool import (
@@ -188,12 +189,18 @@ def main() -> None:
                 GarminClient(settings.health_worker_url, settings.health_worker_secret),
             )
 
+    # Recent health/readiness (sleep, HRV, body battery) — synced by the health
+    # worker; the coach reads the latest to factor into planning. Always available
+    # as a reader; returns None per-user when there's no synced health yet.
+    health_reader = PostgresHealthRepository(database)
+
     training_service = TrainingService(
         PostgresTrainingRepository(database),
         goal_service,
         settings.timezone,
         garmin_push=garmin_push,
         garmin_read=garmin_read,
+        health_reader=health_reader,
     )
 
     # --- Registry ---

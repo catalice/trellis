@@ -162,6 +162,24 @@ IMPORT_RECENT_RUNS_TOOL: dict = {
     },
 }
 
+REVIEW_RUN_TOOL: dict = {
+    "name": "review_run",
+    "description": (
+        "Get the full DETAIL of a recent run from Garmin — the per-split/lap breakdown (pace and HR "
+        "per rep) plus the overall summary — so you can see how the intervals, pacing and HR actually "
+        "went and coach from it. Use when reviewing a session ('how did my intervals go?')."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "which": {
+                "type": "integer",
+                "description": "Which recent run: 0 = most recent (default), 1 = the one before, etc.",
+            },
+        },
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Handlers
@@ -321,6 +339,57 @@ def handle_import_recent_runs(user_id: UUID, input_dict: dict, now: datetime, *,
     return "\n".join(lines)
 
 
+def handle_review_run(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
+    which = input_dict.get("which")
+    try:
+        which = int(which) if which is not None else 0
+    except (TypeError, ValueError):
+        which = 0
+    which = max(0, which)
+    try:
+        detail = training_service.review_run(user_id, which=which)
+    except RuntimeError as exc:
+        return str(exc)
+    except Exception:
+        _log.warning("review_run failed", exc_info=True)
+        return "Couldn't reach Garmin just now — try again in a moment."
+    if detail is None:
+        return "No run found to review. Import recent runs from Garmin first, or check the number."
+    o = detail["overall"]
+    head = o.get("name") or "run"
+    bits = []
+    if o.get("date"):
+        bits.append(o["date"])
+    if o.get("distance_km") is not None:
+        bits.append(f"{o['distance_km']}km")
+    if o.get("duration_min") is not None:
+        bits.append(f"{o['duration_min']}min")
+    if o.get("avg_hr"):
+        bits.append(f"avg HR {o['avg_hr']}")
+    if o.get("max_hr"):
+        bits.append(f"max HR {o['max_hr']}")
+    lines = [f"{head} — " + ", ".join(bits) if bits else head]
+    splits = detail.get("splits") or []
+    if splits:
+        lines.append("Splits:")
+        for s in splits:
+            seg = [f"  #{s['i']}"]
+            if s.get("distance_km") is not None:
+                seg.append(f"{s['distance_km']}km")
+            if s.get("time"):
+                seg.append(s["time"])
+            if s.get("pace"):
+                seg.append(s["pace"])
+            if s.get("avg_hr"):
+                seg.append(f"HR {s['avg_hr']}")
+            if s.get("max_hr"):
+                seg.append(f"(max {s['max_hr']})")
+            lines.append(" ".join(seg))
+    else:
+        lines.append("(no per-split detail available for this run)")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Context loader (Tier 1b) + snapshot (Tier 2)
 # ---------------------------------------------------------------------------
@@ -352,6 +421,34 @@ def training_context_loader(training_service, goal_reader) -> ContextLoader:
                     parts.append("Baseline: " + plan.baseline)
         except Exception:
             _log.warning("training_context: plan load failed", exc_info=True)
+
+        # Recent health/readiness (if Garmin health is synced) — so the coach can
+        # factor sleep/HRV/body battery into the week. Best-effort, skipped if none.
+        try:
+            health = training_service.recent_health(user_id)
+            if health:
+                bits = []
+                if health.get("date"):
+                    bits.append(f"as of {health['date']}")
+                if health.get("sleep_score") is not None:
+                    bits.append(f"sleep score {health['sleep_score']}")
+                if health.get("sleep_hours") is not None:
+                    bits.append(f"{health['sleep_hours']}h sleep")
+                if health.get("hrv_last_night") is not None:
+                    hrv = f"HRV {health['hrv_last_night']}"
+                    if health.get("hrv_status"):
+                        hrv += f" ({health['hrv_status']})"
+                    bits.append(hrv)
+                if health.get("body_battery_high") is not None:
+                    bits.append(f"body battery {health['body_battery_high']}")
+                if health.get("resting_hr") is not None:
+                    bits.append(f"resting HR {health['resting_hr']}")
+                if health.get("avg_stress") is not None:
+                    bits.append(f"stress {health['avg_stress']}")
+                if bits:
+                    parts.append("Recent health/readiness: " + ", ".join(bits))
+        except Exception:
+            _log.warning("training_context: health load failed", exc_info=True)
 
         # Always give the real calendar so runs land on real days.
         try:
@@ -412,6 +509,8 @@ def training_tools(training_service) -> list[tuple[dict, Any]]:
          lambda uid, inp, now: handle_push_to_watch(uid, inp, now, training_service=training_service)),
         (IMPORT_RECENT_RUNS_TOOL,
          lambda uid, inp, now: handle_import_recent_runs(uid, inp, now, training_service=training_service)),
+        (REVIEW_RUN_TOOL,
+         lambda uid, inp, now: handle_review_run(uid, inp, now, training_service=training_service)),
     ]
 
 

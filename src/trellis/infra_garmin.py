@@ -384,6 +384,14 @@ class GarminActivityReader:
         activities = self._client.activities(dump, limit=max(1, min(limit, 50)))
         return [a for a in activities if "run" in (a.activity_type or "").lower()]
 
+    def activity_detail(self, user_id: UUID, activity_id: str) -> GarminActivityDetail:
+        """Full detail (splits/laps) for one activity — so the coach can review how
+        the intervals/pacing/HR actually went."""
+        dump = self._connections.get_session_dump(user_id)
+        if not dump:
+            raise RuntimeError("Garmin not connected. Use /garmin_setup to connect.")
+        return self._client.activity_detail(dump, activity_id)
+
 
 # ---------------------------------------------------------------------------
 # Connection management (setup + status)

@@ -34,9 +34,16 @@ class GarminWorkoutPort(Protocol):
 
 
 class GarminActivityPort(Protocol):
-    """Read recent RUNNING activities from Garmin (see infra_garmin.GarminActivityReader).
-    Recent + small only — the CSV path is for bulk history."""
+    """Read recent RUNNING activities + one activity's full detail from Garmin
+    (see infra_garmin.GarminActivityReader). Recent + small only — the CSV path is
+    for bulk history."""
     def recent_running_activities(self, user_id: UUID, *, limit: int) -> list: ...
+    def activity_detail(self, user_id: UUID, activity_id: str) -> Any: ...
+
+
+class HealthReader(Protocol):
+    """Latest synced daily health/readiness (see infra_tracking.PostgresHealthRepository)."""
+    def latest_daily_health(self, user_id: UUID) -> Any: ...
 
 
 class WorkoutSpecError(ValueError):
@@ -52,12 +59,14 @@ class TrainingService:
         *,
         garmin_push: GarminWorkoutPort | None = None,
         garmin_read: GarminActivityPort | None = None,
+        health_reader: HealthReader | None = None,
     ) -> None:
         self._repo = repo
         self._goals = goals
         self._tz = tz
         self._garmin_push = garmin_push
         self._garmin_read = garmin_read
+        self._health = health_reader
 
     # -- plan (persist what the coach authors) --------------------------------
 
@@ -147,6 +156,64 @@ class TrainingService:
                 note=note, distance_km=dist_km, created_at=now,
             )))
         return logged
+
+    def review_run(self, user_id: UUID, *, which: int = 0) -> dict | None:
+        """Full detail for one recent run (which=0 is the most recent): the overall
+        summary + a per-split breakdown (pace + HR per lap/rep), so the coach can see
+        how the intervals/pacing/HR actually went. None if no runs. Raises RuntimeError
+        if Garmin isn't wired/connected."""
+        if self._garmin_read is None:
+            raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
+        activities = self._garmin_read.recent_running_activities(user_id, limit=max(which + 1, 1))
+        if not activities or which >= len(activities):
+            return None
+        act = activities[which]
+        overall: dict[str, Any] = {
+            "name": getattr(act, "name", None) or "run",
+            "date": (d.isoformat() if (d := _activity_date(act, self._tz)) else None),
+            "distance_km": round(act.distance_meters / 1000, 2) if getattr(act, "distance_meters", None) else None,
+            "duration_min": round(act.duration_milliseconds / 60000, 1) if getattr(act, "duration_milliseconds", None) else None,
+            "avg_hr": getattr(act, "average_heart_rate", None),
+            "max_hr": getattr(act, "maximum_heart_rate", None),
+        }
+        splits: list[dict] = []
+        try:
+            detail = self._garmin_read.activity_detail(user_id, act.activity_id)
+            splits = _extract_splits(detail)
+        except Exception:
+            _log.warning("review_run: detail fetch/parse failed", exc_info=True)
+        return {"overall": overall, "splits": splits}
+
+    def recent_health(self, user_id: UUID) -> dict | None:
+        """Latest synced daily health/readiness as a compact dict, or None if there's
+        no health data (or no health reader wired). Best-effort — never raises."""
+        if self._health is None:
+            return None
+        try:
+            h = self._health.latest_daily_health(user_id)
+        except Exception:
+            _log.warning("recent_health load failed", exc_info=True)
+            return None
+        if h is None:
+            return None
+        out: dict[str, Any] = {}
+        for key, attr in (
+            ("date", "observed_on"), ("sleep_score", "sleep_score"),
+            ("sleep_hours", "sleep_duration_minutes"), ("resting_hr", "resting_heart_rate"),
+            ("hrv_last_night", "hrv_last_night"), ("hrv_status", "hrv_status"),
+            ("body_battery_high", "body_battery_maximum"), ("body_battery_end", "body_battery_end"),
+            ("avg_stress", "average_stress"),
+        ):
+            val = getattr(h, attr, None)
+            if val is None:
+                continue
+            if attr == "observed_on":
+                out[key] = val.isoformat()
+            elif attr == "sleep_duration_minutes":
+                out[key] = round(val / 60, 1)
+            else:
+                out[key] = val
+        return out or None
 
     # -- calendar (Python owns real dates — the coach never does date math) ----
 
@@ -269,6 +336,84 @@ def _activity_date(activity: Any, tz: tzinfo) -> date | None:
         return datetime.fromtimestamp(int(epoch), tz=timezone.utc).astimezone(tz).date()
     except (ValueError, OSError, OverflowError):
         return None
+
+
+_MAX_SPLITS = 40
+
+
+def _extract_splits(detail: Any) -> list[dict]:
+    """Pull a per-split/lap breakdown from a GarminActivityDetail, defensively —
+    Garmin's split payloads vary in shape and key casing. Returns compact dicts:
+    {i, distance_km, time, pace, avg_hr, max_hr}. Empty list if nothing usable."""
+    rows = _split_rows(detail)
+    out: list[dict] = []
+    for i, row in enumerate(rows[:_MAX_SPLITS], start=1):
+        if not isinstance(row, dict):
+            continue
+        dist_m = _num(row, "distance", "totalDistance")
+        secs = _num(row, "duration", "elapsedDuration", "movingDuration", "elapsedTime")
+        avg_hr = _num(row, "averageHR", "averageHr", "avgHr")
+        max_hr = _num(row, "maxHR", "maxHr", "maximumHr")
+        speed = _num(row, "averageSpeed", "avgSpeed")  # m/s
+        entry: dict[str, Any] = {"i": i}
+        if dist_m:
+            entry["distance_km"] = round(dist_m / 1000, 3)
+        if secs:
+            entry["time"] = _mmss(secs)
+        pace_secs = None
+        if dist_m and secs and dist_m > 0:
+            pace_secs = secs / (dist_m / 1000)
+        elif speed and speed > 0:
+            pace_secs = 1000 / speed
+        if pace_secs:
+            entry["pace"] = _mmss(pace_secs) + "/km"
+        if avg_hr:
+            entry["avg_hr"] = int(avg_hr)
+        if max_hr:
+            entry["max_hr"] = int(max_hr)
+        if len(entry) > 1:  # more than just the index
+            out.append(entry)
+    return out
+
+
+def _split_rows(detail: Any) -> list:
+    """Find the list of split/lap dicts across Garmin's varying shapes."""
+    candidates = []
+    for source in ("split_summaries", "splits", "typed_splits"):
+        val = getattr(detail, source, None)
+        candidates.append(val)
+    raw = getattr(detail, "raw", None)
+    if isinstance(raw, dict):
+        candidates.extend([raw.get("splitSummaries"), raw.get("splits"), raw.get("typedSplits")])
+    for val in candidates:
+        rows = _as_split_list(val)
+        if rows:
+            return rows
+    return []
+
+
+def _as_split_list(val: Any) -> list:
+    if isinstance(val, list):
+        return val
+    if isinstance(val, dict):
+        for key in ("lapDTOs", "splitSummaries", "splits", "typedSplits"):
+            inner = val.get(key)
+            if isinstance(inner, list):
+                return inner
+    return []
+
+
+def _num(row: dict, *keys: str) -> float | None:
+    for k in keys:
+        v = row.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v)
+    return None
+
+
+def _mmss(seconds: float) -> str:
+    s = int(round(seconds))
+    return f"{s // 60}:{s % 60:02d}"
 
 
 # ---------------------------------------------------------------------------
