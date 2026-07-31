@@ -429,6 +429,16 @@ TRAINING_SIGNALS: list[str] = [
     "pace", "mileage", "marathon", "5k", "10k", "half marathon", "race", "coach",
 ]
 
+# Self-description for semantic routing (the running-coach room). Embedded and
+# matched against a message by MEANING — lists the KINDS of things it handles.
+TRAINING_DESCRIPTION: str = (
+    "The running coach. Training plans and what to run this week or today; workouts and "
+    "sessions — easy runs, long runs, intervals, sprints, tempo; pace and heart rate; "
+    "building fitness toward a race or distance; recovery and readiness (sleep, HRV, body "
+    "battery, resting heart rate) as they affect training; reviewing how a run went from "
+    "its splits; and pushing structured workouts to a Garmin watch."
+)
+
 
 # ---------------------------------------------------------------------------
 # Registration factory

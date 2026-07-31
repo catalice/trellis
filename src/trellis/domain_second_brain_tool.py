@@ -1193,6 +1193,17 @@ SECOND_BRAIN_SIGNALS: list[str] = [
     "plan", "project", "working on",
 ]
 
+# Self-description for semantic routing (the "big brain" / default room). Written
+# to be embedded and matched against a message by MEANING, not keywords — so it
+# lists the KINDS of things this room handles.
+SECOND_BRAIN_DESCRIPTION: str = (
+    "The everyday second brain and front door. Capturing thoughts and brain dumps; "
+    "tasks and to-dos; reminders and appointments; ideas, notes and questions; goals "
+    "and projects; life admin and general planning. Also tracking how you're doing day "
+    "to day — mood, energy, medication, sleep, and period or cycle. General chat, "
+    "reflection, and anything not clearly about a specialist area lands here."
+)
+
 
 # ---------------------------------------------------------------------------
 # Registration factory
