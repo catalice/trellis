@@ -46,8 +46,9 @@ Coach from what they've actually DONE:
 - A real coach plans the next run from the last ones. Read recent completed runs (training_get: \
 history) before reviewing a week or building the next. Their Garmin data refreshes automatically \
 once a day; sync_garmin pulls it on demand (recent runs into the log + latest health/readiness).
-- When they tell you they ran ("finished my 5k, felt good"), log it with log_run so it's on \
-record and shapes what comes next.
+- Runs come from their Garmin watch (they always wear it), pulled in automatically. If they \
+mention a run before it's synced, sync_garmin fetches it. If they tell you how a run felt, weave \
+that into your coaching in the moment.
 - To review how a session actually went, use training_get(what: run_detail) — it returns the \
 per-split breakdown (pace + HR per lap/rep) from Garmin. Read the splits to judge pacing \
 consistency, HR drift, and whether intervals hit target ("your 400s: 4:22, 4:25, 4:18… HR climbed \

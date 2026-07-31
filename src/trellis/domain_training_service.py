@@ -102,20 +102,6 @@ class TrainingService:
 
     # -- completed runs (the coach plans the next from the last) ---------------
 
-    def log_run(
-        self, user_id: UUID, note: str, *, now: datetime,
-        ran_on: date | None = None, distance_km: float | None = None,
-    ) -> RunLog:
-        """Record a completed run. ran_on defaults to today (local)."""
-        return self._repo.add_run(RunLog(
-            id=uuid4(),
-            user_id=user_id,
-            ran_on=ran_on or now.astimezone(self._tz).date(),
-            note=note.strip(),
-            distance_km=distance_km,
-            created_at=now,
-        ))
-
     def recent_runs(self, user_id: UUID, *, limit: int = 12) -> list[RunLog]:
         return self._repo.recent_runs(user_id, limit=limit)
 

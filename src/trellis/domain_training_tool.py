@@ -83,33 +83,6 @@ SAVE_TRAINING_PLAN_TOOL: dict = {
     },
 }
 
-LOG_RUN_TOOL: dict = {
-    "name": "log_run",
-    "description": (
-        "Record a run the user completed, so it shapes what you plan next. Use when they "
-        "tell you they ran ('finished my 5k, felt strong'). Defaults to today unless they "
-        "say otherwise."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "note": {
-                "type": "string",
-                "description": "What they did, in plain words — e.g. 'easy 5k, felt strong, HR stayed low'.",
-            },
-            "date": {
-                "type": "string",
-                "description": "Optional ISO date (YYYY-MM-DD) if it wasn't today.",
-            },
-            "distance_km": {
-                "type": "number",
-                "description": "Optional distance in km if known.",
-            },
-        },
-        "required": ["note"],
-    },
-}
-
 PUSH_TO_WATCH_TOOL: dict = {
     "name": "push_to_watch",
     "description": (
@@ -195,7 +168,7 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, train
     if what == "history":
         runs = training_service.recent_runs(user_id)
         if not runs:
-            return "No runs logged yet. When they tell you they ran, record it with log_run."
+            return "No runs logged yet — sync_garmin pulls recent runs from their watch."
         lines = ["Recent runs (most recent first):"]
         for r in runs:
             dist = f" — {r.distance_km}km" if r.distance_km is not None else ""
@@ -242,31 +215,6 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
         return "Couldn't save the plan just now — try again in a moment."
     n = len([s for s in plan.get("week", []) if isinstance(s, dict)])
     return f"Saved the plan ({n} day(s) this week)."
-
-
-def handle_log_run(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
-    note = str(input_dict.get("note", "")).strip()
-    if not note:
-        return "Nothing to log — what run did they do?"
-    ran_on = None
-    raw_date = str(input_dict.get("date", "")).strip()
-    if raw_date:
-        try:
-            ran_on = date.fromisoformat(raw_date)
-        except ValueError:
-            ran_on = None  # fall back to today
-    distance = input_dict.get("distance_km")
-    try:
-        distance = float(distance) if distance is not None else None
-    except (TypeError, ValueError):
-        distance = None
-    try:
-        run = training_service.log_run(user_id, note, now=now, ran_on=ran_on, distance_km=distance)
-    except Exception:
-        _log.warning("log_run failed", exc_info=True)
-        return "Couldn't log that run just now — try again in a moment."
-    dist = f" ({run.distance_km}km)" if run.distance_km is not None else ""
-    return f"Logged: {run.ran_on.isoformat()}{dist} — {run.note}"
 
 
 def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, training_service) -> str:
@@ -459,8 +407,6 @@ def training_tools(training_service) -> list[tuple[dict, Any]]:
          lambda uid, inp, now: handle_training_get(uid, inp, now, training_service=training_service)),
         (SAVE_TRAINING_PLAN_TOOL,
          lambda uid, inp, now: handle_save_training_plan(uid, inp, now, training_service=training_service)),
-        (LOG_RUN_TOOL,
-         lambda uid, inp, now: handle_log_run(uid, inp, now, training_service=training_service)),
         (PUSH_TO_WATCH_TOOL,
          lambda uid, inp, now: handle_push_to_watch(uid, inp, now, training_service=training_service)),
         (SYNC_GARMIN_TOOL,
