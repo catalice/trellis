@@ -16,7 +16,7 @@ import sys
 from dotenv import load_dotenv
 
 sys.path.insert(0, "src")
-from trellis.domain_second_brain_models import Capture, Effort, Task
+from trellis.domain_focus_models import Capture, Effort, Task
 from trellis.infra_embeddings import LocalEmbedder
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_postgres import PostgresDatabase
