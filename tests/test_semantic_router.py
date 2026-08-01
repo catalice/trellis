@@ -117,6 +117,63 @@ class TestRoutingLogic(unittest.TestCase):
         self.assertEqual(calls["n"], 3)
 
 
+# --- Wiring: the assembler routes semantically when an embedder is given ----
+
+class TestAssemblerWiring(unittest.TestCase):
+    """Stage 4 wiring — Assembler builds a SemanticRouter over the registry's
+    room descriptions when an embedder is present, keeps the keyword Router
+    (with default domain) when it isn't, and falls back to keywords if the
+    embedder dies. Construction-only: oracle/history are never touched here."""
+
+    BASE = {MOVE_DESCRIPTION: [1.0, 0.0, 0.0], FOCUS_DESCRIPTION: [0.0, 1.0, 0.0]}
+
+    def _registry(self):
+        from trellis.core_registry import TrellisRegistry
+        registry = TrellisRegistry()
+        loader = lambda uid, now: None
+        registry.add_domain("focus", loader, [], ["task"], description=FOCUS_DESCRIPTION)
+        registry.add_domain("move", loader, [], ["run"], description=MOVE_DESCRIPTION)
+        return registry
+
+    def _assembler(self, embedder):
+        from trellis.core_assembler import Assembler
+        return Assembler(
+            oracle=None,
+            registry=self._registry(),
+            history=None,
+            permanent=[],
+            always_tools=[],
+            default_domain="focus",
+            embedder=embedder,
+        )
+
+    def test_registry_returns_descriptions(self):
+        self.assertEqual(
+            self._registry().all_descriptions(),
+            {"focus": FOCUS_DESCRIPTION, "move": MOVE_DESCRIPTION},
+        )
+
+    def test_with_embedder_routes_by_meaning(self):
+        a = self._assembler(FakeEmbedder({**self.BASE, "m": [1.0, 0.0, 0.0]}))
+        self.assertEqual(a._router.route("m"), {"move"})
+
+    def test_with_embedder_weak_match_is_big_brain_not_default(self):
+        # No room lights up -> empty (the big brain carries the turn); the
+        # keyword default is NOT injected on a deliberate semantic miss.
+        a = self._assembler(FakeEmbedder({**self.BASE, "m": [0.0, 0.0, 1.0]}))
+        self.assertEqual(a._router.route("m"), set())
+
+    def test_without_embedder_keeps_keyword_router_with_default(self):
+        a = self._assembler(None)
+        self.assertEqual(a._router.route("run today"), {"move"})
+        self.assertEqual(a._router.route("hello there"), {"focus"})
+
+    def test_embedder_down_falls_back_to_keywords(self):
+        a = self._assembler(BrokenEmbedder())
+        self.assertEqual(a._router.route("run today"), {"move"})
+        self.assertEqual(a._router.route("hello there"), {"focus"})
+
+
 # --- Layer 2: live proof against the real (local) embedder -----------------
 
 # message -> expected room in the ROUTE result. "move"/"focus" = that

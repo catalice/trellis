@@ -17,6 +17,7 @@ from uuid import UUID
 from trellis.core_oracle import Oracle
 from trellis.core_registry import ContextLoader, TrellisRegistry
 from trellis.core_router import Router
+from trellis.infra_router import Embedder, SemanticRouter
 
 _log = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ class Assembler:
         onboarding_system: str | None = None,
         onboarding_tools: list[tuple[dict, Callable]] | None = None,
         default_domain: str | None = None,
+        embedder: Embedder | None = None,
     ) -> None:
         self._oracle = oracle
         self._registry = registry
@@ -112,7 +114,19 @@ class Assembler:
         self._onboarding_check = onboarding_check
         self._onboarding_system = onboarding_system
         self._onboarding_tools = onboarding_tools or []
-        self._router = Router(registry.all_signals(), default_domain=default_domain)
+        # Routing shapes CONTEXT only (tools are always available). Semantic when
+        # an embedder is wired — rooms matched by MEANING against their
+        # self-descriptions; empty match -> no room, the big brain (permanent
+        # context) carries the turn. The keyword router is the graceful fallback
+        # if the embedder is down, so routing can never take the bot out.
+        keyword_router = Router(registry.all_signals(), default_domain=default_domain)
+        descriptions = registry.all_descriptions()
+        if embedder is not None and descriptions:
+            self._router: Router | SemanticRouter = SemanticRouter(
+                descriptions, embedder, fallback=keyword_router,
+            )
+        else:
+            self._router = keyword_router
         self._last_summarised: dict[UUID, int] = {}
 
     def handle_turn(self, user_id: UUID, message: str) -> str:

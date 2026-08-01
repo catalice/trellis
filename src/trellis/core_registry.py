@@ -26,7 +26,8 @@ class DomainRegistration:
     name: str
     context_loader: ContextLoader
     tools: list[tuple[ToolSchema, ToolHandler]]
-    signals: list[str]          # keywords that trigger routing to this domain
+    signals: list[str]          # keywords — the fallback router when embeddings are down
+    description: str = ""       # self-description, embedded for semantic routing
 
 
 class TrellisRegistry:
@@ -39,20 +40,27 @@ class TrellisRegistry:
         context_loader: ContextLoader,
         tools: list[tuple[ToolSchema, ToolHandler]],
         signals: list[str],
+        description: str = "",
     ) -> None:
         self._domains[name] = DomainRegistration(
             name=name,
             context_loader=context_loader,
             tools=tools,
             signals=signals,
+            description=description,
         )
 
     # --- Oracle-facing interface -------------------------------------------
     # The oracle calls these. It never touches _domains directly.
 
     def all_signals(self) -> dict[str, list[str]]:
-        """Returns {domain_name: [signals]} for the router."""
+        """Returns {domain_name: [signals]} for the keyword (fallback) router."""
         return {name: d.signals for name, d in self._domains.items()}
+
+    def all_descriptions(self) -> dict[str, str]:
+        """Returns {domain_name: description} for the semantic router — only
+        domains that declared one (no description -> keyword-routed only)."""
+        return {name: d.description for name, d in self._domains.items() if d.description}
 
     def load_context(self, domain: str, user_id: UUID, now: datetime) -> str | None:
         d = self._domains.get(domain)
