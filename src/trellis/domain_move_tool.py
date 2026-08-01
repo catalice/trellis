@@ -378,13 +378,12 @@ MOVE_SIGNALS: list[str] = [
 ]
 
 # Self-description for semantic routing (the running-coach room). Embedded and
-# matched against a message by MEANING — lists the KINDS of things it handles.
+# matched by MEANING — tight and noun-heavy; recovery/readiness data belongs to
+# Sense's description, so it's deliberately absent here.
 MOVE_DESCRIPTION: str = (
-    "The running coach — looking after the body through training. Training plans and what to "
-    "run this week or today; workouts and sessions — easy runs, long runs, intervals, sprints, "
-    "tempo; pace and heart rate; building fitness toward a race or distance; reviewing how a "
-    "run went from its splits; and pushing structured workouts to a Garmin watch. (Recovery "
-    "and readiness data lives in the wellbeing room, but affects how hard to train.)"
+    "Running and training: workout plans, sessions, intervals, long runs, "
+    "tempo, pace, mileage, races, building fitness, pushing workouts to "
+    "the Garmin watch."
 )
 
 

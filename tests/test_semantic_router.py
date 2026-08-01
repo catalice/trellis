@@ -176,23 +176,29 @@ class TestAssemblerWiring(unittest.TestCase):
 
 # --- Layer 2: live proof against the real (local) embedder -----------------
 
-# message -> expected room in the ROUTE result. "move"/"focus" = that
-# room must be routed. "BORDERLINE" = genuinely ambiguous with the current
-# descriptions (informational only — printed, not asserted; these are the
-# description-tuning candidates surfaced by the real score table).
+# message -> expected ROUTE result. "move"/"focus"/"sense" = that room must be
+# routed. "BIGBRAIN" = must route EMPTY (generic chat — no room lights up; the
+# always-on core carries the turn). "BORDERLINE" = genuinely ambiguous with the
+# current descriptions (informational only — printed, not asserted; these are
+# the description-tuning candidates surfaced by the real score table).
 LIVE_CASES = [
     # clear move — distinctive running language
     ("what pace for my 6x400m intervals tomorrow?", "move"),
     ("push my long run to sunday", "move"),
+    ("how did my run go yesterday?", "move"),
     # clear focus — organising / capture / retrieval
     ("add milk to my shopping list", "focus"),
     ("remind me to call the dentist", "focus"),
     ("idea: a podcast about design", "focus"),
-    ("hey", "focus"),
-    # clear sense — wellbeing tracking + readiness now live here
+    ("what's on my task list today?", "focus"),
+    # clear sense — wellbeing tracking + readiness
     ("log my period started today", "sense"),
     ("I'm exhausted and flat today", "sense"),
     ("how's my readiness today?", "sense"),
+    ("took my meds", "sense"),
+    # generic chat — no room; the big brain (always-on core) carries the turn
+    ("hey", "BIGBRAIN"),
+    ("thanks, that's great", "BIGBRAIN"),
     # borderline — sits on a line between rooms with the current descriptions.
     ("did I sleep ok for a run tomorrow?", "BORDERLINE"),
     ("what do we do this week?", "BORDERLINE"),
@@ -226,8 +232,12 @@ class TestLiveRouting(unittest.TestCase):
             se = scores.get("sense", 0.0)
             tag = "  (borderline)" if expected == "BORDERLINE" else ""
             print(f"{msg[:37]:<38} {t:>9.3f} {sb:>10.3f} {se:>9.3f}  -> {sorted(routed) or '[]'}{tag}")
-            # Assert only the CLEAR cases: the expected room must be in the route.
-            if expected in ("move", "focus", "sense") and expected not in routed:
+            # Assert the CLEAR cases: the expected room must be in the route,
+            # and generic chat must route empty (big brain, no room).
+            wrong = (
+                expected in ("move", "focus", "sense") and expected not in routed
+            ) or (expected == "BIGBRAIN" and routed)
+            if wrong:
                 mismatches.append(
                     (msg, expected, sorted(routed), round(t, 3), round(sb, 3), round(se, 3))
                 )

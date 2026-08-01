@@ -999,14 +999,14 @@ FOCUS_SIGNALS: list[str] = [
     "plan", "project", "working on",
 ]
 
-# Self-description for semantic routing (the "big brain" / default room). Written
-# to be embedded and matched against a message by MEANING, not keywords — so it
-# lists the KINDS of things this room handles.
+# Self-description for semantic routing. Embedded and matched by MEANING — keep it
+# tight and noun-heavy: every extra phrase is surface area for false matches, and
+# conversational wording attracts unrelated everyday messages. No catch-all claim:
+# generic chat falls through to the big brain (routes empty), not to this room.
 FOCUS_DESCRIPTION: str = (
-    "Executive function and organising — the recording room. Capturing thoughts and "
-    "brain dumps; tasks and to-dos; reminders and appointments; ideas, notes and "
-    "questions; goals and projects; life admin and getting things out of your head. "
-    "General chat, reflection, and anything not clearly about a specialist area lands here."
+    "Tasks, to-dos and life admin; reminders and appointments; capturing "
+    "ideas, notes and brain dumps; shopping lists; goals and projects; "
+    "organising and recording things to do or remember."
 )
 
 

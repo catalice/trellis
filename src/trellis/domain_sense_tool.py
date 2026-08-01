@@ -306,13 +306,13 @@ SENSE_SIGNALS: list[str] = [
     "stress", "recovery", "check-in", "checkin",
 ]
 
-# Self-description for semantic routing (the Mind / monitoring room). Written to be
-# embedded and matched by MEANING — the KINDS of things it handles.
+# Self-description for semantic routing (the Mind / monitoring room). Embedded and
+# matched by MEANING — keep it concrete nouns only: conversational phrasing ("how
+# am I doing") made this room a score magnet for any everyday message.
 SENSE_DESCRIPTION: str = (
-    "Mood, energy and stress; medication taken; menstrual period and cycle day; "
-    "recovery and readiness from Garmin — sleep score, HRV, body battery, resting "
-    "heart rate. Wellbeing check-ins: how am I doing, am I rested or run-down, "
-    "how's my readiness today."
+    "Health and wellbeing tracking: mood, energy, stress, medication, "
+    "menstrual cycle and period, sleep quality, HRV, resting heart rate, "
+    "body battery, recovery, readiness."
 )
 
 

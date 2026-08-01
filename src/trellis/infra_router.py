@@ -17,9 +17,12 @@ Graceful: if the embedder is unavailable or errors, fall back to a provided
 fallback router (e.g. the keyword Router); if none given, return all rooms (load
 broadly). It never crashes — routing must never take the bot down.
 
-The score thresholds below are PROVISIONAL starting points; the offline harness
-(tests/test_semantic_router.py) prints the real per-room cosine scores so they can
-be tuned against actual messages before this is wired into the live path.
+The score thresholds are tuned from the offline harness's real score table
+(tests/test_semantic_router.py, local bge-small): generic chat tops out around
+0.46 against any room while the weakest clear room match sits around 0.50, so
+min_score splits that gap — generic/ambient messages route EMPTY (the big brain
+carries the turn) instead of dragging a room in. Re-run the harness with -s to
+see the table whenever descriptions or thresholds change.
 """
 from __future__ import annotations
 
@@ -31,8 +34,9 @@ from typing import Protocol
 _log = logging.getLogger(__name__)
 
 # Below this top cosine score, nothing is "meaningfully" about a specialist room
-# -> route empty (the big brain / default room handles it).
-_MIN_SCORE = 0.28
+# -> route empty (the big brain handles it). bge-small never scores below ~0.35
+# even for unrelated text, so the floor sits just under the weakest real match.
+_MIN_SCORE = 0.48
 # A second room within this margin of the top is "close" -> ambiguous, load both.
 _CLOSE_MARGIN = 0.04
 
