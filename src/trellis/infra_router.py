@@ -3,7 +3,7 @@ Semantic router — routes a message to relevant domains ("rooms") by MEANING, n
 keywords. Each room has a self-description; we embed those once and, per message,
 embed the message and pick the room(s) whose description is closest in meaning.
 
-Big brain + little rooms: second_brain is the always-on core (the front door);
+Big brain + little rooms: focus is the always-on core (the front door);
 other rooms light up only when the message clearly means them. Mirrors
 core_router.Router's interface — route(message) -> set[str] — so it's a drop-in
 swap later.

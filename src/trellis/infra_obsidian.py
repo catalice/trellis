@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from uuid import UUID
 
-from trellis.domain_second_brain_models import (
+from trellis.domain_focus_models import (
     Capture,
     Effort,
     Task,

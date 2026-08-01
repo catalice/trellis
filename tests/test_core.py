@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from trellis.core_oracle import OracleResult, ToolCall
 from trellis.core_router import Router
-from trellis.domain_second_brain_models import (
+from trellis.domain_focus_models import (
     Capture,
     CaptureType,
     Effort,
@@ -27,24 +27,24 @@ UID = uuid4()
 
 
 class TestRouter:
-    SIGNALS = {"second_brain": ["task", "remind"], "move": ["run", "garmin"]}
+    SIGNALS = {"focus": ["task", "remind"], "move": ["run", "garmin"]}
 
     def test_matches_signal(self):
-        r = Router(self.SIGNALS, default_domain="second_brain")
+        r = Router(self.SIGNALS, default_domain="focus")
         assert r.route("how was my run") == {"move"}
 
     def test_multiple_domains(self):
-        r = Router(self.SIGNALS, default_domain="second_brain")
-        assert r.route("task list before my run") == {"second_brain", "move"}
+        r = Router(self.SIGNALS, default_domain="focus")
+        assert r.route("task list before my run") == {"focus", "move"}
 
     def test_unmatched_goes_to_default(self):
-        r = Router(self.SIGNALS, default_domain="second_brain")
-        assert r.route("hello there") == {"second_brain"}
+        r = Router(self.SIGNALS, default_domain="focus")
+        assert r.route("hello there") == {"focus"}
 
     def test_reminder_variants_route(self):
-        r = Router(self.SIGNALS, default_domain="second_brain")
-        assert r.route("could you add a reminder please") == {"second_brain"}
-        assert r.route("remind me tomorrow") == {"second_brain"}
+        r = Router(self.SIGNALS, default_domain="focus")
+        assert r.route("could you add a reminder please") == {"focus"}
+        assert r.route("remind me tomorrow") == {"focus"}
 
     def test_no_default_returns_empty(self):
         r = Router(self.SIGNALS)

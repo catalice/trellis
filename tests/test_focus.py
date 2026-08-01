@@ -10,12 +10,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from trellis.domain_second_brain_claude import (
+from trellis.domain_focus_claude import (
     _parse_effort_suggestions,
     _parse_synthesis,
     _strip_json_fences,
 )
-from trellis.domain_second_brain_models import (
+from trellis.domain_focus_models import (
     BrainDumpResult,
     Capture,
     CaptureType,
@@ -33,7 +33,7 @@ from trellis.domain_second_brain_models import (
     TaskPriority,
     TaskStatus,
 )
-from trellis.domain_second_brain_service import (
+from trellis.domain_focus_service import (
     BrainDumpService,
     CleanupService,
     GoalNotFoundError,
@@ -394,7 +394,7 @@ class TestSetReminderHandler:
     """Timezone math is Python's job — Claude sends local wall-clock time."""
 
     def _set(self, remind_at_str):
-        from trellis.domain_second_brain_tool import handle_set_reminder
+        from trellis.domain_focus_tool import handle_set_reminder
         svc = ReminderService(FakeReminderRepo(), TZ)
         reply = handle_set_reminder(
             UID, {"label": "Fitting", "remind_at": remind_at_str}, NOW,
@@ -568,8 +568,8 @@ class TestDeleteEntry:
     (via sense_service). The state/tracking service tests live in test_sense.py."""
 
     def test_delete_handler_erases_state(self):
-        from trellis.domain_second_brain_service import CaptureService
-        from trellis.domain_second_brain_tool import handle_delete_entry
+        from trellis.domain_focus_service import CaptureService
+        from trellis.domain_focus_tool import handle_delete_entry
         from trellis.domain_sense_service import SenseService
         repo = FakeStateRepo()
         svc = SenseService(repo, TZ)
@@ -582,8 +582,8 @@ class TestDeleteEntry:
         assert repo.states == []
 
     def test_delete_handler_erases_duplicate_task(self):
-        from trellis.domain_second_brain_service import CaptureService
-        from trellis.domain_second_brain_tool import handle_delete_entry
+        from trellis.domain_focus_service import CaptureService
+        from trellis.domain_focus_tool import handle_delete_entry
         from trellis.domain_sense_service import SenseService
         sense_svc = SenseService(FakeStateRepo(), TZ)
         task_repo = FakeTaskRepo()
@@ -597,8 +597,8 @@ class TestDeleteEntry:
         assert [t.title for t in task_svc.list_open(UID)] == ["Find ceramics class"]
 
     def test_delete_handler_erases_capture(self):
-        from trellis.domain_second_brain_service import CaptureService
-        from trellis.domain_second_brain_tool import handle_delete_entry
+        from trellis.domain_focus_service import CaptureService
+        from trellis.domain_focus_tool import handle_delete_entry
         from trellis.domain_sense_service import SenseService
         cap_repo = FakeCaptureRepo()
         cap_svc = CaptureService(cap_repo)
@@ -614,8 +614,8 @@ class TestDeleteEntry:
         assert cap_repo.captures == {}
 
     def test_delete_other_users_task_refused(self):
-        from trellis.domain_second_brain_service import CaptureService
-        from trellis.domain_second_brain_tool import handle_delete_entry
+        from trellis.domain_focus_service import CaptureService
+        from trellis.domain_focus_tool import handle_delete_entry
         from trellis.domain_sense_service import SenseService
         sense_svc = SenseService(FakeStateRepo(), TZ)
         task_repo = FakeTaskRepo()
@@ -633,7 +633,7 @@ class TestSeedsAndParked:
         return TaskService(repo or FakeTaskRepo(), TZ)
 
     def test_seed_never_gets_due_date(self):
-        from trellis.domain_second_brain_models import TaskKind
+        from trellis.domain_focus_models import TaskKind
         svc = self._service()
         seed = svc.create(UID, "Look into ceramics", kind=TaskKind.SEED,
                           due="2026-07-25", now=NOW)
@@ -641,7 +641,7 @@ class TestSeedsAndParked:
         assert seed.kind == TaskKind.SEED
 
     def test_list_open_excludes_seeds(self):
-        from trellis.domain_second_brain_models import TaskKind
+        from trellis.domain_focus_models import TaskKind
         svc = self._service()
         svc.create(UID, "Buy wine", now=NOW)
         svc.create(UID, "Research drum machines", kind=TaskKind.SEED, now=NOW)
@@ -649,7 +649,7 @@ class TestSeedsAndParked:
         assert [t.title for t in svc.list_seeds(UID)] == ["Research drum machines"]
 
     def test_park_and_reclaim(self):
-        from trellis.domain_second_brain_models import TaskStatus
+        from trellis.domain_focus_models import TaskStatus
         repo = FakeTaskRepo()
         svc = self._service(repo)
         task = svc.create(UID, "Sort shoes", now=NOW)
@@ -660,7 +660,7 @@ class TestSeedsAndParked:
         assert [t.title for t in svc.list_open(UID)] == ["Sort shoes"]
 
     def test_reclassify_todo_to_seed(self):
-        from trellis.domain_second_brain_models import TaskKind
+        from trellis.domain_focus_models import TaskKind
         svc = self._service()
         task = svc.create(UID, "Research flying", now=NOW)
         updated = svc.update(UID, task.id, kind=TaskKind.SEED, now=NOW)
@@ -676,16 +676,16 @@ class TestSeedsAndParked:
           ]
         }"""
         result = _parse_synthesis(raw)
-        from trellis.domain_second_brain_models import TaskKind
+        from trellis.domain_focus_models import TaskKind
         assert result.extracted_tasks[0].kind == TaskKind.TODO
         assert result.extracted_tasks[1].kind == TaskKind.SEED
 
 
 class TestWebSearch:
     def _tools(self, web_search):
-        from trellis.domain_second_brain_tool import second_brain_tools
+        from trellis.domain_focus_tool import focus_tools
         svc = None
-        return second_brain_tools(
+        return focus_tools(
             task_service=svc, goal_service=svc, capture_service=svc,
             effort_service=svc, reminder_service=svc, cleanup_service=svc,
             sense_service=svc, web_search=web_search, tz=TZ,
@@ -702,7 +702,7 @@ class TestWebSearch:
         assert "web_search" in names
 
     def test_handler_formats_results(self):
-        from trellis.domain_second_brain_tool import handle_web_search
+        from trellis.domain_focus_tool import handle_web_search
         from trellis.infra_search import SearchResponse, SearchResult
         class FakeSearch:
             def search(self, q, *, max_results=5):
@@ -715,21 +715,21 @@ class TestWebSearch:
         assert "https://a.com" in reply
 
     def test_handler_empty(self):
-        from trellis.domain_second_brain_tool import handle_web_search
+        from trellis.domain_focus_tool import handle_web_search
         class FakeSearch:
             def search(self, q, *, max_results=5): return None
         reply = handle_web_search(UID, {"query": "x"}, NOW, web_search=FakeSearch())
         assert "empty" in reply or "unavailable" in reply
 
     def test_handler_requires_query(self):
-        from trellis.domain_second_brain_tool import handle_web_search
+        from trellis.domain_focus_tool import handle_web_search
         reply = handle_web_search(UID, {}, NOW, web_search=object())
         assert "required" in reply
 
 
 class TestSaveToEffort:
     def _wire(self):
-        from trellis.domain_second_brain_service import CaptureService, EffortService
+        from trellis.domain_focus_service import CaptureService, EffortService
         cap_repo = FakeCaptureRepo()
         eff_repo = FakeEffortRepo()
         task_repo = FakeTaskRepo()
@@ -739,7 +739,7 @@ class TestSaveToEffort:
         )
 
     def test_creates_effort_and_saves_research(self):
-        from trellis.domain_second_brain_tool import handle_save_to_effort
+        from trellis.domain_focus_tool import handle_save_to_effort
         cap_svc, eff_svc, task_svc, cap_repo, eff_repo, _ = self._wire()
         reply = handle_save_to_effort(
             UID, {"effort_title": "Making Music", "content": "PO-33 ~£90\nCircuit Tracks ~£300"},
@@ -752,7 +752,7 @@ class TestSaveToEffort:
         assert "PO-33" in cap.raw
 
     def test_reuses_existing_effort_by_name(self):
-        from trellis.domain_second_brain_tool import handle_save_to_effort
+        from trellis.domain_focus_tool import handle_save_to_effort
         cap_svc, eff_svc, task_svc, cap_repo, eff_repo, _ = self._wire()
         for content in ("first find", "second find"):
             handle_save_to_effort(UID, {"effort_title": "Making Music", "content": content},
@@ -761,8 +761,8 @@ class TestSaveToEffort:
         assert len(cap_repo.captures) == 2         # both findings kept
 
     def test_graduated_seed_retired(self):
-        from trellis.domain_second_brain_tool import handle_save_to_effort
-        from trellis.domain_second_brain_models import TaskKind, TaskStatus
+        from trellis.domain_focus_tool import handle_save_to_effort
+        from trellis.domain_focus_models import TaskKind, TaskStatus
         cap_svc, eff_svc, task_svc, cap_repo, eff_repo, task_repo = self._wire()
         seed = task_svc.create(UID, "look into drum machines", kind=TaskKind.SEED, now=NOW)
         handle_save_to_effort(

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from psycopg2.extras import RealDictCursor
 
-from trellis.domain_second_brain_models import (
+from trellis.domain_focus_models import (
     Capture,
     CaptureType,
     Effort,

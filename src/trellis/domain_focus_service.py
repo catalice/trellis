@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from trellis.domain_second_brain_models import (
+from trellis.domain_focus_models import (
     Capture,
     CaptureType,
     CleanupAssignment,

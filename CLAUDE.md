@@ -75,11 +75,11 @@ infra_tracking.py    # health records, readiness scoring, cycle, self-reports
 infra_postgres.py    # DB connection + migrate() only — no repo classes here
 
 # Domains — exactly 5 files each
-domain_{second_brain|move|learn}_models.py
-domain_{second_brain|move|learn}_service.py
-domain_{second_brain|move|learn}_claude.py
-domain_{second_brain|move|learn}_repo.py
-domain_{second_brain|move|learn}_tool.py
+domain_{focus|sense|move|learn}_models.py
+domain_{focus|sense|move|learn}_service.py
+domain_{focus|sense|move|learn}_claude.py
+domain_{focus|sense|move|learn}_repo.py
+domain_{focus|sense|move|learn}_tool.py
 
 # Migrations
 migrations/001_schema.sql   # base schema (fresh installs)

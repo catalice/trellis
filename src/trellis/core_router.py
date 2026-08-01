@@ -5,7 +5,7 @@ Adding domain signals: call registry.add_domain(..., signals=[...]) in main.py.
 The router never needs to change when domains change.
 
 When no signal matches, the message routes to the default domain (the front
-door — second_brain, passed in from main). A message can match multiple domains;
+door — focus, passed in from main). A message can match multiple domains;
 all matched domains load their context and tools.
 """
 from __future__ import annotations

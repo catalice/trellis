@@ -1,9 +1,9 @@
 """
-Tool schemas and handlers for the second brain domain.
+Tool schemas and handlers for the focus domain.
 
 Handler signature: (user_id, input_dict, now) -> str
-Context loaders: second_brain_context_loader, second_brain_snapshot
-Registration: second_brain_tools(...)
+Context loaders: focus_context_loader, focus_snapshot
+Registration: focus_tools(...)
 """
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
 
-from trellis.domain_second_brain_models import (
+from trellis.domain_focus_models import (
     GoalStatus,
     GoalType,
     TaskEnergy,
     TaskPriority,
 )
-from trellis.domain_second_brain_service import GoalNotFoundError, TaskNotFoundError
+from trellis.domain_focus_service import GoalNotFoundError, TaskNotFoundError
 
 _log = logging.getLogger(__name__)
 
@@ -51,9 +51,9 @@ BRAIN_DUMP_TOOL: dict = {
     },
 }
 
-SECOND_BRAIN_GET_TOOL: dict = {
-    "name": "second_brain_get",
-    "description": "Retrieve second brain data. Use this before presenting tasks, goals, inbox captures, efforts, or reminders.",
+FOCUS_GET_TOOL: dict = {
+    "name": "focus_get",
+    "description": "Retrieve your organised data (tasks, goals, captures, efforts, reminders). Use this before presenting tasks, goals, inbox captures, efforts, or reminders.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -252,7 +252,7 @@ DELETE_ENTRY_TOOL: dict = {
         "tracking entry (state or meds/sleep/period event), a test or mis-capture. "
         "Completely removes it — use ONLY for mistakes, never for decisions: "
         "a task the user decided against gets update_task status='dropped' instead. "
-        "Corrections are delete + re-log. Get IDs from second_brain_get first. "
+        "Corrections are delete + re-log. Get IDs from focus_get first. "
         "Erasing a capture does NOT erase tasks extracted from it — erase those "
         "by their own ids. Deleting a task also deletes reminders attached to it."
     ),
@@ -342,7 +342,7 @@ def handle_brain_dump(
     return "\n".join(parts)
 
 
-def handle_second_brain_get(
+def handle_focus_get(
     user_id: UUID,
     input_dict: dict,
     now: datetime,
@@ -446,7 +446,7 @@ def handle_create_task(
         energy = TaskEnergy(input_dict.get("energy", "medium"))
     except ValueError:
         energy = TaskEnergy.MEDIUM
-    from trellis.domain_second_brain_models import TaskKind
+    from trellis.domain_focus_models import TaskKind
     try:
         kind = TaskKind(input_dict.get("kind", "todo"))
     except ValueError:
@@ -514,11 +514,11 @@ def handle_update_task(
         except ValueError:
             pass
     if "status" in input_dict:
-        from trellis.domain_second_brain_models import TaskStatus
+        from trellis.domain_focus_models import TaskStatus
         if input_dict["status"] in ("open", "dropped", "parked"):
             kwargs["status"] = TaskStatus(input_dict["status"])
     if "kind" in input_dict:
-        from trellis.domain_second_brain_models import TaskKind
+        from trellis.domain_focus_models import TaskKind
         try:
             kwargs["kind"] = TaskKind(input_dict["kind"])
         except ValueError:
@@ -774,7 +774,7 @@ def handle_save_to_effort(
     seed_id = str(input_dict.get("graduated_seed_id", "")).strip()
     if seed_id:
         try:
-            from trellis.domain_second_brain_models import TaskStatus
+            from trellis.domain_focus_models import TaskStatus
             task_service.update(user_id, UUID(seed_id), status=TaskStatus.DROPPED, now=now)
             retired = " (seed retired — it's an effort now)"
         except (ValueError, Exception):
@@ -883,18 +883,18 @@ def handle_cleanup_session(
 
 
 # ---------------------------------------------------------------------------
-# Context loader — Tier 1b (loaded when second brain is active domain)
+# Context loader — Tier 1b (loaded when focus is active domain)
 # ---------------------------------------------------------------------------
 
-def second_brain_context_loader(
+def focus_context_loader(
     task_service,
     goal_service,
     effort_service,
 ) -> ContextLoader:
     """
-    Tier 1b context for the second brain domain.
+    Tier 1b context for the focus domain.
     Returns active goals + open task summary + efforts.
-    Loaded when second_brain is the routed domain.
+    Loaded when focus is the routed domain.
     """
     def loader(user_id: UUID, now: datetime) -> str | None:
         parts: list[str] = []
@@ -904,7 +904,7 @@ def second_brain_context_loader(
             if goals:
                 parts.append("Active goals:\n" + "\n".join(f"  {g.summary()}" for g in goals))
         except Exception:
-            _log.warning("second_brain_context: goals load failed", exc_info=True)
+            _log.warning("focus_context: goals load failed", exc_info=True)
 
         try:
             efforts = effort_service.list_all(user_id)
@@ -913,7 +913,7 @@ def second_brain_context_loader(
                 if by_intensity:
                     parts.append("Efforts:\n" + by_intensity)
         except Exception:
-            _log.warning("second_brain_context: efforts load failed", exc_info=True)
+            _log.warning("focus_context: efforts load failed", exc_info=True)
 
         try:
             tasks = task_service.list_open(user_id)
@@ -939,16 +939,16 @@ def second_brain_context_loader(
             if task_parts:
                 parts.append("Tasks:\n" + "\n".join(task_parts))
         except Exception:
-            _log.warning("second_brain_context: tasks load failed", exc_info=True)
+            _log.warning("focus_context: tasks load failed", exc_info=True)
 
         if not parts:
             return None
-        return "[Second Brain]\n" + "\n\n".join(parts)
+        return "[Focus]\n" + "\n\n".join(parts)
 
     return loader
 
 
-def second_brain_snapshot(
+def focus_snapshot(
     task_service,
     reminder_service,
 ) -> ContextLoader:
@@ -971,14 +971,14 @@ def second_brain_snapshot(
                 task_str += f", {today_count} due today"
             parts.append(task_str)
         except Exception:
-            _log.warning("second_brain_snapshot: tasks failed", exc_info=True)
+            _log.warning("focus_snapshot: tasks failed", exc_info=True)
 
         try:
             soon = reminder_service.upcoming(user_id, hours=4, now=now)
             if soon:
                 parts.append(f"Reminders: {len(soon)} due in 4h")
         except Exception:
-            _log.warning("second_brain_snapshot: reminders failed", exc_info=True)
+            _log.warning("focus_snapshot: reminders failed", exc_info=True)
 
         return " | ".join(parts) if parts else None
 
@@ -989,7 +989,7 @@ def second_brain_snapshot(
 # Routing signals — used by the domain router
 # ---------------------------------------------------------------------------
 
-SECOND_BRAIN_SIGNALS: list[str] = [
+FOCUS_SIGNALS: list[str] = [
     "brain dump", "dump", "idea", "note", "capture", "remember",
     "task", "tasks", "todo", "to do", "to-do",
     "remind", "reminder", "appointment",
@@ -1002,7 +1002,7 @@ SECOND_BRAIN_SIGNALS: list[str] = [
 # Self-description for semantic routing (the "big brain" / default room). Written
 # to be embedded and matched against a message by MEANING, not keywords — so it
 # lists the KINDS of things this room handles.
-SECOND_BRAIN_DESCRIPTION: str = (
+FOCUS_DESCRIPTION: str = (
     "Executive function and organising — the recording room. Capturing thoughts and "
     "brain dumps; tasks and to-dos; reminders and appointments; ideas, notes and "
     "questions; goals and projects; life admin and getting things out of your head. "
@@ -1014,7 +1014,7 @@ SECOND_BRAIN_DESCRIPTION: str = (
 # Registration factory
 # ---------------------------------------------------------------------------
 
-def second_brain_tools(
+def focus_tools(
     task_service,
     goal_service,
     capture_service,
@@ -1030,8 +1030,8 @@ def second_brain_tools(
     # tracking entries owned by Sense, as well as tasks/captures).
     tools = [
         (
-            SECOND_BRAIN_GET_TOOL,
-            lambda uid, inp, now: handle_second_brain_get(
+            FOCUS_GET_TOOL,
+            lambda uid, inp, now: handle_focus_get(
                 uid, inp, now,
                 task_service=task_service,
                 goal_service=goal_service,

@@ -16,13 +16,13 @@ from __future__ import annotations
 import unittest
 
 from trellis.infra_router import SemanticRouter
-from trellis.domain_second_brain_tool import SECOND_BRAIN_DESCRIPTION
+from trellis.domain_focus_tool import FOCUS_DESCRIPTION
 from trellis.domain_sense_tool import SENSE_DESCRIPTION
 from trellis.domain_move_tool import MOVE_DESCRIPTION
 
 # The real room set — used by the Layer 2 live proof against the actual embedder.
 DESCRIPTIONS = {
-    "second_brain": SECOND_BRAIN_DESCRIPTION,
+    "focus": FOCUS_DESCRIPTION,
     "sense": SENSE_DESCRIPTION,
     "move": MOVE_DESCRIPTION,
 }
@@ -31,7 +31,7 @@ DESCRIPTIONS = {
 # hand-controlled vectors. Two synthetic rooms are enough to drive every branch;
 # the deterministic outcomes don't depend on how many rooms exist.
 _LOGIC_ROOMS = {
-    "second_brain": SECOND_BRAIN_DESCRIPTION,
+    "focus": FOCUS_DESCRIPTION,
     "move": MOVE_DESCRIPTION,
 }
 
@@ -64,8 +64,8 @@ def _router(mapping, **kw) -> SemanticRouter:
 
 
 class TestRoutingLogic(unittest.TestCase):
-    # Room description vectors: move -> x-axis, second_brain -> y-axis.
-    BASE = {MOVE_DESCRIPTION: [1.0, 0.0, 0.0], SECOND_BRAIN_DESCRIPTION: [0.0, 1.0, 0.0]}
+    # Room description vectors: move -> x-axis, focus -> y-axis.
+    BASE = {MOVE_DESCRIPTION: [1.0, 0.0, 0.0], FOCUS_DESCRIPTION: [0.0, 1.0, 0.0]}
 
     def _map(self, msg, vec):
         return {**self.BASE, msg: vec}
@@ -74,14 +74,14 @@ class TestRoutingLogic(unittest.TestCase):
         r = _router(self._map("m", [1.0, 0.0, 0.0]))
         self.assertEqual(r.route("m"), {"move"})
 
-    def test_clear_second_brain_routes_second_brain_only(self):
+    def test_clear_focus_routes_focus_only(self):
         r = _router(self._map("m", [0.0, 1.0, 0.0]))
-        self.assertEqual(r.route("m"), {"second_brain"})
+        self.assertEqual(r.route("m"), {"focus"})
 
     def test_ambiguous_loads_both(self):
         # Equidistant from both -> within close margin -> both rooms.
         r = _router(self._map("m", [0.7, 0.7, 0.0]))
-        self.assertEqual(r.route("m"), {"move", "second_brain"})
+        self.assertEqual(r.route("m"), {"move", "focus"})
 
     def test_weak_match_routes_empty(self):
         # Orthogonal to both room vectors -> top score 0 < min_score -> empty.
@@ -89,7 +89,7 @@ class TestRoutingLogic(unittest.TestCase):
         self.assertEqual(r.route("m"), set())
 
     def test_clearly_ahead_not_ambiguous(self):
-        # Strong move, weak-but-nonzero second_brain beyond the close margin.
+        # Strong move, weak-but-nonzero focus beyond the close margin.
         r = _router(self._map("m", [1.0, 0.1, 0.0]))
         self.assertEqual(r.route("m"), {"move"})
 
@@ -99,7 +99,7 @@ class TestRoutingLogic(unittest.TestCase):
 
     def test_embedder_down_no_fallback_loads_all(self):
         r = SemanticRouter(_LOGIC_ROOMS, BrokenEmbedder())
-        self.assertEqual(r.route("anything"), {"second_brain", "move"})
+        self.assertEqual(r.route("anything"), {"focus", "move"})
 
     def test_room_vectors_embedded_once(self):
         calls = {"n": 0}
@@ -119,7 +119,7 @@ class TestRoutingLogic(unittest.TestCase):
 
 # --- Layer 2: live proof against the real (local) embedder -----------------
 
-# message -> expected room in the ROUTE result. "move"/"second_brain" = that
+# message -> expected room in the ROUTE result. "move"/"focus" = that
 # room must be routed. "BORDERLINE" = genuinely ambiguous with the current
 # descriptions (informational only — printed, not asserted; these are the
 # description-tuning candidates surfaced by the real score table).
@@ -127,11 +127,11 @@ LIVE_CASES = [
     # clear move — distinctive running language
     ("what pace for my 6x400m intervals tomorrow?", "move"),
     ("push my long run to sunday", "move"),
-    # clear second_brain — organising / capture / retrieval
-    ("add milk to my shopping list", "second_brain"),
-    ("remind me to call the dentist", "second_brain"),
-    ("idea: a podcast about design", "second_brain"),
-    ("hey", "second_brain"),
+    # clear focus — organising / capture / retrieval
+    ("add milk to my shopping list", "focus"),
+    ("remind me to call the dentist", "focus"),
+    ("idea: a podcast about design", "focus"),
+    ("hey", "focus"),
     # clear sense — wellbeing tracking + readiness now live here
     ("log my period started today", "sense"),
     ("I'm exhausted and flat today", "sense"),
@@ -165,12 +165,12 @@ class TestLiveRouting(unittest.TestCase):
                 self.skipTest("embedder went unavailable mid-run")
             routed = router.route(msg)
             t = scores.get("move", 0.0)
-            sb = scores.get("second_brain", 0.0)
+            sb = scores.get("focus", 0.0)
             se = scores.get("sense", 0.0)
             tag = "  (borderline)" if expected == "BORDERLINE" else ""
             print(f"{msg[:37]:<38} {t:>9.3f} {sb:>10.3f} {se:>9.3f}  -> {sorted(routed) or '[]'}{tag}")
             # Assert only the CLEAR cases: the expected room must be in the route.
-            if expected in ("move", "second_brain", "sense") and expected not in routed:
+            if expected in ("move", "focus", "sense") and expected not in routed:
                 mismatches.append(
                     (msg, expected, sorted(routed), round(t, 3), round(sb, 3), round(se, 3))
                 )

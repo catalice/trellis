@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from anthropic import Anthropic
 
-from trellis.domain_second_brain_models import (
+from trellis.domain_focus_models import (
     BrainDumpResult,
     CaptureType,
     ExtractedTask,

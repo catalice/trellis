@@ -32,15 +32,15 @@ from trellis.core_profile import (
 
 # Second brain domain — the product. Training and learn are future modules;
 # their files exist but are not registered until rebuilt on the lean architecture.
-from trellis.domain_second_brain_claude import BrainDumpClaude
-from trellis.domain_second_brain_repo import (
+from trellis.domain_focus_claude import BrainDumpClaude
+from trellis.domain_focus_repo import (
     PostgresCaptureRepository,
     PostgresEffortRepository,
     PostgresGoalRepository,
     PostgresReminderRepository,
     PostgresTaskRepository,
 )
-from trellis.domain_second_brain_service import (
+from trellis.domain_focus_service import (
     BrainDumpService,
     CaptureService,
     CleanupService,
@@ -49,14 +49,14 @@ from trellis.domain_second_brain_service import (
     ReminderService,
     TaskService,
 )
-from trellis.domain_second_brain_tool import (
+from trellis.domain_focus_tool import (
     ADD_GOAL_TOOL, handle_add_goal,
     BRAIN_DUMP_TOOL, handle_brain_dump,
     RECALL_TOOL, handle_recall,
-    SECOND_BRAIN_SIGNALS,
-    second_brain_context_loader,
-    second_brain_snapshot,
-    second_brain_tools,
+    FOCUS_SIGNALS,
+    focus_context_loader,
+    focus_snapshot,
+    focus_tools,
 )
 
 # Sense domain — Mind / wellbeing tracking (mood, energy, meds, sleep, period) +
@@ -230,9 +230,9 @@ def main() -> None:
     registry = TrellisRegistry()
 
     registry.add_domain(
-        "second_brain",
-        second_brain_context_loader(task_service, goal_service, effort_service),
-        second_brain_tools(
+        "focus",
+        focus_context_loader(task_service, goal_service, effort_service),
+        focus_tools(
             task_service=task_service,
             goal_service=goal_service,
             capture_service=capture_service,
@@ -243,7 +243,7 @@ def main() -> None:
             web_search=web_search,
             tz=settings.timezone,
         ),
-        SECOND_BRAIN_SIGNALS,
+        FOCUS_SIGNALS,
     )
 
     registry.add_domain(
@@ -287,13 +287,13 @@ def main() -> None:
         permanent=[
             ("profile", _profile_loader(profile_service)),
             ("current_context", _current_context_loader(context_service)),
-            ("snapshot", second_brain_snapshot(task_service, reminder_service)),
+            ("snapshot", focus_snapshot(task_service, reminder_service)),
             ("sense_snapshot", sense_snapshot(sense_service)),
             ("move_snapshot", move_snapshot(move_service)),
         ],
         always_tools=always_tools,
         summariser=summariser,
-        default_domain="second_brain",
+        default_domain="focus",
         onboarding_check=lambda uid: needs_onboarding(profile_service, uid),
         onboarding_system=ONBOARDING_SYSTEM,
         onboarding_tools=[

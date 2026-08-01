@@ -12,7 +12,7 @@ from trellis.core_assembler import Assembler
 from trellis.core_config import Settings
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_postgres import PostgresDatabase
-from trellis.domain_second_brain_service import ReminderService
+from trellis.domain_focus_service import ReminderService
 
 # (audio_bytes) -> transcript
 Transcriber = Callable[[bytes], str]
