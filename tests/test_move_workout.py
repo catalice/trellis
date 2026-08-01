@@ -5,6 +5,7 @@ No network — run offline with:  uv run pytest tests/test_training_workout.py -
 from __future__ import annotations
 
 import unittest
+import uuid
 
 from trellis.domain_move_service import (
     WorkoutSpecError,
@@ -146,3 +147,63 @@ class TestBuildGarminWorkout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestActivityVisibility(unittest.TestCase):
+    """The coach must SEE every activity type (the Friday-strength bug: the old
+    runs-only reader made 'my most recent workout' answer with an older run).
+    The run LOG stays runs-only — it feeds the running baseline."""
+
+    def _service(self, activities):
+        from types import SimpleNamespace
+        from zoneinfo import ZoneInfo
+        from trellis.domain_move_service import MoveService
+
+        class FakeReader:
+            def recent_activities(self, user_id, *, limit):
+                return activities[:limit]
+            def activity_detail(self, user_id, activity_id):
+                raise RuntimeError("no detail in test")
+
+        class FakeRepo:
+            added = []
+            def recent_runs(self, user_id, limit=200):
+                return []
+            def add_run(self, run):
+                self.added.append(run)
+                return run
+
+        self.repo = FakeRepo()
+        self.repo.added = []
+        return MoveService(self.repo, goals=None, tz=ZoneInfo("Europe/Madrid"),
+                           garmin_read=FakeReader())
+
+    @staticmethod
+    def _act(activity_type, name, epoch, distance=None, hr=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            activity_id="a1", name=name, activity_type=activity_type,
+            start_time_epoch_seconds=epoch, distance_meters=distance,
+            duration_milliseconds=3_600_000, average_heart_rate=hr,
+            maximum_heart_rate=None,
+        )
+
+    def test_review_most_recent_includes_strength(self):
+        svc = self._service([
+            self._act("strength_training", "Strength", 1785492678, hr=116),
+            self._act("running", "Barcelona Running", 1785446606, distance=3255.0),
+        ])
+        detail = svc.review_run(uuid.uuid4(), which=0)
+        self.assertEqual(detail["overall"]["name"], "Strength")
+        self.assertIsNone(detail["overall"]["distance_km"])
+        self.assertEqual(detail["overall"]["avg_hr"], 116)
+
+    def test_run_log_import_skips_non_runs(self):
+        svc = self._service([
+            self._act("strength_training", "Strength", 1785492678),
+            self._act("running", "Barcelona Running", 1785446606, distance=3255.0),
+        ])
+        from datetime import datetime, timezone as tzu
+        logged = svc.import_recent_runs(uuid.uuid4(), now=datetime.now(tzu.utc))
+        self.assertEqual(len(logged), 1)
+        self.assertIn("Barcelona Running", logged[0].note)

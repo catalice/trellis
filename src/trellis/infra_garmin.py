@@ -377,12 +377,14 @@ class GarminActivityReader:
         self._connections = connection_repository
         self._client = client
 
-    def recent_running_activities(self, user_id: UUID, *, limit: int = 20) -> list[GarminActivity]:
+    def recent_activities(self, user_id: UUID, *, limit: int = 20) -> list[GarminActivity]:
+        """All recent activities, ANY type (runs, strength, ...). No type filter
+        here — the coach must be able to SEE everything to plan around it;
+        callers that genuinely need runs only (the run log) filter themselves."""
         dump = self._connections.get_session_dump(user_id)
         if not dump:
             raise RuntimeError("Garmin not connected. Use /garmin_setup to connect.")
-        activities = self._client.activities(dump, limit=max(1, min(limit, 50)))
-        return [a for a in activities if "run" in (a.activity_type or "").lower()]
+        return list(self._client.activities(dump, limit=max(1, min(limit, 50))))
 
     def activity_detail(self, user_id: UUID, activity_id: str) -> GarminActivityDetail:
         """Full detail (splits/laps) for one activity — so the coach can review how

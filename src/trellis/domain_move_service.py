@@ -31,10 +31,10 @@ class GarminWorkoutPort(Protocol):
 
 
 class GarminActivityPort(Protocol):
-    """Read recent RUNNING activities + one activity's full detail from Garmin
+    """Read recent activities (any type) + one activity's full detail from Garmin
     (see infra_garmin.GarminActivityReader). Recent + small only — the CSV path is
     for bulk history."""
-    def recent_running_activities(self, user_id: UUID, *, limit: int) -> list: ...
+    def recent_activities(self, user_id: UUID, *, limit: int) -> list: ...
     def activity_detail(self, user_id: UUID, activity_id: str) -> Any: ...
 
 
@@ -117,13 +117,17 @@ class MoveService:
         by (date, ~distance). Raises RuntimeError if Garmin isn't wired/connected."""
         if self._garmin_read is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
-        activities = self._garmin_read.recent_running_activities(user_id, limit=limit)
+        activities = self._garmin_read.recent_activities(user_id, limit=limit)
         existing = {
             (r.ran_on, round(r.distance_km, 1) if r.distance_km is not None else None)
             for r in self._repo.recent_runs(user_id, limit=200)
         }
         logged: list[RunLog] = []
         for act in activities:
+            # The run LOG is runs-only by definition (it feeds baseline/planning);
+            # the reader itself is unfiltered so review_run can see everything.
+            if "run" not in (getattr(act, "activity_type", "") or "").lower():
+                continue
             ran_on = _activity_date(act, self._tz)
             if ran_on is None:
                 continue
@@ -180,18 +184,18 @@ class MoveService:
         return result
 
     def review_run(self, user_id: UUID, *, which: int = 0) -> dict | None:
-        """Full detail for one recent run (which=0 is the most recent): the overall
-        summary + a per-split breakdown (pace + HR per lap/rep), so the coach can see
-        how the intervals/pacing/HR actually went. None if no runs. Raises RuntimeError
-        if Garmin isn't wired/connected."""
+        """Full detail for one recent activity of ANY type (which=0 is the most
+        recent — runs, strength, whatever the watch recorded): the overall summary
+        + for runs a per-split breakdown (pace + HR per lap/rep). None if no
+        activities. Raises RuntimeError if Garmin isn't wired/connected."""
         if self._garmin_read is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
-        activities = self._garmin_read.recent_running_activities(user_id, limit=max(which + 1, 1))
+        activities = self._garmin_read.recent_activities(user_id, limit=max(which + 1, 1))
         if not activities or which >= len(activities):
             return None
         act = activities[which]
         overall: dict[str, Any] = {
-            "name": getattr(act, "name", None) or "run",
+            "name": getattr(act, "name", None) or "workout",
             "date": (d.isoformat() if (d := _activity_date(act, self._tz)) else None),
             "distance_km": round(act.distance_meters / 1000, 2) if getattr(act, "distance_meters", None) else None,
             "duration_min": round(act.duration_milliseconds / 60000, 1) if getattr(act, "duration_milliseconds", None) else None,

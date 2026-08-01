@@ -29,7 +29,7 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 
 TRAINING_GET_TOOL: dict = {
     "name": "training_get",
-    "description": "Read the running plan (or a run's detail) before telling the user what's on. Use this so you speak from what's actually stored, not memory.",
+    "description": "Read the running plan (or a recent workout's detail — any activity type) before telling the user what's on. Use this so you speak from what's actually stored, not memory.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -42,16 +42,17 @@ TRAINING_GET_TOOL: dict = {
                     "today: today's stored session. "
                     "baseline: the stored fitness baseline. "
                     "history: recent completed runs — read before reviewing a week or planning the next. "
-                    "run_detail: one recent run's per-split/lap breakdown (pace + HR per rep) from "
-                    "Garmin, so you can see how the intervals/pacing/HR actually went ('how did my "
-                    "intervals go?'). Use the 'which' field to pick which recent run. "
+                    "run_detail: one recent workout from Garmin — ANY activity type (0 = most recent, "
+                    "even if it's strength, not a run). Runs get a per-split/lap breakdown (pace + HR "
+                    "per rep) so you can see how the intervals/pacing actually went; other workouts "
+                    "get duration/HR/calories. Use the 'which' field to pick which recent workout. "
                     "(Readiness/recovery — sleep, HRV, body battery — is in your context every turn; "
                     "health lives in the Sense room, the coach borrows it.)"
                 ),
             },
             "which": {
                 "type": "integer",
-                "description": "For run_detail only: which recent run (0 = most recent, default; 1 = the one before).",
+                "description": "For run_detail only: which recent workout (0 = most recent of any type, default; 1 = the one before).",
             },
         },
         "required": ["what"],
@@ -191,7 +192,7 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, move_
             _log.warning("run_detail failed", exc_info=True)
             return "Couldn't reach Garmin just now — try again in a moment."
         if detail is None:
-            return "No run found to review. Sync Garmin first, or check the number."
+            return "No recent workout found to review. Sync Garmin first, or check the number."
         return _fmt_run_detail(detail)
 
     return "Unknown request. Use what: plan, week, today, baseline, history, or run_detail."
