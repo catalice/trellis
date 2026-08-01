@@ -8,12 +8,17 @@ Read this before touching anything. These rules exist because we learned them th
 
 Trellis is a second brain. Not a coaching bot. Not a task manager. A persistent external mind that holds what Cat's brain can't — ideas, tasks, goals, things worth remembering — and synthesises it into something useful.
 
-Coaching (training) and structured learning are modules that plug into the second brain. The second brain is the system. Everything else is a room inside it.
+**The shape: a big brain with houses.**
 
-**Three modes:**
-- **Second brain** — capture, synthesise, triage, retrieve, build. The front door. Default when nothing else is signalled.
-- **Training** — physical coaching module. Plans, Garmin, readiness, arc. Add-on, not the core.
-- **Learn** — deliberate knowledge building. Threads, synthesis, understanding over time.
+- **The big brain** is the orchestrator plus the core — always on, every turn. It holds who Cat is (profile), what's live in her life (current context), and the snapshots. Generic chat and anything that isn't clearly about a specialist area lands here, by design. There is never a "routing failure" — worst case you're home in the big brain.
+- **Houses** are specialist domains that light up only when a message means them:
+  - **Move** — the running coach. The DOING side of the body: plans, workouts, races, Garmin push.
+  - **Sense** — health and wellbeing tracking. The MONITORING side: mood, energy, meds, cycle, sleep, HRV, readiness. Owns the Garmin health data.
+  - **Focus** — executive function. The recording side: tasks, reminders, ideas, brain dumps, goals, efforts.
+  - **Learn** — deliberate knowledge building. Future house; not yet registered.
+- **Rooms** are the phrases inside each house that describe what it handles ("shopping lists", "recovery and readiness", "intervals and long runs"). The router matches messages against rooms, not house names. Growing a house = adding a room to its list.
+
+The axis between Move and Sense is doing vs monitoring, NOT physical vs mental — that's why aches live in Sense.
 
 Full direction: `docs/DIRECTION.md`.
 
@@ -24,6 +29,32 @@ Full direction: `docs/DIRECTION.md`.
 **Ask before building.** If the user didn't explicitly ask for a feature, don't build it.
 Explaining a problem is not a request to solve it. Confirming something works is not a request to extend it.
 When in doubt: say what you'd do and ask first.
+
+---
+
+## Routing — how a message reaches a house
+
+Routing is SEMANTIC (meaning, not keywords) and shapes CONTEXT ONLY. Tools are always available regardless of routing — Claude decides what to call from tool descriptions. This is non-negotiable: gating tools by routing caused the model to deny real capabilities.
+
+The mechanism (`infra_router.SemanticRouter`):
+1. Each house declares its rooms (`FOCUS_ROOMS` / `SENSE_ROOMS` / `MOVE_ROOMS` in its `*_tool.py`). Rooms are embedded once at startup (local fastembed/bge-small — no network, no key, baked into the Docker image).
+2. Per message: one cheap local embedding, then each house scores by its BEST-matching room (max cosine). Best-room, never a blended description — a single door-label vector dilutes sharp signals.
+3. The clearly-best house is routed; a second house joins only if within the close margin (ambiguous → load both — Claude self-resolves mid-turn, agentic loop). Below the floor → route EMPTY: the big brain carries the turn.
+4. Embedder down → keyword fallback (`core_router.Router`, with focus as default in that degraded mode only). Routing must never take the bot down.
+
+**Guess, don't ask.** When ambiguous, load both candidate houses and proceed. Asking "A or B?" costs 2 turns every time; guessing costs 2 only on a miss. Ask only when genuinely ~50/50 AND a wrong guess is costly/hard to undo (pushing the wrong workout to the watch, deleting something).
+
+**Writing rooms — learned the hard way:**
+- Short, concrete, 2+ word phrases. Single words are noise magnets.
+- NO time words ("today", "daily", "morning") — they drag in scheduling and greeting messages.
+- NO conversational phrasing ("how am I doing") — it attracts all everyday chat.
+- NO catch-all claims ("anything else lands here") — the big brain is the catch-all, not a house.
+- One question shape can get its own room ('recovery and readiness' AND 'readiness score' both exist — max-over-rooms means each message finds its best magnet).
+- Tuning is ADDITIVE: diagnose with the per-room score dump, fix by adding a room, not rewording a sentence.
+
+**The proof harness is the build gate**: `tests/test_semantic_router.py` prints the real score table (`-q -s`) and locks clear cases + generic-chat-routes-empty as permanent regressions. Any room or threshold change must keep it green. A live misroute becomes a one-line room addition plus a battery case.
+
+The router logs the winning room per turn (debug) — misroutes are self-explaining.
 
 ---
 
@@ -55,31 +86,36 @@ When in doubt: say what you'd do and ask first.
 Every file in `src/trellis/` must be exactly one of these categories. Flat structure, no nested folders, no exceptions.
 
 ```
-# Core — runtime infrastructure
-core_assembler.py
+# Core — runtime infrastructure (the big brain's plumbing)
+core_assembler.py    # one turn end to end: routing, context tiers, tool binding
 core_config.py
 core_history.py
-core_main.py
-core_meta_tool.py
+core_main.py         # the ONE place houses are registered and wired
+core_meta_tool.py    # always-on tools: update_current_context, save_preferences
 core_onboarding.py
-core_oracle.py
-core_profile.py        # UserProfile, CurrentContext — global services
-core_registry.py
-core_router.py
+core_oracle.py       # the agentic loop (one Claude call per turn, tools until end_turn)
+core_profile.py      # UserProfile, CurrentContext — global services
+core_registry.py     # houses register here: context loader + tools + rooms + signals
+core_router.py       # keyword fallback router (degraded mode only)
 core_summariser.py
 core_telegram.py
 
-# Infrastructure — data sources, not domains
+# Infrastructure — data sources and engines, not houses
+infra_embeddings.py  # local embedder (fastembed/bge-small) — memory + routing share it
 infra_garmin.py      # Garmin API client, sync, push, connection management
-infra_tracking.py    # health records, readiness scoring, cycle, self-reports
+infra_memory.py      # the Trellis-wide meaning index (embed-on-write, recall)
+infra_obsidian.py    # vault projection
 infra_postgres.py    # DB connection + migrate() only — no repo classes here
+infra_router.py      # SemanticRouter — houses scored by best-matching room
+infra_search.py      # web search (Tavily)
+infra_tracking.py    # health records, readiness scoring, cycle, self-reports
 
-# Domains — exactly 5 files each
-domain_{focus|sense|move|learn}_models.py
-domain_{focus|sense|move|learn}_service.py
-domain_{focus|sense|move|learn}_claude.py
-domain_{focus|sense|move|learn}_repo.py
-domain_{focus|sense|move|learn}_tool.py
+# Houses — exactly 5 files each
+domain_{move|sense|focus|learn}_models.py
+domain_{move|sense|focus|learn}_service.py
+domain_{move|sense|focus|learn}_claude.py
+domain_{move|sense|focus|learn}_repo.py
+domain_{move|sense|focus|learn}_tool.py
 
 # Migrations
 migrations/001_schema.sql   # base schema (fresh installs)
@@ -90,9 +126,9 @@ migrations/00N_*.sql        # numbered additive migrations — never wipe live d
 
 ---
 
-## Domain file pattern
+## House file pattern
 
-Every domain follows this structure exactly:
+Every house follows this structure exactly:
 
 | File | Contents | Rule |
 |------|----------|------|
@@ -100,32 +136,28 @@ Every domain follows this structure exactly:
 | `*_service.py` | Business logic | Never talks to Claude or DB directly — delegates |
 | `*_claude.py` | All Claude calls | Prompts as module-level constants; methods return typed data or None on failure |
 | `*_repo.py` | Storage | Protocol at top, Postgres impl below |
-| `*_tool.py` | Tool wiring + context loader | Schema dict + handler `(user_id, input_dict, now) → str`; context loader factory at bottom |
+| `*_tool.py` | Tool wiring + context loader + rooms | Schema dict + handler `(user_id, input_dict, now) → str`; context loader factory; `*_ROOMS` + `*_SIGNALS` at the bottom |
 
 ---
 
-## The second brain domain
+## The Focus house
 
-The core of Trellis. Default domain when no other signal fires — if the message doesn't sound like training or structured learning, it lands here.
+Executive function — the recording house.
 
 **What it owns:**
 - Brain dumps (raw text in, synthesised + triaged out)
 - Ideas (wild, half-formed, philosophical — all valid)
 - Tasks and reminders
-- Goals (all types — training goals are a subset, not separate)
-- Captures (links, quotes, references)
+- Goals (ALL types — race, life, habit. Training goals are a subset, not separate)
+- Captures (links, quotes, references) and Efforts (project pages built up over time)
 - Periodic cleanup sessions ("what have I got, let's organise it")
-
-**What it does not own:**
-- Training plans, sessions, Garmin data → training module
-- Structured learning threads → learn module
 
 **The synthesis pipeline** — the feature that makes this a second brain, not a notes dump:
 
 ```
 user sends brain dump
        ↓
-Claude triages + synthesises (domain_second_brain_claude.py)
+Claude triages + synthesises (domain_focus_claude.py)
        ↓
 Returns: BrainDumpResult
   - type: idea | task | goal | project_seed | question | reference | mixed
@@ -139,38 +171,47 @@ Stored in DB. Claude responds with the cleaned version + any actions surfaced.
 
 The original dump is always preserved. The synthesis sits alongside it.
 
-**Goals live here, not in training.** All goals — race, life, habit, general — are owned by second_brain. Training domain reads training-relevant goals (goal_type: race|aerobic|strength) as Tier 1b context when building plans. Second_brain shows all goals.
+**Goals live here.** Move reads training-relevant goals (goal_type: race|aerobic|strength) cross-cutting when planning. Focus shows all goals.
 
 ---
 
-## Training domain
+## The Sense house
 
-A module. The old code (`training_*.py`, `ef_*.py`, etc.) stays functional until this domain is built. Build second_brain first.
+Health and wellbeing tracking — the monitoring house (Mind).
 
 **What it owns:**
-- Weekly training plans and sessions
-- Training arc (periodisation)
-- Garmin integration (activities, sync, push to watch)
-- Readiness adaptation
-- Morning check-ins, post-workout logs, strength sessions
-- Training-specific anchors (PT, social run)
+- Self-reported state: mood, energy, meds, sleep, period/cycle (`log_state`)
+- Garmin health data: sleep score, HRV, body battery, resting heart rate, readiness — Sense OWNS this; Move borrows it
+- The wellbeing snapshot + readiness band
 
-**What it does not own:**
-- Goals — reads them from second_brain's goals table filtered by goal_type
-- General tasks — those are second_brain
+**Why health lives here and not in Move:** the axis is doing (Move) vs monitoring (Sense). Health data was once mis-filed in the coach — that's why "what's my readiness" mis-routed. Re-homed; don't move it back.
 
 ---
 
-## Learn domain
+## The Move house
 
-A module. Deliberate knowledge building — different cognitive mode from second_brain.
-
-**The distinction:** second_brain is retrieval and action (closing tabs, not losing things). Learn is synthesis and understanding (building something deliberately). Test: does it need to be *done* or *understood*? Done → second_brain. Understood → learn.
+The running coach — a lean module (Claude + tools; coaching happens in the turn).
 
 **What it owns:**
-- Learning threads (named topics)
-- Entries within threads
-- Periodic synthesis within a thread
+- Weekly training plans and sessions (`save_training_plan`, `training_get`)
+- Garmin activities: push workouts to watch, read recent runs, on-demand sync
+- Coaching judgment: what kind of week, how much load — Claude's, never hardcoded
+
+**What it reads cross-cutting (never owns):**
+- Goals — from Focus's goals table, filtered by goal_type
+- Health/readiness — from Sense, to factor into planning
+
+Garmin sync runs two ways: automatically in the background daily, and via the `sync_garmin` tool when Claude judges data is stale for the question at hand.
+
+---
+
+## The Learn house
+
+Future. Deliberate knowledge building — a different cognitive mode from Focus.
+
+**The distinction:** Focus is retrieval and action (closing tabs, not losing things). Learn is synthesis and understanding (building something deliberately). Test: does it need to be *done* or *understood*? Done → Focus. Understood → Learn.
+
+When built: learning threads (named topics), entries within threads, periodic synthesis within a thread.
 
 ---
 
@@ -213,34 +254,19 @@ Two patterns, chosen by risk profile:
 
 | Pattern | When to use | Why |
 |---|---|---|
-| **Dispatch read** `{domain}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
-| **Specific named write** `save_week_plan`, `complete_task` | All writes | High-stakes. Explicit names prevent confusion. |
+| **Dispatch read** `{house}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
+| **Specific named write** `save_training_plan`, `complete_task` | All writes | High-stakes. Explicit names prevent confusion. |
 
-**Always-available tools** (regardless of domain routing):
-- `brain_dump(text)` — capture anything, immediately; synthesis happens automatically
-- `update_context(data)` — current life situation
-- `body_log(type: self_report|cycle|period, data)`
+**All tools are always available** — routing never gates them. The current 21:
 
-**Second brain tools (~8)**
-- `second_brain_get(what: tasks|goals|inbox|ideas|reminders|project)` — dispatch read
-- `create_task`, `complete_task`, `update_task`
-- `set_reminder`, `cancel_reminder`
-- `add_goal`, `update_goal`
-- `cleanup_session` — periodic review: "what have I got, let's organise it"
+- **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`
+- **Focus:** `focus_get`, `create_task`, `complete_task`, `update_task`, `set_reminder`, `cancel_reminder`, `add_goal`, `update_goal`, `save_to_effort`, `cleanup_session`, `delete_entry`, `web_search`
+- **Sense:** `log_state` (the ONE tool — reads are context, not tools)
+- **Move:** `training_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`
 
-**Training tools (~8)** — build second, existing code stays functional in the meantime
-- `training_get(what: plan|today|health|arc|anchors|activities)`
-- `save_week_plan`, `save_training_arc`, `adapt_session`
-- `training_log(type: morning|post_workout|strength, data)`
-- `set_anchor`, `remove_anchor`
-- `push_to_watch`
+(Onboarding mode additionally wires `save_identity`.)
 
-**Learn tools (2)**
-- `start_learning_thread`, `add_learning_entry`
-
-**Total: ~20 tools.** The ceiling is 30. Above that, something has been added without being questioned.
-
-Note: Garmin sync is **not** a tool. It runs automatically when stale. Claude never decides to sync.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 21. A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 
@@ -253,15 +279,15 @@ Three tiers. Every piece of data belongs in exactly one.
 - Does Claude just need to know something exists or how urgent it is? → Tier 2
 - Is it detail Claude might need but often won't? → Tier 3
 
-**Tier 1a — Global** (always loaded, every turn):
+**Tier 1a — The core (big brain, always loaded, every turn):**
 - **Profile** — who Cat is, physiology, background
-- **Life context** — user-managed via `update_context`. "Wedding in 3 weeks." Affects everything.
-- **Latest self-report** — today's energy/body/life load if logged
+- **Life context** — user-managed via `update_current_context`. "Wedding in 3 weeks." Affects everything.
+- The core is deliberately minimal. The test for core membership: *needed on EVERY call?* If not → it's a house.
 
-**Tier 1b — Domain-routed** (loaded when domain is active):
-- **second_brain:** active task count + recent ideas summary + active goals
-- **training:** training-relevant goals (race|aerobic|strength) + detected patterns/insights
-- **learn:** active thread names
+**Tier 1b — House-routed** (loaded when the house lights up):
+- **Focus:** active task count + recent ideas summary + active goals
+- **Sense:** recent state logs + latest health/readiness detail
+- **Move:** training-relevant goals + current plan context
 
 **Tier 2 — Snapshot** (always loaded, existence and urgency only):
 ```
@@ -271,15 +297,15 @@ Readiness: STEADY
 Reminders: 1 due at 18:00
 ```
 
-**Tier 3 — Tool-on-demand:** task content, session details, thread entries, arc, activity history.
+**Tier 3 — Tool-on-demand:** task content, session details, plan detail, activity history, recall.
 
-The snapshot does not grow. Any new line must pass: *does this tell Claude something exists or how urgent it is?*
+The snapshot does not grow. Any new line must pass: *does this tell Claude something exists or how urgent it is?* Cost scales with complexity (the green property): chat = big brain only (cheapest); one house = big brain + that house; multi-house = rare. **Know cheaply, fetch precisely.**
 
 ---
 
 ## Lean constraints (non-negotiable)
 
-- **One Claude call per turn.** Never add a second call. Add tools instead.
+- **One Claude call per turn.** Never add a second call. Add tools instead. (Embeddings are not Claude calls — the router's per-turn embed is local and cheap.)
 - **Minimal pre-loaded context.** The failure mode is loading too much, not too little.
 - **Bounded context.** Insights and history enter as summaries. Never pass raw records.
 - **Tools as the API surface.** A future UI calls the same tools Telegram does.
@@ -302,14 +328,9 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - **ReadinessBand has no MODERATE.** Valid values: LOW, STEADY, READY, STRONG.
 - **Don't revert a commit by amending.** Create a new commit.
 - **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.
-
----
-
-## Build order
-
-1. **second_brain** — this is Trellis. Build it first.
-2. **training** — module, add after. Existing code stays functional in the meantime.
-3. **learn** — module, comes naturally after second_brain is solid.
+- **Never gate tools by routing.** Routing shapes context only.
+- **Room phrases: no single words, no time words, no chat phrasing, no catch-alls.** See Routing.
+- **Clean-audit every stage of a restructure**, not just the end: 0 non-conforming filenames, 0 dead modules, 0 duplicated logic, tests green + entrypoints import, tool count flat.
 
 ---
 
@@ -319,4 +340,6 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - `.env` is gitignored — contains live bot token, API key, secrets. Never log or expose.
 - DB reset (full wipe): `docker compose down -v && docker compose up --build -d`
 - Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
+- Embedding backfill (safe to re-run): `uv run python scripts/backfill_embeddings.py`
 - Tests: `.venv/bin/pytest tests/ -q`
+- The embedding model is baked into the image (Dockerfile) — the bot embeds offline at runtime.

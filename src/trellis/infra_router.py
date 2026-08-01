@@ -138,28 +138,30 @@ class SemanticRouter:
 
     def route(self, message: str) -> set[str]:
         """Houses whose meaning matches the message (possibly empty -> big brain).
-        Never raises."""
+        Never raises. Logs the winning room so live misroutes are self-explaining."""
         try:
-            scores = self.scores(message)
+            detail = self.explain(message)
         except Exception:
             _log.warning("SemanticRouter.route failed", exc_info=True)
-            scores = None
+            detail = None
 
-        if scores is None:
+        if detail is None:
             # Embedder down -> graceful fallback, never a crash.
             if self._fallback is not None:
                 return self._fallback.route(message)
             return set(self._houses)  # load broadly rather than deny
 
-        if not scores:
+        if not detail:
             return set()
 
-        top_name, top_score = max(scores.items(), key=lambda kv: kv[1])
+        top_name, (top_score, top_room) = max(detail.items(), key=lambda kv: kv[1][0])
         if top_score < self._min_score:
+            _log.debug("route: big brain (top %r %.3f via %r)", top_name, top_score, top_room)
             return set()  # nothing meaningfully about a house -> big brain
 
         matched = {top_name}
-        for name, score in scores.items():
+        for name, (score, _room) in detail.items():
             if name != top_name and (top_score - score) <= self._close_margin:
                 matched.add(name)  # close second -> ambiguous, load both
+        _log.debug("route: %s via %r (%.3f)", sorted(matched), top_room, top_score)
         return matched
