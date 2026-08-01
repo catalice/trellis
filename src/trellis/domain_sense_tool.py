@@ -309,7 +309,10 @@ SENSE_SIGNALS: list[str] = [
 # The rooms inside the sense house (Mind / monitoring), for semantic routing.
 # Each phrase is embedded separately and the house scores by its BEST-matching
 # room — keep phrases short, concrete and 2+ words (single words are noise
-# magnets; conversational phrasing attracts unrelated everyday messages).
+# magnets; so are time words like "today"/"daily", which drag in scheduling
+# and greeting messages; conversational phrasing attracts unrelated chat).
+# 'recovery and readiness' + 'readiness score' are deliberately both here:
+# the first catches "am I recovered enough?", the second "how's my readiness?".
 SENSE_ROOMS: list[str] = [
     "mood and energy",
     "stress and overwhelm",
@@ -319,6 +322,7 @@ SENSE_ROOMS: list[str] = [
     "HRV and resting heart rate",
     "body battery",
     "recovery and readiness",
+    "readiness score",
     "wellbeing tracking",
 ]
 
