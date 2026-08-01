@@ -1,13 +1,15 @@
 """
-Offline proof for the semantic router.
+Offline proof for the semantic router (houses + rooms).
 
 Two layers:
-  1. Deterministic FAKE-embedder tests — prove the ROUTING LOGIC (best room,
-     ambiguous -> both, weak -> empty, embedder-down -> fallback) with no network.
+  1. Deterministic FAKE-embedder tests — prove the ROUTING LOGIC (best house,
+     max-over-rooms, ambiguous -> both, weak -> empty, embedder-down -> fallback)
+     with no network.
   2. A LIVE run against the real LOCAL embedder (fastembed/bge-small) that prints
-     the real per-room cosine score table and asserts the CLEAR cases route to the
-     right room. Borderline cases are printed (description-tuning candidates), not
-     failed. The printed table is what we tune descriptions/thresholds from.
+     the real per-house score table (best room + score) and asserts the CLEAR
+     cases route to the right house and generic chat routes EMPTY (big brain).
+     Borderline cases are printed (room-tuning candidates), not failed. The
+     printed table is what we tune rooms/thresholds from.
 
 Run:  uv run pytest tests/test_semantic_router.py -q -s
 """
@@ -16,23 +18,22 @@ from __future__ import annotations
 import unittest
 
 from trellis.infra_router import SemanticRouter
-from trellis.domain_focus_tool import FOCUS_DESCRIPTION
-from trellis.domain_sense_tool import SENSE_DESCRIPTION
-from trellis.domain_move_tool import MOVE_DESCRIPTION
+from trellis.domain_focus_tool import FOCUS_ROOMS
+from trellis.domain_sense_tool import SENSE_ROOMS
+from trellis.domain_move_tool import MOVE_ROOMS
 
-# The real room set — used by the Layer 2 live proof against the actual embedder.
-DESCRIPTIONS = {
-    "focus": FOCUS_DESCRIPTION,
-    "sense": SENSE_DESCRIPTION,
-    "move": MOVE_DESCRIPTION,
+# The real houses — used by the Layer 2 live proof against the actual embedder.
+HOUSES = {
+    "focus": FOCUS_ROOMS,
+    "sense": SENSE_ROOMS,
+    "move": MOVE_ROOMS,
 }
 
-# Layer 1 proves the ROUTING LOGIC (best / ambiguous / weak / fallback) with
-# hand-controlled vectors. Two synthetic rooms are enough to drive every branch;
-# the deterministic outcomes don't depend on how many rooms exist.
-_LOGIC_ROOMS = {
-    "focus": FOCUS_DESCRIPTION,
-    "move": MOVE_DESCRIPTION,
+# Layer 1 proves the ROUTING LOGIC with hand-controlled vectors. Two synthetic
+# houses are enough to drive every branch.
+_LOGIC_HOUSES = {
+    "focus": ["focus room"],
+    "move": ["move room"],
 }
 
 
@@ -60,12 +61,12 @@ class _KeywordFallback:
 
 
 def _router(mapping, **kw) -> SemanticRouter:
-    return SemanticRouter(_LOGIC_ROOMS, FakeEmbedder(mapping), **kw)
+    return SemanticRouter(_LOGIC_HOUSES, FakeEmbedder(mapping), **kw)
 
 
 class TestRoutingLogic(unittest.TestCase):
-    # Room description vectors: move -> x-axis, focus -> y-axis.
-    BASE = {MOVE_DESCRIPTION: [1.0, 0.0, 0.0], FOCUS_DESCRIPTION: [0.0, 1.0, 0.0]}
+    # Room vectors: move's room -> x-axis, focus's room -> y-axis.
+    BASE = {"move room": [1.0, 0.0, 0.0], "focus room": [0.0, 1.0, 0.0]}
 
     def _map(self, msg, vec):
         return {**self.BASE, msg: vec}
@@ -79,7 +80,7 @@ class TestRoutingLogic(unittest.TestCase):
         self.assertEqual(r.route("m"), {"focus"})
 
     def test_ambiguous_loads_both(self):
-        # Equidistant from both -> within close margin -> both rooms.
+        # Equidistant from both -> within close margin -> both houses.
         r = _router(self._map("m", [0.7, 0.7, 0.0]))
         self.assertEqual(r.route("m"), {"move", "focus"})
 
@@ -93,12 +94,28 @@ class TestRoutingLogic(unittest.TestCase):
         r = _router(self._map("m", [1.0, 0.1, 0.0]))
         self.assertEqual(r.route("m"), {"move"})
 
+    def test_house_scores_by_best_room(self):
+        # A house with two rooms scores by its BEST-matching room — the sharp
+        # match must not be diluted by the house's other rooms.
+        houses = {"focus": ["focus room", "shopping room"], "move": ["move room"]}
+        mapping = {
+            "move room": [1.0, 0.0, 0.0],
+            "focus room": [0.0, 1.0, 0.0],
+            "shopping room": [0.0, 0.0, 1.0],
+            "m": [0.1, 0.0, 0.99],  # almost exactly the shopping room
+        }
+        r = SemanticRouter(houses, FakeEmbedder(mapping))
+        self.assertEqual(r.route("m"), {"focus"})
+        score, room = r.explain("m")["focus"]
+        self.assertEqual(room, "shopping room")
+        self.assertGreater(score, 0.9)
+
     def test_embedder_down_uses_fallback(self):
-        r = SemanticRouter(_LOGIC_ROOMS, BrokenEmbedder(), fallback=_KeywordFallback())
+        r = SemanticRouter(_LOGIC_HOUSES, BrokenEmbedder(), fallback=_KeywordFallback())
         self.assertEqual(r.route("anything"), {"FELL_BACK"})
 
     def test_embedder_down_no_fallback_loads_all(self):
-        r = SemanticRouter(_LOGIC_ROOMS, BrokenEmbedder())
+        r = SemanticRouter(_LOGIC_HOUSES, BrokenEmbedder())
         self.assertEqual(r.route("anything"), {"focus", "move"})
 
     def test_room_vectors_embedded_once(self):
@@ -109,11 +126,11 @@ class TestRoutingLogic(unittest.TestCase):
                 calls["n"] += 1
                 return super().embed(texts)
 
-        r = SemanticRouter(_LOGIC_ROOMS, CountingEmbedder(self.BASE))
+        r = SemanticRouter(_LOGIC_HOUSES, CountingEmbedder(self.BASE))
         r.route("a")
         r.route("b")
-        # 1 call to embed the 2 descriptions + 1 per message = 3, not re-embedding
-        # descriptions each time.
+        # 1 batched call to embed all rooms + 1 per message = 3, not re-embedding
+        # rooms each time.
         self.assertEqual(calls["n"], 3)
 
 
@@ -121,18 +138,18 @@ class TestRoutingLogic(unittest.TestCase):
 
 class TestAssemblerWiring(unittest.TestCase):
     """Stage 4 wiring — Assembler builds a SemanticRouter over the registry's
-    room descriptions when an embedder is present, keeps the keyword Router
-    (with default domain) when it isn't, and falls back to keywords if the
-    embedder dies. Construction-only: oracle/history are never touched here."""
+    houses (each domain's rooms) when an embedder is present, keeps the keyword
+    Router (with default domain) when it isn't, and falls back to keywords if
+    the embedder dies. Construction-only: oracle/history are never touched here."""
 
-    BASE = {MOVE_DESCRIPTION: [1.0, 0.0, 0.0], FOCUS_DESCRIPTION: [0.0, 1.0, 0.0]}
+    BASE = {"move room": [1.0, 0.0, 0.0], "focus room": [0.0, 1.0, 0.0]}
 
     def _registry(self):
         from trellis.core_registry import TrellisRegistry
         registry = TrellisRegistry()
         loader = lambda uid, now: None
-        registry.add_domain("focus", loader, [], ["task"], description=FOCUS_DESCRIPTION)
-        registry.add_domain("move", loader, [], ["run"], description=MOVE_DESCRIPTION)
+        registry.add_domain("focus", loader, [], ["task"], rooms=["focus room"])
+        registry.add_domain("move", loader, [], ["run"], rooms=["move room"])
         return registry
 
     def _assembler(self, embedder):
@@ -147,10 +164,10 @@ class TestAssemblerWiring(unittest.TestCase):
             embedder=embedder,
         )
 
-    def test_registry_returns_descriptions(self):
+    def test_registry_returns_rooms(self):
         self.assertEqual(
-            self._registry().all_descriptions(),
-            {"focus": FOCUS_DESCRIPTION, "move": MOVE_DESCRIPTION},
+            self._registry().all_rooms(),
+            {"focus": ["focus room"], "move": ["move room"]},
         )
 
     def test_with_embedder_routes_by_meaning(self):
@@ -158,7 +175,7 @@ class TestAssemblerWiring(unittest.TestCase):
         self.assertEqual(a._router.route("m"), {"move"})
 
     def test_with_embedder_weak_match_is_big_brain_not_default(self):
-        # No room lights up -> empty (the big brain carries the turn); the
+        # No house lights up -> empty (the big brain carries the turn); the
         # keyword default is NOT injected on a deliberate semantic miss.
         a = self._assembler(FakeEmbedder({**self.BASE, "m": [0.0, 0.0, 1.0]}))
         self.assertEqual(a._router.route("m"), set())
@@ -176,11 +193,11 @@ class TestAssemblerWiring(unittest.TestCase):
 
 # --- Layer 2: live proof against the real (local) embedder -----------------
 
-# message -> expected ROUTE result. "move"/"focus"/"sense" = that room must be
-# routed. "BIGBRAIN" = must route EMPTY (generic chat — no room lights up; the
+# message -> expected ROUTE result. "move"/"focus"/"sense" = that house must be
+# routed. "BIGBRAIN" = must route EMPTY (generic chat — no house lights up; the
 # always-on core carries the turn). "BORDERLINE" = genuinely ambiguous with the
-# current descriptions (informational only — printed, not asserted; these are
-# the description-tuning candidates surfaced by the real score table).
+# current rooms (informational only — printed, not asserted; these are the
+# room-tuning candidates surfaced by the real score table).
 LIVE_CASES = [
     # clear move — distinctive running language
     ("what pace for my 6x400m intervals tomorrow?", "move"),
@@ -196,10 +213,11 @@ LIVE_CASES = [
     ("I'm exhausted and flat today", "sense"),
     ("how's my readiness today?", "sense"),
     ("took my meds", "sense"),
-    # generic chat — no room; the big brain (always-on core) carries the turn
+    # generic chat — no house; the big brain (always-on core) carries the turn
     ("hey", "BIGBRAIN"),
     ("thanks, that's great", "BIGBRAIN"),
-    # borderline — sits on a line between rooms with the current descriptions.
+    ("morning!", "BIGBRAIN"),
+    # borderline — sits on a line between houses with the current rooms.
     ("did I sleep ok for a run tomorrow?", "BORDERLINE"),
     ("what do we do this week?", "BORDERLINE"),
     ("sort out my plan", "BORDERLINE"),
@@ -214,37 +232,42 @@ class TestLiveRouting(unittest.TestCase):
         except Exception as exc:  # pragma: no cover
             self.skipTest(f"local embedder unavailable: {exc}")
 
-        router = SemanticRouter(DESCRIPTIONS, embedder)
+        router = SemanticRouter(HOUSES, embedder)
         # Warm the room vectors; bail out gracefully if the model can't load.
         if router.scores("warmup") is None:
             self.skipTest("local embedder unavailable — skipping live check")
 
-        print("\n\n=== SEMANTIC ROUTER — real score table (local bge-small) ===")
-        print(f"{'message':<38} {'move':>9} {'2nd_brain':>10} {'sense':>9}  -> routed")
+        print("\n\n=== SEMANTIC ROUTER — real score table (local bge-small, best room per house) ===")
+        print(f"{'message':<38} {'move':>7} {'focus':>7} {'sense':>7}  -> routed [winning room]")
         mismatches = []
         for msg, expected in LIVE_CASES:
-            scores = router.scores(msg)
-            if scores is None:
+            detail = router.explain(msg)
+            if detail is None:
                 self.skipTest("embedder went unavailable mid-run")
             routed = router.route(msg)
-            t = scores.get("move", 0.0)
-            sb = scores.get("focus", 0.0)
-            se = scores.get("sense", 0.0)
+            top_house = max(detail, key=lambda h: detail[h][0])
+            top_room = detail[top_house][1]
+            t = detail.get("move", (0.0, ""))[0]
+            f = detail.get("focus", (0.0, ""))[0]
+            s = detail.get("sense", (0.0, ""))[0]
             tag = "  (borderline)" if expected == "BORDERLINE" else ""
-            print(f"{msg[:37]:<38} {t:>9.3f} {sb:>10.3f} {se:>9.3f}  -> {sorted(routed) or '[]'}{tag}")
-            # Assert the CLEAR cases: the expected room must be in the route,
-            # and generic chat must route empty (big brain, no room).
+            print(
+                f"{msg[:37]:<38} {t:>7.3f} {f:>7.3f} {s:>7.3f}  "
+                f"-> {sorted(routed) or '[]'} ['{top_room}']{tag}"
+            )
+            # Assert the CLEAR cases: the expected house must be in the route,
+            # and generic chat must route empty (big brain, no house).
             wrong = (
                 expected in ("move", "focus", "sense") and expected not in routed
             ) or (expected == "BIGBRAIN" and routed)
             if wrong:
                 mismatches.append(
-                    (msg, expected, sorted(routed), round(t, 3), round(sb, 3), round(se, 3))
+                    (msg, expected, sorted(routed), round(t, 3), round(f, 3), round(s, 3))
                 )
-        print("=== borderline rows are description-tuning candidates, not failures ===\n")
+        print("=== borderline rows are room-tuning candidates, not failures ===\n")
         self.assertEqual(
             mismatches, [],
-            f"clear cases routed wrong (expected room not loaded): {mismatches}",
+            f"clear cases routed wrong: {mismatches}",
         )
 
 

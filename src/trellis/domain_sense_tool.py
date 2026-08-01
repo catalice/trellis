@@ -306,14 +306,21 @@ SENSE_SIGNALS: list[str] = [
     "stress", "recovery", "check-in", "checkin",
 ]
 
-# Self-description for semantic routing (the Mind / monitoring room). Embedded and
-# matched by MEANING — keep it concrete nouns only: conversational phrasing ("how
-# am I doing") made this room a score magnet for any everyday message.
-SENSE_DESCRIPTION: str = (
-    "Health and wellbeing tracking: mood, energy, stress, medication, "
-    "menstrual cycle and period, sleep quality, HRV, resting heart rate, "
-    "body battery, recovery, readiness."
-)
+# The rooms inside the sense house (Mind / monitoring), for semantic routing.
+# Each phrase is embedded separately and the house scores by its BEST-matching
+# room — keep phrases short, concrete and 2+ words (single words are noise
+# magnets; conversational phrasing attracts unrelated everyday messages).
+SENSE_ROOMS: list[str] = [
+    "mood and energy",
+    "stress and overwhelm",
+    "medication and meds",
+    "menstrual cycle and period",
+    "sleep quality",
+    "HRV and resting heart rate",
+    "body battery",
+    "recovery and readiness",
+    "wellbeing tracking",
+]
 
 
 # ---------------------------------------------------------------------------

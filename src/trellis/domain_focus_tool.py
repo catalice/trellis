@@ -999,15 +999,21 @@ FOCUS_SIGNALS: list[str] = [
     "plan", "project", "working on",
 ]
 
-# Self-description for semantic routing. Embedded and matched by MEANING — keep it
-# tight and noun-heavy: every extra phrase is surface area for false matches, and
-# conversational wording attracts unrelated everyday messages. No catch-all claim:
-# generic chat falls through to the big brain (routes empty), not to this room.
-FOCUS_DESCRIPTION: str = (
-    "Tasks, to-dos and life admin; reminders and appointments; capturing "
-    "ideas, notes and brain dumps; shopping lists; goals and projects; "
-    "organising and recording things to do or remember."
-)
+# The rooms inside the focus house, for semantic routing. Each phrase is embedded
+# separately and the house scores by its BEST-matching room — so keep phrases
+# short, concrete and 2+ words (single words are noise magnets). Growing the
+# house = adding a room here; the router picks it up automatically. No catch-all
+# room: generic chat falls through to the big brain (routes empty).
+FOCUS_ROOMS: list[str] = [
+    "tasks and to-dos",
+    "life admin",
+    "reminders and appointments",
+    "capturing ideas and notes",
+    "brain dumps",
+    "shopping lists",
+    "goals and projects",
+    "organising things to do or remember",
+]
 
 
 # ---------------------------------------------------------------------------

@@ -377,14 +377,19 @@ MOVE_SIGNALS: list[str] = [
     "pace", "mileage", "marathon", "5k", "10k", "half marathon", "race", "coach",
 ]
 
-# Self-description for semantic routing (the running-coach room). Embedded and
-# matched by MEANING — tight and noun-heavy; recovery/readiness data belongs to
-# Sense's description, so it's deliberately absent here.
-MOVE_DESCRIPTION: str = (
-    "Running and training: workout plans, sessions, intervals, long runs, "
-    "tempo, pace, mileage, races, building fitness, pushing workouts to "
-    "the Garmin watch."
-)
+# The rooms inside the move house (running coach), for semantic routing. Each
+# phrase is embedded separately and the house scores by its BEST-matching room.
+# Recovery/readiness rooms belong to the sense house, deliberately absent here.
+MOVE_ROOMS: list[str] = [
+    "running and training",
+    "workout plans and sessions",
+    "intervals and long runs",
+    "tempo and pace",
+    "weekly mileage",
+    "races and race goals",
+    "building fitness",
+    "pushing workouts to the Garmin watch",
+]
 
 
 # ---------------------------------------------------------------------------

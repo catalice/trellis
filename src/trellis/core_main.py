@@ -53,7 +53,7 @@ from trellis.domain_focus_tool import (
     ADD_GOAL_TOOL, handle_add_goal,
     BRAIN_DUMP_TOOL, handle_brain_dump,
     RECALL_TOOL, handle_recall,
-    FOCUS_DESCRIPTION,
+    FOCUS_ROOMS,
     FOCUS_SIGNALS,
     focus_context_loader,
     focus_snapshot,
@@ -65,7 +65,7 @@ from trellis.domain_focus_tool import (
 from trellis.domain_sense_repo import PostgresStateRepository
 from trellis.domain_sense_service import SenseService
 from trellis.domain_sense_tool import (
-    SENSE_DESCRIPTION,
+    SENSE_ROOMS,
     SENSE_SIGNALS,
     sense_context_loader,
     sense_snapshot,
@@ -84,7 +84,7 @@ from trellis.infra_tracking import PostgresHealthRepository
 from trellis.domain_move_repo import PostgresMoveRepository
 from trellis.domain_move_service import MoveService
 from trellis.domain_move_tool import (
-    MOVE_DESCRIPTION,
+    MOVE_ROOMS,
     MOVE_SIGNALS,
     move_context_loader,
     move_snapshot,
@@ -247,7 +247,7 @@ def main() -> None:
             tz=settings.timezone,
         ),
         FOCUS_SIGNALS,
-        description=FOCUS_DESCRIPTION,
+        rooms=FOCUS_ROOMS,
     )
 
     registry.add_domain(
@@ -255,7 +255,7 @@ def main() -> None:
         sense_context_loader(sense_service),
         sense_tools(sense_service, settings.timezone),
         SENSE_SIGNALS,
-        description=SENSE_DESCRIPTION,
+        rooms=SENSE_ROOMS,
     )
 
     registry.add_domain(
@@ -263,7 +263,7 @@ def main() -> None:
         move_context_loader(move_service, goal_service),
         move_tools(move_service),
         MOVE_SIGNALS,
-        description=MOVE_DESCRIPTION,
+        rooms=MOVE_ROOMS,
     )
 
     oracle = Oracle(client=anthropic_client, model=settings.anthropic_model)

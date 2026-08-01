@@ -115,15 +115,15 @@ class Assembler:
         self._onboarding_system = onboarding_system
         self._onboarding_tools = onboarding_tools or []
         # Routing shapes CONTEXT only (tools are always available). Semantic when
-        # an embedder is wired — rooms matched by MEANING against their
-        # self-descriptions; empty match -> no room, the big brain (permanent
+        # an embedder is wired — each domain is a house scored by the best-matching
+        # room inside it; empty match -> no house, the big brain (permanent
         # context) carries the turn. The keyword router is the graceful fallback
         # if the embedder is down, so routing can never take the bot out.
         keyword_router = Router(registry.all_signals(), default_domain=default_domain)
-        descriptions = registry.all_descriptions()
-        if embedder is not None and descriptions:
+        houses = registry.all_rooms()
+        if embedder is not None and houses:
             self._router: Router | SemanticRouter = SemanticRouter(
-                descriptions, embedder, fallback=keyword_router,
+                houses, embedder, fallback=keyword_router,
             )
         else:
             self._router = keyword_router

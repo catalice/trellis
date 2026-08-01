@@ -27,7 +27,7 @@ class DomainRegistration:
     context_loader: ContextLoader
     tools: list[tuple[ToolSchema, ToolHandler]]
     signals: list[str]          # keywords — the fallback router when embeddings are down
-    description: str = ""       # self-description, embedded for semantic routing
+    rooms: list[str] | None = None  # the rooms inside this house, embedded for semantic routing
 
 
 class TrellisRegistry:
@@ -40,14 +40,14 @@ class TrellisRegistry:
         context_loader: ContextLoader,
         tools: list[tuple[ToolSchema, ToolHandler]],
         signals: list[str],
-        description: str = "",
+        rooms: list[str] | None = None,
     ) -> None:
         self._domains[name] = DomainRegistration(
             name=name,
             context_loader=context_loader,
             tools=tools,
             signals=signals,
-            description=description,
+            rooms=rooms,
         )
 
     # --- Oracle-facing interface -------------------------------------------
@@ -57,10 +57,10 @@ class TrellisRegistry:
         """Returns {domain_name: [signals]} for the keyword (fallback) router."""
         return {name: d.signals for name, d in self._domains.items()}
 
-    def all_descriptions(self) -> dict[str, str]:
-        """Returns {domain_name: description} for the semantic router — only
-        domains that declared one (no description -> keyword-routed only)."""
-        return {name: d.description for name, d in self._domains.items() if d.description}
+    def all_rooms(self) -> dict[str, list[str]]:
+        """Returns {domain_name: rooms} for the semantic router — only domains
+        that declared rooms (no rooms -> keyword-routed only)."""
+        return {name: d.rooms for name, d in self._domains.items() if d.rooms}
 
     def load_context(self, domain: str, user_id: UUID, now: datetime) -> str | None:
         d = self._domains.get(domain)
