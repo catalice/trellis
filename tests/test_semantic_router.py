@@ -17,9 +17,20 @@ import unittest
 
 from trellis.infra_router import SemanticRouter
 from trellis.domain_second_brain_tool import SECOND_BRAIN_DESCRIPTION
+from trellis.domain_sense_tool import SENSE_DESCRIPTION
 from trellis.domain_move_tool import MOVE_DESCRIPTION
 
+# The real room set — used by the Layer 2 live proof against the actual embedder.
 DESCRIPTIONS = {
+    "second_brain": SECOND_BRAIN_DESCRIPTION,
+    "sense": SENSE_DESCRIPTION,
+    "move": MOVE_DESCRIPTION,
+}
+
+# Layer 1 proves the ROUTING LOGIC (best / ambiguous / weak / fallback) with
+# hand-controlled vectors. Two synthetic rooms are enough to drive every branch;
+# the deterministic outcomes don't depend on how many rooms exist.
+_LOGIC_ROOMS = {
     "second_brain": SECOND_BRAIN_DESCRIPTION,
     "move": MOVE_DESCRIPTION,
 }
@@ -49,7 +60,7 @@ class _KeywordFallback:
 
 
 def _router(mapping, **kw) -> SemanticRouter:
-    return SemanticRouter(DESCRIPTIONS, FakeEmbedder(mapping), **kw)
+    return SemanticRouter(_LOGIC_ROOMS, FakeEmbedder(mapping), **kw)
 
 
 class TestRoutingLogic(unittest.TestCase):
@@ -83,11 +94,11 @@ class TestRoutingLogic(unittest.TestCase):
         self.assertEqual(r.route("m"), {"move"})
 
     def test_embedder_down_uses_fallback(self):
-        r = SemanticRouter(DESCRIPTIONS, BrokenEmbedder(), fallback=_KeywordFallback())
+        r = SemanticRouter(_LOGIC_ROOMS, BrokenEmbedder(), fallback=_KeywordFallback())
         self.assertEqual(r.route("anything"), {"FELL_BACK"})
 
     def test_embedder_down_no_fallback_loads_all(self):
-        r = SemanticRouter(DESCRIPTIONS, BrokenEmbedder())
+        r = SemanticRouter(_LOGIC_ROOMS, BrokenEmbedder())
         self.assertEqual(r.route("anything"), {"second_brain", "move"})
 
     def test_room_vectors_embedded_once(self):
@@ -98,7 +109,7 @@ class TestRoutingLogic(unittest.TestCase):
                 calls["n"] += 1
                 return super().embed(texts)
 
-        r = SemanticRouter(DESCRIPTIONS, CountingEmbedder(self.BASE))
+        r = SemanticRouter(_LOGIC_ROOMS, CountingEmbedder(self.BASE))
         r.route("a")
         r.route("b")
         # 1 call to embed the 2 descriptions + 1 per message = 3, not re-embedding
@@ -114,20 +125,20 @@ class TestRoutingLogic(unittest.TestCase):
 # description-tuning candidates surfaced by the real score table).
 LIVE_CASES = [
     # clear move — distinctive running language
-    ("6x400m intervals felt awful", "move"),
-    ("did I sleep ok for a run tomorrow?", "move"),
+    ("what pace for my 6x400m intervals tomorrow?", "move"),
     ("push my long run to sunday", "move"),
-    # clear second_brain / big-brain
+    # clear second_brain — organising / capture / retrieval
     ("add milk to my shopping list", "second_brain"),
     ("remind me to call the dentist", "second_brain"),
-    ("log my period started today", "second_brain"),
-    ("I'm exhausted and flat today", "second_brain"),
     ("idea: a podcast about design", "second_brain"),
     ("hey", "second_brain"),
-    # borderline — the big-brain owns wellbeing/sleep tracking, so generic
-    # "readiness / what do we do this week" sit on the line. Tune descriptions.
+    # clear sense — wellbeing tracking + readiness now live here
+    ("log my period started today", "sense"),
+    ("I'm exhausted and flat today", "sense"),
+    ("how's my readiness today?", "sense"),
+    # borderline — sits on a line between rooms with the current descriptions.
+    ("did I sleep ok for a run tomorrow?", "BORDERLINE"),
     ("what do we do this week?", "BORDERLINE"),
-    ("how's my readiness today?", "BORDERLINE"),
     ("sort out my plan", "BORDERLINE"),
 ]
 
@@ -146,19 +157,23 @@ class TestLiveRouting(unittest.TestCase):
             self.skipTest("local embedder unavailable — skipping live check")
 
         print("\n\n=== SEMANTIC ROUTER — real score table (local bge-small) ===")
-        print(f"{'message':<38} {'move':>9} {'2nd_brain':>10}  -> routed")
+        print(f"{'message':<38} {'move':>9} {'2nd_brain':>10} {'sense':>9}  -> routed")
         mismatches = []
         for msg, expected in LIVE_CASES:
             scores = router.scores(msg)
             if scores is None:
                 self.skipTest("embedder went unavailable mid-run")
             routed = router.route(msg)
-            t, sb = scores.get("move", 0.0), scores.get("second_brain", 0.0)
+            t = scores.get("move", 0.0)
+            sb = scores.get("second_brain", 0.0)
+            se = scores.get("sense", 0.0)
             tag = "  (borderline)" if expected == "BORDERLINE" else ""
-            print(f"{msg[:37]:<38} {t:>9.3f} {sb:>10.3f}  -> {sorted(routed) or '[]'}{tag}")
+            print(f"{msg[:37]:<38} {t:>9.3f} {sb:>10.3f} {se:>9.3f}  -> {sorted(routed) or '[]'}{tag}")
             # Assert only the CLEAR cases: the expected room must be in the route.
-            if expected in ("move", "second_brain") and expected not in routed:
-                mismatches.append((msg, expected, sorted(routed), round(t, 3), round(sb, 3)))
+            if expected in ("move", "second_brain", "sense") and expected not in routed:
+                mismatches.append(
+                    (msg, expected, sorted(routed), round(t, 3), round(sb, 3), round(se, 3))
+                )
         print("=== borderline rows are description-tuning candidates, not failures ===\n")
         self.assertEqual(
             mismatches, [],

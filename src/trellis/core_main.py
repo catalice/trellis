@@ -38,7 +38,6 @@ from trellis.domain_second_brain_repo import (
     PostgresEffortRepository,
     PostgresGoalRepository,
     PostgresReminderRepository,
-    PostgresStateRepository,
     PostgresTaskRepository,
 )
 from trellis.domain_second_brain_service import (
@@ -48,13 +47,11 @@ from trellis.domain_second_brain_service import (
     EffortService,
     GoalService,
     ReminderService,
-    StateService,
     TaskService,
 )
 from trellis.domain_second_brain_tool import (
     ADD_GOAL_TOOL, handle_add_goal,
     BRAIN_DUMP_TOOL, handle_brain_dump,
-    LOG_STATE_TOOL, handle_log_state,
     RECALL_TOOL, handle_recall,
     SECOND_BRAIN_SIGNALS,
     second_brain_context_loader,
@@ -62,7 +59,18 @@ from trellis.domain_second_brain_tool import (
     second_brain_tools,
 )
 
-# Training domain — lean running coach (Claude + tools; coaching happens in the turn).
+# Sense domain — Mind / wellbeing tracking (mood, energy, meds, sleep, period) +
+# the reading of Garmin health/readiness. The monitoring side.
+from trellis.domain_sense_repo import PostgresStateRepository
+from trellis.domain_sense_service import SenseService
+from trellis.domain_sense_tool import (
+    SENSE_SIGNALS,
+    sense_context_loader,
+    sense_snapshot,
+    sense_tools,
+)
+
+# Move domain — lean running coach (Claude + tools; coaching happens in the turn).
 from trellis.infra_garmin import (
     GarminActivityReader,
     GarminClient,
@@ -174,9 +182,8 @@ def main() -> None:
         projection=vault, memory=memory,
     )
     cleanup_service = CleanupService(capture_repo, effort_repo, brain_dump_claude)
-    state_service = StateService(state_repo, settings.timezone, projection=vault)
 
-    # --- Training domain (reads goals from the second brain; stores its own plan) ---
+    # --- Move domain (reads goals from the second brain; stores its own plan) ---
     # Garmin push (workouts -> watch) + recent-run read + data sync. Gated: needs the
     # secret key (to decrypt the stored session) and, for reads/sync, a health-worker
     # URL. Absent -> the coach still plans; the Garmin tools just say "connect first".
@@ -185,6 +192,11 @@ def main() -> None:
     # the coach reads the latest to factor into planning. Always available as a reader;
     # returns None per-user when there's no synced health yet.
     health_reader = PostgresHealthRepository(database)
+
+    # --- Sense domain (Mind / wellbeing tracking + reads Garmin health) ---
+    sense_service = SenseService(
+        state_repo, settings.timezone, projection=vault, health_reader=health_reader,
+    )
 
     garmin_push = None
     garmin_read = None
@@ -209,7 +221,6 @@ def main() -> None:
         settings.timezone,
         garmin_push=garmin_push,
         garmin_read=garmin_read,
-        health_reader=health_reader,
         garmin_sync=garmin_sync,
     )
 
@@ -228,11 +239,18 @@ def main() -> None:
             effort_service=effort_service,
             reminder_service=reminder_service,
             cleanup_service=cleanup_service,
-            state_service=state_service,
+            sense_service=sense_service,
             web_search=web_search,
             tz=settings.timezone,
         ),
         SECOND_BRAIN_SIGNALS,
+    )
+
+    registry.add_domain(
+        "sense",
+        sense_context_loader(sense_service),
+        sense_tools(sense_service, settings.timezone),
+        SENSE_SIGNALS,
     )
 
     registry.add_domain(
@@ -252,12 +270,6 @@ def main() -> None:
                 uid, inp, now, brain_dump_service=brain_dump_service
             ),
         ),
-        (
-            LOG_STATE_TOOL,
-            lambda uid, inp, now: handle_log_state(
-                uid, inp, now, state_service=state_service, tz=settings.timezone
-            ),
-        ),
         *meta_tools(context_service, preferences_repository),
     ]
     # Recall is Trellis-wide, so it's always available (like brain_dump) — but only
@@ -275,7 +287,8 @@ def main() -> None:
         permanent=[
             ("profile", _profile_loader(profile_service)),
             ("current_context", _current_context_loader(context_service)),
-            ("snapshot", second_brain_snapshot(task_service, reminder_service, state_service)),
+            ("snapshot", second_brain_snapshot(task_service, reminder_service)),
+            ("sense_snapshot", sense_snapshot(sense_service)),
             ("move_snapshot", move_snapshot(move_service)),
         ],
         always_tools=always_tools,

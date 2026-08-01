@@ -35,7 +35,7 @@ TRAINING_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["plan", "week", "today", "baseline", "history", "run_detail", "readiness"],
+                "enum": ["plan", "week", "today", "baseline", "history", "run_detail"],
                 "description": (
                     "plan: the arc + the stored week. "
                     "week: this week's REAL dates (weekday->date) plus any stored sessions. "
@@ -45,9 +45,8 @@ TRAINING_GET_TOOL: dict = {
                     "run_detail: one recent run's per-split/lap breakdown (pace + HR per rep) from "
                     "Garmin, so you can see how the intervals/pacing/HR actually went ('how did my "
                     "intervals go?'). Use the 'which' field to pick which recent run. "
-                    "readiness: the latest synced Garmin health (sleep, HRV, body battery, resting HR, "
-                    "stress) — read it before judging how hard to push this week. It IS available when "
-                    "Garmin is connected; fetch it here rather than assuming you don't have it."
+                    "(Readiness/recovery — sleep, HRV, body battery — is in your context every turn; "
+                    "health lives in the Sense room, the coach borrows it.)"
                 ),
             },
             "which": {
@@ -195,19 +194,7 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, move_
             return "No run found to review. Sync Garmin first, or check the number."
         return _fmt_run_detail(detail)
 
-    if what == "readiness":
-        health = None
-        try:
-            health = move_service.recent_health(user_id)
-        except Exception:
-            _log.warning("readiness load failed", exc_info=True)
-        line = _fmt_health(health)
-        if line is None:
-            return ("No synced Garmin health yet. If Garmin is connected, sync_garmin refreshes it; "
-                    "otherwise ask them how they slept / how they feel.")
-        return "Readiness — " + line
-
-    return "Unknown request. Use what: plan, week, today, baseline, history, run_detail, or readiness."
+    return "Unknown request. Use what: plan, week, today, baseline, history, or run_detail."
 
 
 def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
@@ -274,32 +261,6 @@ def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, move_s
         bits.append(f"health up to {result['health_through']}" + (f" ({days} day(s))" if days else ""))
     return "Synced Garmin — " + ", ".join(bits) + "."
 
-
-def _fmt_health(health: "dict | None") -> "str | None":
-    """One-line readiness summary from recent_health(), or None if there's nothing.
-    Shared by training_get(readiness), the context loader, and the snapshot so the
-    coach speaks about health consistently."""
-    if not health:
-        return None
-    bits = []
-    if health.get("date"):
-        bits.append(f"as of {health['date']}")
-    if health.get("sleep_score") is not None:
-        bits.append(f"sleep score {health['sleep_score']}")
-    if health.get("sleep_hours") is not None:
-        bits.append(f"{health['sleep_hours']}h sleep")
-    if health.get("hrv_last_night") is not None:
-        hrv = f"HRV {health['hrv_last_night']}"
-        if health.get("hrv_status"):
-            hrv += f" ({health['hrv_status']})"
-        bits.append(hrv)
-    if health.get("body_battery_high") is not None:
-        bits.append(f"body battery {health['body_battery_high']}")
-    if health.get("resting_hr") is not None:
-        bits.append(f"resting HR {health['resting_hr']}")
-    if health.get("avg_stress") is not None:
-        bits.append(f"stress {health['avg_stress']}")
-    return ", ".join(bits) if bits else None
 
 
 def _fmt_run_detail(detail: dict) -> str:
@@ -370,14 +331,9 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
         except Exception:
             _log.warning("training_context: plan load failed", exc_info=True)
 
-        # Recent health/readiness (if Garmin health is synced) — so the coach can
-        # factor sleep/HRV/body battery into the week. Best-effort, skipped if none.
-        try:
-            line = _fmt_health(move_service.recent_health(user_id))
-            if line:
-                parts.append("Recent health/readiness: " + line)
-        except Exception:
-            _log.warning("training_context: health load failed", exc_info=True)
+        # Readiness/recovery (sleep, HRV, body battery) lives in the Sense room and
+        # is surfaced every turn by sense_snapshot; the coach reads it from context
+        # and factors it into how hard to push.
 
         # Always give the real calendar so runs land on real days.
         try:
@@ -396,25 +352,17 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
 
 def move_snapshot(move_service) -> ContextLoader:
     """Tier 2 — always loaded every turn (not gated by routing). Surfaces today's
-    run (if planned) and the latest Garmin readiness (if synced), so the coach
-    always knows this data exists and never denies having it."""
+    run (if planned) so the coach always knows it exists. Readiness is in the Sense
+    room's snapshot, not duplicated here."""
     def loader(user_id: UUID, now: datetime) -> str | None:
-        lines: list[str] = []
         try:
             session = move_service.todays_session(user_id, now)
-            if session:
-                lines.append(
-                    f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
-                )
         except Exception:
             _log.warning("move_snapshot session failed", exc_info=True)
-        try:
-            health = _fmt_health(move_service.recent_health(user_id))
-            if health:
-                lines.append(f"Garmin readiness ({health}) — available via training_get(readiness)")
-        except Exception:
-            _log.warning("move_snapshot health failed", exc_info=True)
-        return "\n".join(lines) if lines else None
+            return None
+        if not session:
+            return None
+        return f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
 
     return loader
 
@@ -432,11 +380,11 @@ MOVE_SIGNALS: list[str] = [
 # Self-description for semantic routing (the running-coach room). Embedded and
 # matched against a message by MEANING — lists the KINDS of things it handles.
 MOVE_DESCRIPTION: str = (
-    "The running coach. Training plans and what to run this week or today; workouts and "
-    "sessions — easy runs, long runs, intervals, sprints, tempo; pace and heart rate; "
-    "building fitness toward a race or distance; recovery and readiness (sleep, HRV, body "
-    "battery, resting heart rate) as they affect training; reviewing how a run went from "
-    "its splits; and pushing structured workouts to a Garmin watch."
+    "The running coach — looking after the body through training. Training plans and what to "
+    "run this week or today; workouts and sessions — easy runs, long runs, intervals, sprints, "
+    "tempo; pace and heart rate; building fitness toward a race or distance; reviewing how a "
+    "run went from its splits; and pushing structured workouts to a Garmin watch. (Recovery "
+    "and readiness data lives in the wellbeing room, but affects how hard to train.)"
 )
 
 

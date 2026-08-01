@@ -258,38 +258,8 @@ class Goal:
 
 
 # ---------------------------------------------------------------------------
-# Self-tracking — energy/mood over the day, plus meds/sleep/period events.
-# Raw note is always preserved; scores are derived from it, never replace it.
-# ---------------------------------------------------------------------------
-
-class TrackingEventType(StrEnum):
-    MEDS = "meds"
-    SLEEP = "sleep"
-    PERIOD_START = "period_start"
-    PERIOD_END = "period_end"
-
-
-@dataclass(frozen=True)
-class StateLog:
-    id: UUID
-    user_id: UUID
-    note: str                             # her words, verbatim
-    energy: int | None                    # 1-5, derived from the note
-    mood: int | None                      # 1-5, derived from the note
-    felt_at: datetime                     # when the state was felt (may be retro)
-    logged_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-@dataclass(frozen=True)
-class TrackingEvent:
-    id: UUID
-    user_id: UUID
-    event_type: TrackingEventType
-    detail: str | None = None             # meds name, sleep quality, symptom note
-    value: float | None = None            # sleep hours
-    occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-
+# (Self-tracking — StateLog / TrackingEvent / TrackingEventType — moved to the
+# Sense room: domain_sense_models.py.)
 # ---------------------------------------------------------------------------
 # Cleanup session result — what a weekly cleanup conversation produces
 # ---------------------------------------------------------------------------

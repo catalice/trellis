@@ -38,11 +38,6 @@ class GarminActivityPort(Protocol):
     def activity_detail(self, user_id: UUID, activity_id: str) -> Any: ...
 
 
-class HealthReader(Protocol):
-    """Latest synced daily health/readiness (see infra_tracking.PostgresHealthRepository)."""
-    def latest_daily_health(self, user_id: UUID) -> Any: ...
-
-
 class GarminSyncPort(Protocol):
     """Refresh synced Garmin data (daily health + activities + details) for a user
     (see infra_garmin.GarminSyncService). Returns a summary with record counts."""
@@ -62,7 +57,6 @@ class MoveService:
         *,
         garmin_push: GarminWorkoutPort | None = None,
         garmin_read: GarminActivityPort | None = None,
-        health_reader: HealthReader | None = None,
         garmin_sync: GarminSyncPort | None = None,
     ) -> None:
         self._repo = repo
@@ -70,7 +64,6 @@ class MoveService:
         self._tz = tz
         self._garmin_push = garmin_push
         self._garmin_read = garmin_read
-        self._health = health_reader
         self._garmin_sync = garmin_sync
 
     # -- plan (persist what the coach authors) --------------------------------
@@ -212,37 +205,6 @@ class MoveService:
         except Exception:
             _log.warning("review_run: detail fetch/parse failed", exc_info=True)
         return {"overall": overall, "splits": splits}
-
-    def recent_health(self, user_id: UUID) -> dict | None:
-        """Latest synced daily health/readiness as a compact dict, or None if there's
-        no health data (or no health reader wired). Best-effort — never raises."""
-        if self._health is None:
-            return None
-        try:
-            h = self._health.latest_daily_health(user_id)
-        except Exception:
-            _log.warning("recent_health load failed", exc_info=True)
-            return None
-        if h is None:
-            return None
-        out: dict[str, Any] = {}
-        for key, attr in (
-            ("date", "observed_on"), ("sleep_score", "sleep_score"),
-            ("sleep_hours", "sleep_duration_minutes"), ("resting_hr", "resting_heart_rate"),
-            ("hrv_last_night", "hrv_last_night"), ("hrv_status", "hrv_status"),
-            ("body_battery_high", "body_battery_maximum"), ("body_battery_end", "body_battery_end"),
-            ("avg_stress", "average_stress"),
-        ):
-            val = getattr(h, attr, None)
-            if val is None:
-                continue
-            if attr == "observed_on":
-                out[key] = val.isoformat()
-            elif attr == "sleep_duration_minutes":
-                out[key] = round(val / 60, 1)
-            else:
-                out[key] = val
-        return out or None
 
     # -- calendar (Python owns real dates — the coach never does date math) ----
 

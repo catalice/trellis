@@ -29,12 +29,11 @@ from uuid import UUID
 from trellis.domain_second_brain_models import (
     Capture,
     Effort,
-    StateLog,
     Task,
     TaskKind,
     TaskStatus,
-    TrackingEventType,
 )
+from trellis.domain_sense_models import StateLog, TrackingEventType
 
 _log = logging.getLogger(__name__)
 

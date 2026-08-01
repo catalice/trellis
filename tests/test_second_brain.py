@@ -521,7 +521,8 @@ class TestModels:
 
 
 # ---------------------------------------------------------------------------
-# Self-tracking (StateService + log_state handler)
+# Cross-cutting delete (delete_entry erases tasks/captures/tracking).
+# The tracking service itself (SenseService) is tested in test_sense.py.
 # ---------------------------------------------------------------------------
 
 class FakeStateRepo:
@@ -547,7 +548,7 @@ class FakeStateRepo:
         return [e for e in self.events if e.occurred_at >= since]
 
     def last_period_start(self, user_id):
-        from trellis.domain_second_brain_models import TrackingEventType
+        from trellis.domain_sense_models import TrackingEventType
         starts = [e for e in self.events if e.event_type == TrackingEventType.PERIOD_START]
         return max(starts, key=lambda e: e.occurred_at) if starts else None
 
@@ -562,187 +563,66 @@ class FakeStateRepo:
         return len(self.events) < before
 
 
-class TestStateService:
-    def _service(self, repo=None):
-        from trellis.domain_second_brain_service import StateService
-        return StateService(repo or FakeStateRepo(), TZ)
-
-    def test_log_state_stores_note_verbatim(self):
-        svc = self._service()
-        log = svc.log_state(UID, "dead this morning but weirdly cheerful",
-                            energy=2, mood=4, now=NOW)
-        assert log.note == "dead this morning but weirdly cheerful"
-        assert log.energy == 2
-        assert log.mood == 4
-
-    def test_scores_clamped_to_range(self):
-        svc = self._service()
-        log = svc.log_state(UID, "x", energy=9, mood=0, now=NOW)
-        assert log.energy == 5
-        assert log.mood == 1
-
-    def test_scores_optional(self):
-        svc = self._service()
-        log = svc.log_state(UID, "just noting", energy=None, mood=None, now=NOW)
-        assert log.energy is None and log.mood is None
-
-    def test_today_summary_compact_line(self):
-        repo = FakeStateRepo()
-        svc = self._service(repo)
-        morning = NOW.astimezone(TZ).replace(hour=9, minute=12).astimezone(timezone.utc)
-        evening = NOW.astimezone(TZ).replace(hour=19, minute=30).astimezone(timezone.utc)
-        svc.log_state(UID, "rough", energy=2, mood=4, now=morning)
-        svc.log_state(UID, "flying", energy=4, mood=5, now=evening)
-        summary = svc.today_summary(UID, evening)
-        assert summary == "State today: 09:12 e2/m4, 19:30 e4/m5"
-
-    def test_today_summary_none_when_empty(self):
-        assert self._service().today_summary(UID, NOW) is None
-
-    def test_cycle_day(self):
-        from trellis.domain_second_brain_models import TrackingEventType
-        repo = FakeStateRepo()
-        svc = self._service(repo)
-        svc.log_event(UID, TrackingEventType.PERIOD_START,
-                      occurred_at=NOW - timedelta(days=3))
-        assert svc.cycle_day(UID, NOW) == 4
-
-    def test_cycle_day_none_without_period(self):
-        assert self._service().cycle_day(UID, NOW) is None
-
-    def test_cycle_day_none_when_stale(self):
-        from trellis.domain_second_brain_models import TrackingEventType
-        repo = FakeStateRepo()
-        svc = self._service(repo)
-        svc.log_event(UID, TrackingEventType.PERIOD_START,
-                      occurred_at=NOW - timedelta(days=90))
-        assert svc.cycle_day(UID, NOW) is None
-
-
-class TestLogStateHandler:
-    def _handle(self, input_dict, repo=None):
-        from trellis.domain_second_brain_service import StateService
-        from trellis.domain_second_brain_tool import handle_log_state
-        repo = repo or FakeStateRepo()
-        svc = StateService(repo, TZ)
-        reply = handle_log_state(UID, input_dict, NOW, state_service=svc, tz=TZ)
-        return reply, repo
-
-    def test_full_checkin(self):
-        from trellis.domain_second_brain_models import TrackingEventType
-        reply, repo = self._handle({
-            "note": "slept badly, took dex at 9, feeling flat",
-            "energy": 2, "mood": 3,
-            "meds": [{"name": "dex", "time": "09:00"}],
-            "sleep_hours": 6, "sleep_quality": "badly",
-        })
-        assert len(repo.states) == 1
-        assert repo.states[0].note == "slept badly, took dex at 9, feeling flat"
-        types = [e.event_type for e in repo.events]
-        assert TrackingEventType.MEDS in types
-        assert TrackingEventType.SLEEP in types
-        meds = next(e for e in repo.events if e.event_type == TrackingEventType.MEDS)
-        assert meds.detail == "dex"
-        assert meds.occurred_at.astimezone(TZ).hour == 9
-
-    def test_period_started(self):
-        from trellis.domain_second_brain_models import TrackingEventType
-        reply, repo = self._handle({"note": "period started", "period": "started"})
-        assert [e.event_type for e in repo.events] == [TrackingEventType.PERIOD_START]
-
-    def test_note_required(self):
-        reply, repo = self._handle({"energy": 3})
-        assert repo.states == []
-        assert "note is required" in reply
-
-    def test_bad_med_time_still_logs_med(self):
-        from trellis.domain_second_brain_models import TrackingEventType
-        reply, repo = self._handle({
-            "note": "took meds", "meds": [{"name": "dex", "time": "nineish"}],
-        })
-        meds = [e for e in repo.events if e.event_type == TrackingEventType.MEDS]
-        assert len(meds) == 1
-        assert meds[0].occurred_at == NOW
-
-
-class TestFeltAtAndDelete:
-    def test_retro_log_uses_felt_at(self):
-        from trellis.domain_second_brain_service import StateService
-        repo = FakeStateRepo()
-        svc = StateService(repo, TZ)
-        felt = NOW - timedelta(hours=3)
-        log = svc.log_state(UID, "this morning was shit", energy=1, mood=2,
-                            now=NOW, felt_at=felt)
-        assert log.felt_at == felt
-        assert log.logged_at == NOW
-
-    def test_felt_at_defaults_to_now(self):
-        from trellis.domain_second_brain_service import StateService
-        svc = StateService(FakeStateRepo(), TZ)
-        log = svc.log_state(UID, "now", energy=3, mood=3, now=NOW)
-        assert log.felt_at == NOW
-
-    def test_delete_entry_removes_state(self):
-        from trellis.domain_second_brain_service import StateService
-        repo = FakeStateRepo()
-        svc = StateService(repo, TZ)
-        log = svc.log_state(UID, "wrong", energy=3, mood=3, now=NOW)
-        assert svc.delete_entry(UID, log.id) is True
-        assert repo.states == []
-        assert svc.delete_entry(UID, log.id) is False
+class TestDeleteEntry:
+    """delete_entry is cross-cutting — it erases tasks, captures, OR tracking
+    (via sense_service). The state/tracking service tests live in test_sense.py."""
 
     def test_delete_handler_erases_state(self):
-        from trellis.domain_second_brain_service import CaptureService, StateService
+        from trellis.domain_second_brain_service import CaptureService
         from trellis.domain_second_brain_tool import handle_delete_entry
+        from trellis.domain_sense_service import SenseService
         repo = FakeStateRepo()
-        svc = StateService(repo, TZ)
+        svc = SenseService(repo, TZ)
         task_svc = TaskService(FakeTaskRepo(), TZ)
         log = svc.log_state(UID, "wrong", energy=3, mood=3, now=NOW)
         reply = handle_delete_entry(UID, {"entry_id": str(log.id)}, NOW,
-                                    state_service=svc, task_service=task_svc,
+                                    sense_service=svc, task_service=task_svc,
                                     capture_service=CaptureService(FakeCaptureRepo()))
         assert "Erased" in reply
         assert repo.states == []
 
     def test_delete_handler_erases_duplicate_task(self):
-        from trellis.domain_second_brain_service import CaptureService, StateService
+        from trellis.domain_second_brain_service import CaptureService
         from trellis.domain_second_brain_tool import handle_delete_entry
-        state_svc = StateService(FakeStateRepo(), TZ)
+        from trellis.domain_sense_service import SenseService
+        sense_svc = SenseService(FakeStateRepo(), TZ)
         task_repo = FakeTaskRepo()
         task_svc = TaskService(task_repo, TZ)
         task_svc.create(UID, "Find ceramics class", now=NOW)
         dupe = task_svc.create(UID, "Find a local ceramics class", now=NOW)
         reply = handle_delete_entry(UID, {"entry_id": str(dupe.id)}, NOW,
-                                    state_service=state_svc, task_service=task_svc,
+                                    sense_service=sense_svc, task_service=task_svc,
                                     capture_service=CaptureService(FakeCaptureRepo()))
         assert "Erased" in reply
         assert [t.title for t in task_svc.list_open(UID)] == ["Find ceramics class"]
 
     def test_delete_handler_erases_capture(self):
-        from trellis.domain_second_brain_service import CaptureService, StateService
+        from trellis.domain_second_brain_service import CaptureService
         from trellis.domain_second_brain_tool import handle_delete_entry
+        from trellis.domain_sense_service import SenseService
         cap_repo = FakeCaptureRepo()
         cap_svc = CaptureService(cap_repo)
-        state_svc = StateService(FakeStateRepo(), TZ)
+        sense_svc = SenseService(FakeStateRepo(), TZ)
         task_svc = TaskService(FakeTaskRepo(), TZ)
         c = cap_repo.save(Capture(id=uuid4(), user_id=UID, raw="test dump",
                                   capture_type=CaptureType.BRAIN_DUMP, synthesis=None,
                                   summary="test", effort_id=None, created_at=NOW))
         reply = handle_delete_entry(UID, {"entry_id": str(c.id)}, NOW,
-                                    state_service=state_svc, task_service=task_svc,
+                                    sense_service=sense_svc, task_service=task_svc,
                                     capture_service=cap_svc)
         assert "Erased" in reply
         assert cap_repo.captures == {}
 
     def test_delete_other_users_task_refused(self):
-        from trellis.domain_second_brain_service import CaptureService, StateService
+        from trellis.domain_second_brain_service import CaptureService
         from trellis.domain_second_brain_tool import handle_delete_entry
-        state_svc = StateService(FakeStateRepo(), TZ)
+        from trellis.domain_sense_service import SenseService
+        sense_svc = SenseService(FakeStateRepo(), TZ)
         task_repo = FakeTaskRepo()
         task_svc = TaskService(task_repo, TZ)
         other = task_svc.create(uuid4(), "not yours", now=NOW)
         reply = handle_delete_entry(UID, {"entry_id": str(other.id)}, NOW,
-                                    state_service=state_svc, task_service=task_svc,
+                                    sense_service=sense_svc, task_service=task_svc,
                                     capture_service=CaptureService(FakeCaptureRepo()))
         assert "No record" in reply
         assert len(task_repo.tasks) == 1
@@ -808,7 +688,7 @@ class TestWebSearch:
         return second_brain_tools(
             task_service=svc, goal_service=svc, capture_service=svc,
             effort_service=svc, reminder_service=svc, cleanup_service=svc,
-            state_service=svc, web_search=web_search, tz=TZ,
+            sense_service=svc, web_search=web_search, tz=TZ,
         )
 
     def test_tool_absent_when_no_provider(self):

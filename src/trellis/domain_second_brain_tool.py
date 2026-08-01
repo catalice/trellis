@@ -59,7 +59,7 @@ SECOND_BRAIN_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["tasks", "seeds", "goals", "inbox", "efforts", "reminders", "tracking"],
+                "enum": ["tasks", "seeds", "goals", "inbox", "efforts", "reminders"],
                 "description": (
                     "tasks: open todos ordered by urgency, plus parked. "
                     "seeds: the exploration menu — for 'what could I explore'. "
@@ -67,8 +67,7 @@ SECOND_BRAIN_GET_TOOL: dict = {
                     "inbox: unassigned captures for cleanup. "
                     "efforts: all efforts by intensity. "
                     "reminders: upcoming reminders in the next 24h. "
-                    "tracking: recent state logs and meds/sleep/period events with IDs "
-                    "(needed before delete_log_entry)."
+                    "(wellbeing/tracking lives in the Sense room, in context there — not here.)"
                 ),
             }
         },
@@ -246,73 +245,6 @@ UPDATE_GOAL_TOOL: dict = {
     },
 }
 
-LOG_STATE_TOOL: dict = {
-    "name": "log_state",
-    "description": (
-        "Log how the user is doing right now — energy, mood, and body/context events. "
-        "Call whenever she describes her state (answering a check-in or spontaneously), "
-        "or mentions taking meds, sleep, or her period. Multiple logs per day are "
-        "expected; the within-day curve is the point. Derive scores from her words; "
-        "never ask her to rate herself."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "note": {
-                "type": "string",
-                "description": (
-                    "Her words about how she's doing, first person, verbatim — "
-                    "never paraphrase into third person ('feeling flat', not "
-                    "'she feels flat'). Voice notes: transcript as she said it."
-                ),
-            },
-            "felt_at": {
-                "type": "string",
-                "description": (
-                    "When this state was FELT, if different from now: user-local "
-                    "YYYY-MM-DDTHH:MM. 'This morning I was shit' said at noon → today ~09:00; "
-                    "'yesterday I crashed after work' → yesterday ~17:00. Omit for right now. "
-                    "If one message describes several states at different times, call this "
-                    "tool once per state with its own felt_at."
-                ),
-            },
-            "energy": {
-                "type": "integer", "minimum": 1, "maximum": 5,
-                "description": "Energy derived from her words: 1 empty/shutdown, 3 okay, 5 on top of the world. Omit if she said nothing about energy.",
-            },
-            "mood": {
-                "type": "integer", "minimum": 1, "maximum": 5,
-                "description": "Mood derived from her words: 1 awful, 3 neutral, 5 great. Omit if unclear. Mood and energy are independent — 'good mood, sleepy' is mood 4, energy 2.",
-            },
-            "meds": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "e.g. 'dex'"},
-                        "time": {"type": "string", "description": "Local HH:MM if she said when; omit otherwise."},
-                    },
-                    "required": ["name"],
-                },
-                "description": "Medication she mentions taking.",
-            },
-            "sleep_hours": {
-                "type": "number",
-                "description": "Hours slept last night, if mentioned.",
-            },
-            "sleep_quality": {
-                "type": "string",
-                "description": "Her description of sleep quality, if mentioned: 'badly', 'great', etc.",
-            },
-            "period": {
-                "type": "string", "enum": ["started", "ended"],
-                "description": "If she says her period started or ended.",
-            },
-        },
-        "required": ["note"],
-    },
-}
-
 DELETE_ENTRY_TOOL: dict = {
     "name": "delete_entry",
     "description": (
@@ -420,7 +352,6 @@ def handle_second_brain_get(
     capture_service,
     effort_service,
     reminder_service,
-    state_service,
 ) -> str:
     what = str(input_dict.get("what", ""))
 
@@ -494,32 +425,7 @@ def handle_second_brain_get(
             lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at)} — {r.status}" for r in recent)
         return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
 
-    if what == "tracking":
-        states = state_service.recent_states(user_id, days=7, now=now)
-        events = state_service.recent_events(user_id, days=7, now=now)
-        if not states and not events:
-            return "No tracking entries in the last 7 days."
-        lines = []
-        if states:
-            lines.append("State logs (last 7 days):")
-            for s in states:
-                scores = "/".join(p for p in (
-                    f"e{s.energy}" if s.energy else "", f"m{s.mood}" if s.mood else "",
-                ) if p)
-                felt = s.felt_at.strftime("%d %b %H:%M")
-                lines.append(f"  [{s.id}] {felt} {scores or '·'} — {s.note[:80]}")
-        if events:
-            lines.append("Events:")
-            for e in events:
-                bits = [str(e.event_type)]
-                if e.detail:
-                    bits.append(e.detail)
-                if e.value is not None:
-                    bits.append(f"{e.value:g}")
-                lines.append(f"  [{e.id}] {e.occurred_at.strftime('%d %b %H:%M')} — {' '.join(bits)}")
-        return "\n".join(lines)
-
-    return f"Unknown option: {what!r}. Use: tasks, goals, inbox, efforts, reminders, tracking."
+    return f"Unknown option: {what!r}. Use: tasks, goals, inbox, efforts, reminders."
 
 
 def handle_create_task(
@@ -752,100 +658,12 @@ def handle_update_goal(
         return f"Goal not found: {goal_id_str}"
 
 
-def handle_log_state(
-    user_id: UUID,
-    input_dict: dict,
-    now: datetime,
-    *,
-    state_service,
-    tz,
-) -> str:
-    from trellis.domain_second_brain_models import TrackingEventType
-
-    note = str(input_dict.get("note", "")).strip()
-    if not note:
-        return "note is required — her words about how she's doing."
-
-    energy = input_dict.get("energy")
-    mood = input_dict.get("mood")
-    parts: list[str] = []
-
-    felt_at = None
-    felt_str = str(input_dict.get("felt_at", "")).strip()
-    if felt_str:
-        try:
-            felt_at = datetime.fromisoformat(felt_str)
-            if felt_at.tzinfo is None:
-                felt_at = felt_at.replace(tzinfo=tz)
-        except ValueError:
-            felt_at = None
-
-    log = state_service.log_state(
-        user_id, note,
-        energy=int(energy) if energy is not None else None,
-        mood=int(mood) if mood is not None else None,
-        now=now,
-        felt_at=felt_at,
-    )
-    scores = ", ".join(
-        s for s in (
-            f"energy {log.energy}" if log.energy else "",
-            f"mood {log.mood}" if log.mood else "",
-        ) if s
-    )
-    parts.append(f"State logged{f' ({scores})' if scores else ''}.")
-
-    for med in input_dict.get("meds") or []:
-        if not isinstance(med, dict) or not med.get("name"):
-            continue
-        occurred = now
-        time_str = str(med.get("time", "")).strip()
-        if time_str:
-            try:
-                h, m = time_str.split(":")
-                occurred = now.astimezone(tz).replace(
-                    hour=int(h), minute=int(m), second=0, microsecond=0
-                )
-            except (ValueError, AttributeError):
-                pass
-        state_service.log_event(
-            user_id, TrackingEventType.MEDS,
-            detail=str(med["name"]).strip(), occurred_at=occurred,
-        )
-        parts.append(f"Meds logged: {med['name']}{f' at {time_str}' if time_str else ''}.")
-
-    sleep_hours = input_dict.get("sleep_hours")
-    sleep_quality = input_dict.get("sleep_quality")
-    if sleep_hours is not None or sleep_quality:
-        state_service.log_event(
-            user_id, TrackingEventType.SLEEP,
-            detail=str(sleep_quality).strip() if sleep_quality else None,
-            value=float(sleep_hours) if sleep_hours is not None else None,
-            occurred_at=now,
-        )
-        parts.append("Sleep logged.")
-
-    period = input_dict.get("period")
-    if period in ("started", "ended"):
-        state_service.log_event(
-            user_id,
-            TrackingEventType.PERIOD_START if period == "started" else TrackingEventType.PERIOD_END,
-            occurred_at=now,
-        )
-        parts.append(f"Period {period}.")
-
-    summary = state_service.today_summary(user_id, now)
-    if summary:
-        parts.append(summary)
-    return " ".join(parts)
-
-
 def handle_delete_entry(
     user_id: UUID,
     input_dict: dict,
     now: datetime,
     *,
-    state_service,
+    sense_service,
     task_service,
     capture_service,
 ) -> str:
@@ -857,7 +675,7 @@ def handle_delete_entry(
     except ValueError:
         return f"Invalid entry_id: {entry_id_str!r}"
     if (
-        state_service.delete_entry(user_id, entry_id)
+        sense_service.delete_entry(user_id, entry_id)
         or task_service.delete(user_id, entry_id)
         or capture_service.delete(user_id, entry_id)
     ):
@@ -1133,7 +951,6 @@ def second_brain_context_loader(
 def second_brain_snapshot(
     task_service,
     reminder_service,
-    state_service=None,
 ) -> ContextLoader:
     """
     Tier 2 snapshot contribution — existence/urgency only, always loaded.
@@ -1163,17 +980,6 @@ def second_brain_snapshot(
         except Exception:
             _log.warning("second_brain_snapshot: reminders failed", exc_info=True)
 
-        if state_service is not None:
-            try:
-                state_line = state_service.today_summary(user_id, now)
-                if state_line:
-                    parts.append(state_line)
-                cycle = state_service.cycle_day(user_id, now)
-                if cycle is not None:
-                    parts.append(f"Cycle day {cycle}")
-            except Exception:
-                _log.warning("second_brain_snapshot: state failed", exc_info=True)
-
         return " | ".join(parts) if parts else None
 
     return loader
@@ -1197,11 +1003,10 @@ SECOND_BRAIN_SIGNALS: list[str] = [
 # to be embedded and matched against a message by MEANING, not keywords — so it
 # lists the KINDS of things this room handles.
 SECOND_BRAIN_DESCRIPTION: str = (
-    "The everyday second brain and front door. Capturing thoughts and brain dumps; "
-    "tasks and to-dos; reminders and appointments; ideas, notes and questions; goals "
-    "and projects; life admin and general planning. Also tracking how you're doing day "
-    "to day — mood, energy, medication, sleep, and period or cycle. General chat, "
-    "reflection, and anything not clearly about a specialist area lands here."
+    "Executive function and organising — the recording room. Capturing thoughts and "
+    "brain dumps; tasks and to-dos; reminders and appointments; ideas, notes and "
+    "questions; goals and projects; life admin and getting things out of your head. "
+    "General chat, reflection, and anything not clearly about a specialist area lands here."
 )
 
 
@@ -1216,11 +1021,13 @@ def second_brain_tools(
     effort_service,
     reminder_service,
     cleanup_service,
-    state_service,
+    sense_service,
     web_search,
     tz,
 ) -> list[tuple[dict, Any]]:
     # brain_dump is NOT here — it's an always-available tool wired in core_main.
+    # sense_service is passed only for the cross-cutting delete_entry (which erases
+    # tracking entries owned by Sense, as well as tasks/captures).
     tools = [
         (
             SECOND_BRAIN_GET_TOOL,
@@ -1231,7 +1038,6 @@ def second_brain_tools(
                 capture_service=capture_service,
                 effort_service=effort_service,
                 reminder_service=reminder_service,
-                state_service=state_service,
             ),
         ),
         (
@@ -1265,7 +1071,7 @@ def second_brain_tools(
         (
             DELETE_ENTRY_TOOL,
             lambda uid, inp, now: handle_delete_entry(
-                uid, inp, now, state_service=state_service,
+                uid, inp, now, sense_service=sense_service,
                 task_service=task_service, capture_service=capture_service,
             ),
         ),
