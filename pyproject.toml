@@ -5,9 +5,12 @@ description = "A conversational external brain with visible Obsidian state"
 requires-python = ">=3.12"
 dependencies = [
   "anthropic>=0.75,<1",
-  # >=0.3 for upload_workout + the garminconnect.workout typed models (needs pydantic)
+  # PINNED to the garth-token era: stored Garmin sessions are garth dumps (the
+  # health worker reads with garth too). 0.3.x rewrote auth to DI tokens and cannot
+  # load them — a rebuild silently broke push on 2 Aug 2026. Bump only deliberately,
+  # with a migration plan for stored sessions.
   # that build_garmin_workout builds structured watch workouts on.
-  "garminconnect>=0.3.8,<0.4",
+  "garminconnect==0.2.40",
   "pydantic>=2,<3",
   "groq>=0.29,<1",
   "psycopg2-binary>=2.9.10,<3",

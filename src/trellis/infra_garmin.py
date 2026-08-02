@@ -316,24 +316,20 @@ class GarminDirectService:
         try:
             import garminconnect  # noqa: F401
             client = garminconnect.Garmin()
-            # Resume from the stored token dump via the PUBLIC login(tokenstore)
-            # API (a >512-char string is treated as token data, not a path).
-            # Never poke library internals: garminconnect 0.3.8 renamed the
-            # .garth attribute and silently broke the old .garth.loads() path
-            # while reads (via the health worker) kept working.
-            client.login(dump)
+            # Stored sessions are garth token dumps — garminconnect is PINNED to
+            # the garth era (==0.2.40 in pyproject; 0.3.x switched to DI-token
+            # auth and cannot load these). If that pin ever moves, this line and
+            # every stored session must migrate together.
+            client.garth.loads(dump)
             return client
-        except RuntimeError:
-            raise
         except Exception as exc:
             raise RuntimeError(f"Failed to load Garmin session: {exc}") from exc
 
     def push_workout(self, user_id: UUID, workout_json: Any) -> str:
         try:
             client = self._connect(user_id)
-            # garminconnect >=0.3 renamed add_workout -> upload_workout; it takes
-            # the workout JSON dict our builder produces and returns the created
-            # workout (with its id).
+            # upload_workout takes the workout JSON dict our builder produces and
+            # returns the created workout (with its id).
             result = client.upload_workout(workout_json)
             if isinstance(result, dict):
                 return str(result.get("workoutId") or result.get("workoutIdStr") or result)
