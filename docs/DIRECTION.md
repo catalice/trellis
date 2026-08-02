@@ -1,5 +1,7 @@
 # Trellis — Direction
 
+> *Good design treats systems like gardens, not machines. Some things anchor, some bloom seasonally, some need space to run wild.*
+
 **Last updated:** June 2026 (rewrite/clean-architecture)
 
 ---

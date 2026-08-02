@@ -1,6 +1,8 @@
 # Trellis
 
-Trellis is a conversational external brain for personal tasks, captures and adaptive training.
+> *Good design treats systems like gardens, not machines. Some things anchor, some bloom seasonally, some need space to run wild.*
+
+Trellis is a personal operating system — an externalised mind. A big brain (the always-on core) with houses that light up by meaning: Move (training), Sense (wellbeing), Focus (organising), Learn (someday). Semantic routing, one Claude call per turn, everything inspectable in an Obsidian vault. Not a bot with features — a trellis: chosen structure that something living grows on.
 
 This repository is the clean rebuild. The legacy Trellis and Allerac repositories remain references; this project does not depend on their frontends or runtime.
 
