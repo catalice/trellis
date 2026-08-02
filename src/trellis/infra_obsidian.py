@@ -8,7 +8,11 @@ Vault layout (see the path constants below):
     Calendar/Captures/<YYYY-MM-DD>.md   the day's log — captures + receipts, append-only
     Calendar/Tasks.md                   todos + parked — rewritten on every change
     Calendar/Seeds.md                   the exploration menu — rewritten on change
-    Calendar/Tracking.md                energy/mood/meds/sleep/cycle — rewritten on change
+    Calendar/Tracking/Recent.md         last 14 days, every entry — rewritten on change
+    Calendar/Tracking/History/<YYYY-MM>.md  full detail, month by month
+    Calendar/Tracking/Overview.base     all-days table over daily-note properties
+    Calendar/Training/Training.md       arc, baseline, this week with runs ticked
+    Calendar/Training/Weeks/<YYYY-Www>.md   week archive: planned vs run
     Efforts/<Title>.md                  one page per effort; its captures accumulate
 
 Capture notes hold inputs and one-line receipts of what each input produced —
@@ -36,6 +40,12 @@ from trellis.domain_focus_models import (
 from trellis.domain_sense_models import StateLog, TrackingEventType
 
 _log = logging.getLogger(__name__)
+
+
+def _range_or_value(scores: list) -> "str | int":
+    """A day's 1-5 scores as a single value or an en-dash range: 3, or "2–4"."""
+    lo, hi = min(scores), max(scores)
+    return lo if lo == hi else f"{lo}–{hi}"
 
 
 def _title_from_daily_path(path: Path) -> str | None:
@@ -74,9 +84,11 @@ _TRACKING_DAYS = 14
 _DAILY_DIR = "Calendar/Captures"
 _TASKS_PATH = "Calendar/Tasks.md"
 _SEEDS_PATH = "Calendar/Seeds.md"
-_TRACKING_PATH = "Calendar/Tracking.md"
-_TRACKING_BASE_PATH = "Calendar/Tracking.base"
-_TRAINING_PLAN_PATH = "Calendar/Training.md"
+_TRACKING_PATH = "Calendar/Tracking/Recent.md"
+_TRACKING_BASE_PATH = "Calendar/Tracking/Overview.base"
+_TRAINING_PLAN_PATH = "Calendar/Training/Training.md"
+_TRACKING_HISTORY_DIR = "Calendar/Tracking/History"
+_TRAINING_WEEKS_DIR = "Calendar/Training/Weeks"
 
 # Written ONCE if absent, then never touched — it's the user's file to tweak in
 # Obsidian's Bases UI. It turns the daily notes' frontmatter into a sortable
@@ -95,6 +107,7 @@ views:
       - sleep_hours
       - meds
       - cycle_day
+      - entries
     sort:
       - property: file.name
         direction: DESC
@@ -290,7 +303,8 @@ class ObsidianVault:
             _log.warning("obsidian: state receipt write failed", exc_info=True)
 
     def tracking_changed(self, user_id: UUID) -> None:
-        """Rewrite Tracking.md — the last two weeks at a glance."""
+        """Rewrite Tracking/Recent.md (last two weeks) and the current month's
+        History file — one shared renderer, two windows."""
         if self._states is None:
             return
         try:
@@ -300,77 +314,24 @@ class ObsidianVault:
             events = self._states.list_events_since(user_id, since=since)
             period_start = self._states.last_period_start(user_id)
 
-            by_day_states: dict = {}
-            for s in states:
-                by_day_states.setdefault(s.felt_at.astimezone(self._tz).date(), []).append(s)
-            by_day_events: dict = {}
-            for e in events:
-                by_day_events.setdefault(e.occurred_at.astimezone(self._tz).date(), []).append(e)
-
             parts = [_TRACKING_HEADER]
             parts.append(f"_Updated {now.strftime('%a %d %b, %H:%M')}_\n")
-
-            days = sorted(set(by_day_states) | set(by_day_events), reverse=True)
-            if not days:
+            day_parts = self._render_tracking_days(states, events, period_start)
+            if day_parts:
+                parts.extend(day_parts)
+            else:
                 parts.append("No entries yet. Just tell Trellis how you're doing.\n")
-            for day in days:
-                day_states = sorted(
-                    by_day_states.get(day, []),
-                    key=lambda s: s.felt_at,
-                )
-                day_events = by_day_events.get(day, [])
-                # Day header + the energy/mood timeline on its own line.
-                parts.append(f"**{day.strftime('%a %d %b')}**")
-                timeline = _timeline(day_states, self._tz)
-                if timeline:
-                    parts.append(f"`{timeline}`")
-
-                # Group the day's events, then emit each as its own labelled line
-                # (clearer + scannable than one crammed clause).
-                meds, sleeps, cycle_notes = [], [], []
-                for e in day_events:
-                    if e.event_type == TrackingEventType.MEDS:
-                        t = e.occurred_at.astimezone(self._tz).strftime("%H:%M")
-                        meds.append(f"{e.detail or 'meds'} {t}")
-                    elif e.event_type == TrackingEventType.SLEEP:
-                        bits = []
-                        if e.value is not None:
-                            bits.append(f"{e.value:g}h")
-                        if e.detail:
-                            bits.append(e.detail)
-                        sleeps.append(" ".join(bits) if bits else "logged")
-                    elif e.event_type == TrackingEventType.PERIOD_START:
-                        cycle_notes.append("period started")
-                    elif e.event_type == TrackingEventType.PERIOD_END:
-                        cycle_notes.append("period ended")
-
-                cycle_day = None
-                if period_start is not None:
-                    delta = (day - period_start.occurred_at.astimezone(self._tz).date()).days
-                    if 0 <= delta < 60:
-                        cycle_day = delta + 1
-
-                if meds:
-                    parts.append(f"**Meds:** {', '.join(meds)}")
-                if sleeps:
-                    parts.append(f"**Sleep:** {', '.join(sleeps)}")
-                if cycle_day is not None or cycle_notes:
-                    cyc = ([f"day {cycle_day}"] if cycle_day is not None else []) + cycle_notes
-                    parts.append(f"**Cycle:** {' · '.join(cyc)}")
-
-                for s in day_states:
-                    t = s.felt_at.astimezone(self._tz).strftime("%H:%M")
-                    retro = ""
-                    if s.felt_at.date() != s.logged_at.date():
-                        retro = f" _(logged {s.logged_at.astimezone(self._tz).strftime('%d %b')})_"
-                    parts.append(f"  - {t} — {s.note}{retro}")
-                parts.append("")
 
             path = self._vault / _TRACKING_PATH
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("\n".join(parts), encoding="utf-8")
         except Exception:
-            _log.warning("obsidian: Tracking.md write failed", exc_info=True)
+            _log.warning("obsidian: Tracking Recent write failed", exc_info=True)
+        try:
+            today = datetime.now(self._tz).date()
+            self.write_tracking_month(user_id, today.year, today.month)
+        except Exception:
+            _log.warning("obsidian: Tracking month write failed", exc_info=True)
         self._ensure_tracking_base()
         # Events (meds/sleep/period) don't say which day changed — refresh the
         # last few days' properties so the Base stays true without new wiring.
@@ -380,6 +341,94 @@ class ObsidianVault:
                 self._update_daily_properties(user_id, today - timedelta(days=offset))
         except Exception:
             _log.warning("obsidian: daily property refresh failed", exc_info=True)
+
+    def write_tracking_month(self, user_id: UUID, year: int, month: int) -> None:
+        """(Re)write one month's History file — every entry, full detail. The
+        current month rewrites as entries land; past months are only touched by
+        an explicit backfill."""
+        if self._states is None:
+            return
+        try:
+            month_start = datetime(year, month, 1, tzinfo=self._tz)
+            next_month = datetime(year + (month == 12), (month % 12) + 1, 1, tzinfo=self._tz)
+            states = [
+                st for st in self._states.list_states_since(user_id, since=month_start)
+                if st.felt_at.astimezone(self._tz) < next_month
+            ]
+            events = [
+                e for e in self._states.list_events_since(user_id, since=month_start)
+                if e.occurred_at.astimezone(self._tz) < next_month
+            ]
+            if not states and not events:
+                return
+            period_start = self._states.last_period_start(user_id)
+            parts = [f"# Tracking — {month_start.strftime('%B %Y')}\n"]
+            parts.extend(self._render_tracking_days(states, events, period_start))
+            path = self._vault / _TRACKING_HISTORY_DIR / f"{year:04d}-{month:02d}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(parts), encoding="utf-8")
+        except Exception:
+            _log.warning("obsidian: Tracking month write failed", exc_info=True)
+
+    def _render_tracking_days(self, states, events, period_start) -> list[str]:
+        """Day-by-day tracking sections (newest first) — shared by Recent.md and
+        the monthly History files so the two views can never drift."""
+        by_day_states: dict = {}
+        for st in states:
+            by_day_states.setdefault(st.felt_at.astimezone(self._tz).date(), []).append(st)
+        by_day_events: dict = {}
+        for e in events:
+            by_day_events.setdefault(e.occurred_at.astimezone(self._tz).date(), []).append(e)
+
+        parts: list[str] = []
+        days = sorted(set(by_day_states) | set(by_day_events), reverse=True)
+        for day in days:
+            day_states = sorted(by_day_states.get(day, []), key=lambda st: st.felt_at)
+            day_events = by_day_events.get(day, [])
+            parts.append(f"**{day.strftime('%a %d %b')}**")
+            timeline = _timeline(day_states, self._tz)
+            if timeline:
+                parts.append(f"`{timeline}`")
+
+            meds, sleeps, cycle_notes = [], [], []
+            for e in day_events:
+                if e.event_type == TrackingEventType.MEDS:
+                    t = e.occurred_at.astimezone(self._tz).strftime("%H:%M")
+                    meds.append(f"{e.detail or 'meds'} {t}")
+                elif e.event_type == TrackingEventType.SLEEP:
+                    bits = []
+                    if e.value is not None:
+                        bits.append(f"{e.value:g}h")
+                    if e.detail:
+                        bits.append(e.detail)
+                    sleeps.append(" ".join(bits) if bits else "logged")
+                elif e.event_type == TrackingEventType.PERIOD_START:
+                    cycle_notes.append("period started")
+                elif e.event_type == TrackingEventType.PERIOD_END:
+                    cycle_notes.append("period ended")
+
+            cycle_day = None
+            if period_start is not None:
+                delta = (day - period_start.occurred_at.astimezone(self._tz).date()).days
+                if 0 <= delta < 60:
+                    cycle_day = delta + 1
+
+            if meds:
+                parts.append(f"**Meds:** {', '.join(meds)}")
+            if sleeps:
+                parts.append(f"**Sleep:** {', '.join(sleeps)}")
+            if cycle_day is not None or cycle_notes:
+                cyc = ([f"day {cycle_day}"] if cycle_day is not None else []) + cycle_notes
+                parts.append(f"**Cycle:** {' · '.join(cyc)}")
+
+            for st in day_states:
+                t = st.felt_at.astimezone(self._tz).strftime("%H:%M")
+                retro = ""
+                if st.felt_at.date() != st.logged_at.date():
+                    retro = f" _(logged {st.logged_at.astimezone(self._tz).strftime('%d %b')})_"
+                parts.append(f"  - {t} — {st.note}{retro}")
+            parts.append("")
+        return parts
 
     def _ensure_tracking_base(self) -> None:
         """Write Tracking.base ONCE if absent — never overwrite: after creation
@@ -411,10 +460,14 @@ class ObsidianVault:
             props: dict = {}
             energies = [s.energy for s in states if s.energy]
             moods = [s.mood for s in states if s.mood]
+            # Ranges, not averages — a spiky day must look spiky even at the
+            # horizon zoom ("2–4", not a flattened 3.0).
             if energies:
-                props["energy"] = round(sum(energies) / len(energies), 1)
+                props["energy"] = _range_or_value(energies)
             if moods:
-                props["mood"] = round(sum(moods) / len(moods), 1)
+                props["mood"] = _range_or_value(moods)
+            if states:
+                props["entries"] = len(states)
             sleeps = [e.value for e in events
                       if e.event_type == TrackingEventType.SLEEP and e.value is not None]
             if sleeps:
@@ -485,25 +538,9 @@ class ObsidianVault:
                 parts.append(f"## Baseline\n{plan.baseline}\n")
 
             week = plan_doc.get("week") or []
-            matched_dates: set[str] = set()
-            if week:
-                lines = ["## This Week\n"]
-                for s in week:
-                    s_date = str(s.get("date", ""))
-                    s_type = s.get("type", "session")
-                    s_detail = s.get("detail", "")
-                    run = runs_by_date.get(s_date)
-                    try:
-                        day_name = date.fromisoformat(s_date).strftime("%a %d %b")
-                    except ValueError:
-                        day_name = s_date
-                    if run is not None:
-                        matched_dates.add(s_date)
-                        dist = f" — {run.distance_km}km done" if run.distance_km else " — done"
-                        lines.append(f"- [x] {day_name} — {s_type}: {s_detail}{dist}")
-                    else:
-                        lines.append(f"- [ ] {day_name} — {s_type}: {s_detail}")
-                parts.append("\n".join(lines) + "\n")
+            session_lines, matched_dates = self._session_lines(week, runs_by_date)
+            if session_lines:
+                parts.append("\n".join(["## This Week\n", *session_lines]) + "\n")
 
             extra_runs = [r for r in runs if r.ran_on.isoformat() not in matched_dates]
             if extra_runs:
@@ -521,8 +558,52 @@ class ObsidianVault:
                 return
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("\n".join(parts), encoding="utf-8")
+            self._write_training_week(week, runs_by_date, now)
         except Exception:
             _log.warning("obsidian: Training plan write failed", exc_info=True)
+
+    def _session_lines(self, week: list, runs_by_date: dict) -> "tuple[list[str], set[str]]":
+        """Checkbox lines for a week's sessions, runs ticked off by date —
+        shared by the main page and the week archive so they can never drift."""
+        lines: list[str] = []
+        matched: set[str] = set()
+        for sess in week:
+            s_date = str(sess.get("date", ""))
+            s_type = sess.get("type", "session")
+            s_detail = sess.get("detail", "")
+            run = runs_by_date.get(s_date)
+            try:
+                day_name = date.fromisoformat(s_date).strftime("%a %d %b")
+            except ValueError:
+                day_name = s_date
+            if run is not None:
+                matched.add(s_date)
+                dist = f" — {run.distance_km}km done" if run.distance_km else " — done"
+                lines.append(f"- [x] {day_name} — {s_type}: {s_detail}{dist}")
+            else:
+                lines.append(f"- [ ] {day_name} — {s_type}: {s_detail}")
+        return lines, matched
+
+    def _write_training_week(self, week: list, runs_by_date: dict, now: datetime) -> None:
+        """Archive the plan's week to Weeks/<YYYY-Www>.md. Rewritten while it's
+        the live week; once the plan moves on, the file is simply left behind —
+        a frozen record of planned vs run."""
+        if not week:
+            return
+        try:
+            first = date.fromisoformat(str(week[0].get("date", "")))
+        except ValueError:
+            return
+        iso_year, iso_week, _ = first.isocalendar()
+        lines = [
+            f"# Week {iso_week}, {iso_year}\n",
+            f"_Updated {now.strftime('%d %b %Y, %H:%M')}_\n",
+        ]
+        session_lines, _matched = self._session_lines(week, runs_by_date)
+        lines.extend(session_lines)
+        path = self._vault / _TRAINING_WEEKS_DIR / f"{iso_year:04d}-W{iso_week:02d}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # --- Effort pages -------------------------------------------------------
 

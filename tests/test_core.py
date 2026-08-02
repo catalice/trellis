@@ -293,17 +293,19 @@ class TestVaultTrainingPlan:
         vault = ObsidianVault(tmp_path, TZ, None, None, None,
                               move_repo=self._MoveRepo(plan, runs))
         vault.plan_changed(UID)
-        page = (tmp_path / "Calendar" / "Training.md").read_text()
+        page = (tmp_path / "Calendar" / "Training" / "Training.md").read_text()
         assert "Base phase" in page and "28min run-walk base" in page
         assert "- [x] Sun 02 Aug — easy: 28min 3:1 run-walk — 3.26km done" in page
         assert "- [ ] Tue 04 Aug — long: 40min easy" in page
         assert "Drill workout" in page  # unmatched run listed under Recent Runs
+        week_file = tmp_path / "Calendar" / "Training" / "Weeks" / "2026-W31.md"
+        assert "- [x] Sun 02 Aug" in week_file.read_text()  # archived, ticked
 
     def test_no_plan_no_crash(self, tmp_path):
         vault = ObsidianVault(tmp_path, TZ, None, None, None,
                               move_repo=self._MoveRepo(None, []))
         vault.plan_changed(UID)
-        assert "No plan yet" in (tmp_path / "Calendar" / "Training.md").read_text()
+        assert "No plan yet" in (tmp_path / "Calendar" / "Training" / "Training.md").read_text()
 
 
 class TestVaultDailyProperties:
@@ -341,5 +343,6 @@ class TestVaultDailyProperties:
         vault.state_logged(log2)
         note = (tmp_path / "Calendar" / "Captures" / "2026-07-20.md").read_text()
         assert note.count("---\n") == 2          # exactly one frontmatter block
-        assert "energy: 3.0" in note             # average of 2 and 4
+        assert "energy: 2\u20134" in note          # RANGE, not a flattened average
+        assert "entries: 2" in note
         assert note.count("tracking") == 2       # both receipts kept
