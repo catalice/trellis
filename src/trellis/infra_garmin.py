@@ -316,8 +316,15 @@ class GarminDirectService:
         try:
             import garminconnect  # noqa: F401
             client = garminconnect.Garmin()
-            client.garth.loads(dump)
+            # Resume from the stored token dump via the PUBLIC login(tokenstore)
+            # API (a >512-char string is treated as token data, not a path).
+            # Never poke library internals: garminconnect 0.3.8 renamed the
+            # .garth attribute and silently broke the old .garth.loads() path
+            # while reads (via the health worker) kept working.
+            client.login(dump)
             return client
+        except RuntimeError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Failed to load Garmin session: {exc}") from exc
 

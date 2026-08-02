@@ -7,7 +7,7 @@ dependencies = [
   "anthropic>=0.75,<1",
   # >=0.3 for upload_workout + the garminconnect.workout typed models (needs pydantic)
   # that build_garmin_workout builds structured watch workouts on.
-  "garminconnect>=0.3,<1",
+  "garminconnect>=0.3.8,<0.4",
   "pydantic>=2,<3",
   "groq>=0.29,<1",
   "psycopg2-binary>=2.9.10,<3",
