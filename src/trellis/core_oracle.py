@@ -84,7 +84,7 @@ class Oracle:
             response = self._api_call(kwargs)
 
             if response.stop_reason == "end_turn":
-                return OracleResult(self._extract_text(response), tuple(calls))
+                return self._finish(response, calls)
 
             if response.stop_reason == "tool_use":
                 tool_results = []
@@ -107,12 +107,23 @@ class Oracle:
                 ]
                 continue
 
-            return OracleResult(self._extract_text(response), tuple(calls))
+            return self._finish(response, calls)
 
         _log.warning("oracle hit iteration cap")
+        return self._finish(response, calls)
+
+    def _finish(self, response, calls: list[ToolCall]) -> OracleResult:
+        """Final result for the turn. The model occasionally ends its turn with
+        no text after tool calls (deciding the results speak for themselves);
+        the tools DID run, so that must never surface as a failure. Fall back
+        to the tool results — handlers return user-facing confirmations."""
         text = self._extract_text(response) if response else ""
-        if not text:
-            _log.warning("oracle returned empty text at iteration cap; last stop_reason=%s", getattr(response, "stop_reason", None))
+        if not text and calls:
+            text = " ".join(c.result_summary for c in calls if c.result_summary)
+            _log.warning(
+                "oracle: empty final text after %d tool call(s); replying with the tool results",
+                len(calls),
+            )
         return OracleResult(text, tuple(calls))
 
     def _call(self, name: str, input_dict: dict, handlers: dict[str, Callable[[dict], str]]) -> str:

@@ -177,3 +177,51 @@ class TestObsidianVault:
     def test_write_failure_never_raises(self, tmp_path):
         vault = ObsidianVault(tmp_path / "missing", TZ, None, None, None)
         vault.tasks_changed(UID)  # repos are None → internal error → swallowed
+
+
+class TestOracleSilentFinish:
+    """The 2 Aug 'Something went wrong' bug: the model called tools (which
+    succeeded — task dropped, effort updated) then ended its turn with no text.
+    Empty text after successful tool calls must fall back to the tool results,
+    never surface as a failure."""
+
+    class _Resp:
+        def __init__(self, stop_reason, content):
+            self.stop_reason = stop_reason
+            self.content = content
+
+    class _Block:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    def _oracle(self, responses):
+        from trellis.core_oracle import Oracle
+
+        class FakeMessages:
+            def __init__(self, resps): self._resps = list(resps)
+            def create(self, **kwargs): return self._resps.pop(0)
+
+        class FakeClient:
+            def __init__(self, resps): self.messages = FakeMessages(resps)
+
+        return Oracle(client=FakeClient(responses), model="test")
+
+    def test_silent_end_turn_replies_with_tool_results(self):
+        tool_use = self._Block(type="tool_use", name="save_to_effort", id="t1",
+                               input={"text": "cabinet door"})
+        oracle = self._oracle([
+            self._Resp("tool_use", [tool_use]),
+            self._Resp("end_turn", []),          # model goes silent
+        ])
+        result = oracle.run("sys", [{"role": "user", "content": "hi"}],
+                            tools=[{"name": "save_to_effort"}],
+                            handlers={"save_to_effort": lambda inp: "Saved to effort 'Dining Area Upgrade'."})
+        assert result.text == "Saved to effort 'Dining Area Upgrade'."
+        assert result.tool_calls[0].name == "save_to_effort"
+
+    def test_text_reply_unchanged(self):
+        oracle = self._oracle([
+            self._Resp("end_turn", [self._Block(type="text", text="All done!")]),
+        ])
+        result = oracle.run("sys", [{"role": "user", "content": "hi"}], tools=[], handlers={})
+        assert result.text == "All done!"
