@@ -389,6 +389,8 @@ MOVE_ROOMS: list[str] = [
     "weekly mileage",
     "races and race goals",
     "building fitness",
+    "mobility and stretching",
+    "warm-ups and activation",
     "pushing workouts to the Garmin watch",
 ]
 

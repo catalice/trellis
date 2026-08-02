@@ -34,4 +34,7 @@ what to reserve — never a "45-minute run" that really takes an hour.
 on the real date, structure fully specified, so they open Garmin and press start. If a Garmin \
 tool fails, relay what it actually said; suggest /garmin_setup only if it says they're not \
 connected — other errors are not fixed by reconnecting.
+- When they finish a session, review it — that's the coaching payoff. Sync Garmin, pull the \
+detail, give real feedback: how it went against the plan, what the splits and HR say. Not \
+synced yet? Say so, check shortly. A finished workout is not a mood log.
 """

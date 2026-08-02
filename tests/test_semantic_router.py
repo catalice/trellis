@@ -203,6 +203,8 @@ LIVE_CASES = [
     ("what pace for my 6x400m intervals tomorrow?", "move"),
     ("push my long run to sunday", "move"),
     ("how did my run go yesterday?", "move"),
+    ("my hips are so tight, give me a mobility routine", "move"),
+    ("what's a good warm up before my run?", "move"),
     # clear focus — organising / capture / retrieval
     ("add milk to my shopping list", "focus"),
     ("remind me to call the dentist", "focus"),
