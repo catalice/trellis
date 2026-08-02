@@ -213,11 +213,25 @@ def _fmt_tracking(states: list, events: list) -> "str | None":
 
 def _fmt_health(health: "dict | None") -> "str | None":
     """One-line readiness summary from recent_health(), or None if there's nothing.
-    Shared by the context loader and the snapshot."""
+    Shared by the context loader and the snapshot.
+
+    Staleness is stated loudly, not as a discoverable date: yesterday's numbers
+    presented as "your readiness" is exactly the honesty failure Trellis exists
+    to avoid. Python computed stale_days; here it becomes an instruction."""
     if not health:
         return None
     bits = []
-    if health.get("date"):
+    stale = health.get("stale_days")
+    if stale == 0:
+        bits.append("TODAY")
+    elif stale is not None:
+        ago = "YESTERDAY" if stale == 1 else f"{stale} DAYS AGO"
+        bits.append(
+            f"STALE — from {ago} ({health.get('date', '?')}), NOT today's. "
+            "Today's sleep/HRV haven't synced yet: call sync_garmin before advising "
+            "on readiness, or clearly say which day the numbers are from"
+        )
+    elif health.get("date"):
         bits.append(f"as of {health['date']}")
     if health.get("sleep_score") is not None:
         s = f"sleep {health['sleep_score']}"
@@ -260,7 +274,7 @@ def sense_context_loader(sense_service) -> ContextLoader:
         except Exception:
             _log.warning("sense_context: tracking failed", exc_info=True)
         try:
-            line = _fmt_health(sense_service.recent_health(user_id))
+            line = _fmt_health(sense_service.recent_health(user_id, now=now))
             if line:
                 parts.append("Recent Garmin readiness: " + line)
         except Exception:
@@ -285,7 +299,7 @@ def sense_snapshot(sense_service) -> ContextLoader:
         except Exception:
             _log.warning("sense_snapshot: state failed", exc_info=True)
         try:
-            health = _fmt_health(sense_service.recent_health(user_id))
+            health = _fmt_health(sense_service.recent_health(user_id, now=now))
             if health:
                 parts.append(f"Readiness: {health}")
         except Exception:

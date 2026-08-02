@@ -92,16 +92,18 @@ class TelegramTrellis:
             setattr(self, attr, None)
 
     async def _garmin_sync_loop(self) -> None:
-        """Refresh Garmin data for connected users once a day (health/readiness +
-        recent runs). Blocking work runs off the event loop; failures never crash the
-        bot. A short initial delay keeps startup snappy."""
+        """Refresh Garmin data for connected users (health/readiness + recent runs).
+        Every 6 hours, not daily: a 24h cadence anchored to the last restart meant
+        mornings served yesterday's sleep/HRV as "readiness". Blocking work runs off
+        the event loop; failures never crash the bot. A short initial delay keeps
+        startup snappy."""
         await asyncio.sleep(60)
         while True:
             try:
                 await asyncio.to_thread(self._daily_garmin_sync)
             except Exception:
-                self.logger.exception("Daily Garmin sync failed")
-            await asyncio.sleep(24 * 3600)
+                self.logger.exception("Garmin sync failed")
+            await asyncio.sleep(6 * 3600)
 
     async def _deliver_due_reminders_loop(self, application: Application) -> None:
         while True:

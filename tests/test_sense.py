@@ -172,3 +172,44 @@ class TestFeltAtAndDelete:
         assert svc.delete_entry(UID, log.id) is True
         assert repo.states == []
         assert svc.delete_entry(UID, log.id) is False
+
+
+class TestHealthStaleness:
+    """Stale readiness must be LOUD (the 2 Aug bug: yesterday's sleep 93 / HRV 70
+    presented as 'your readiness is great' at 08:54 the next morning). Python
+    computes stale_days; the formatted line instructs the model to sync or disclose."""
+
+    class _FakeHealthReader:
+        def __init__(self, observed_on):
+            from types import SimpleNamespace
+            self._h = SimpleNamespace(
+                observed_on=observed_on, sleep_score=93, sleep_duration_minutes=480,
+                resting_heart_rate=47, hrv_last_night=70, hrv_status="BALANCED",
+                body_battery_maximum=85, body_battery_end=None, average_stress=19,
+            )
+        def latest_daily_health(self, user_id):
+            return self._h
+
+    def _service(self, observed_on):
+        return SenseService(FakeStateRepo(), TZ, health_reader=self._FakeHealthReader(observed_on))
+
+    def test_todays_record_is_fresh(self):
+        svc = self._service(NOW.astimezone(TZ).date())
+        health = svc.recent_health(UID, now=NOW)
+        assert health["stale_days"] == 0
+        from trellis.domain_sense_tool import _fmt_health
+        line = _fmt_health(health)
+        assert "TODAY" in line and "STALE" not in line
+
+    def test_yesterdays_record_screams_stale(self):
+        svc = self._service(NOW.astimezone(TZ).date() - timedelta(days=1))
+        health = svc.recent_health(UID, now=NOW)
+        assert health["stale_days"] == 1
+        from trellis.domain_sense_tool import _fmt_health
+        line = _fmt_health(health)
+        assert "STALE" in line and "YESTERDAY" in line and "sync_garmin" in line
+
+    def test_no_now_keeps_old_behaviour(self):
+        svc = self._service(NOW.astimezone(TZ).date() - timedelta(days=1))
+        health = svc.recent_health(UID)
+        assert "stale_days" not in health

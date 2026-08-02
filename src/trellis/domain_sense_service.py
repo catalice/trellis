@@ -144,9 +144,13 @@ class SenseService:
 
     # -- Garmin health / readiness (Sense owns the READ; Move borrows it) ------
 
-    def recent_health(self, user_id: UUID) -> dict | None:
+    def recent_health(self, user_id: UUID, now: datetime | None = None) -> dict | None:
         """Latest synced daily health/readiness as a compact dict, or None if there's
-        no health data (or no health reader wired). Best-effort — never raises."""
+        no health data (or no health reader wired). Best-effort — never raises.
+
+        When `now` is given, the dict includes `stale_days` (0 = the record is for
+        today in the user's timezone). Staleness is a FACT, so Python computes it —
+        the model must never have to do date math to notice yesterday's data."""
         if self._health is None:
             return None
         try:
@@ -173,6 +177,9 @@ class SenseService:
                 out[key] = round(val / 60, 1)
             else:
                 out[key] = val
+        if out and now is not None and getattr(h, "observed_on", None) is not None:
+            today = now.astimezone(self._tz).date()
+            out["stale_days"] = max(0, (today - h.observed_on).days)
         return out or None
 
 
