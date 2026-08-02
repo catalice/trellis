@@ -897,7 +897,8 @@ def focus_context_loader(
     Loaded when focus is the routed domain.
     """
     def loader(user_id: UUID, now: datetime) -> str | None:
-        parts: list[str] = []
+        from trellis.domain_focus_claude import FOCUS_GUIDANCE
+        parts: list[str] = [FOCUS_GUIDANCE]
 
         try:
             goals = goal_service.list_active(user_id)

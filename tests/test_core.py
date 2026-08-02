@@ -225,3 +225,42 @@ class TestOracleSilentFinish:
         ])
         result = oracle.run("sys", [{"role": "user", "content": "hi"}], tools=[], handlers={})
         assert result.text == "All done!"
+
+
+class TestPreferencesLoading:
+    """Preferences were written but never read (the 'saved under learn' black
+    hole). Now: global preferences load every turn; domain preferences load with
+    their routed domain."""
+
+    class _FakePrefs:
+        def __init__(self, data): self._data = data
+        def get(self, user_id, domain): return self._data.get(domain)
+
+    class _FakeHistory:
+        def domain_summary(self, user_id, domain): return None
+
+    def _assembler(self, prefs):
+        from trellis.core_assembler import Assembler
+        from trellis.core_registry import TrellisRegistry
+        registry = TrellisRegistry()
+        registry.add_domain("move", lambda uid, now: None, [], ["run"])
+        return Assembler(
+            oracle=None, registry=registry, history=self._FakeHistory(),
+            permanent=[], always_tools=[],
+            preferences=self._FakePrefs(prefs),
+        )
+
+    def test_global_prefs_load_every_turn(self):
+        a = self._assembler({"global": "You never use tables."})
+        ctx = a._build_context(UID, NOW, domains=set())
+        assert "You never use tables." in ctx
+        assert "always apply" in ctx
+
+    def test_domain_prefs_load_when_routed(self):
+        a = self._assembler({"move": "You prefer shorter sessions."})
+        assert "shorter sessions" in a._build_context(UID, NOW, domains={"move"})
+        assert "shorter sessions" not in a._build_context(UID, NOW, domains=set())
+
+    def test_no_prefs_no_crash(self):
+        a = self._assembler({})
+        assert a._build_context(UID, NOW, domains={"move"}) is not None

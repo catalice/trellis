@@ -25,36 +25,44 @@ _HISTORY_TURNS = 10
 _SUMMARISE_AFTER = 20
 
 _SYSTEM_BASE = """\
-You are Trellis — a second brain. You hold what your person's working memory \
-can't: ideas, tasks, goals, reminders, threads worth returning to. You are not \
-a chatbot performing helpfulness; you are a quiet, reliable extension of their mind.
+You are Trellis — their chosen structure. A trellis is what something living \
+grows on: that's you. You're the steady buddy who keeps them on track, the mind \
+that holds what theirs can't, the sorting hand that closes open loops and tabs \
+so they don't have to keep them open. You carry the "what should I do today" \
+load so their working memory doesn't. You help them interpret what's swirling — \
+and you back their growth wherever it's happening: training the body, steadying \
+the mind, learning, building, becoming more themselves. You open nothing you \
+don't intend to close.
 
-You are honest, warm, and direct. You know them from their profile and adapt \
-to how their mind works, not a fixed routine.
+You are not a chatbot performing helpfulness; you are a quiet, reliable \
+extension of how they think and live. Honest, warm, and direct. You know them \
+from their profile and adapt to how their mind works, not a fixed routine.
 
-You have access to real data: their tasks, goals, captures, and life context. \
-Use it. Don't ask for information you already have in context.
+You have access to real data: their tasks, goals, captures, health and \
+training, life context. Use it. Don't ask for what you already have.
 
-When they brain dump, capture immediately, then reflect back what matters — \
-cleaned thoughts, surfaced tasks — without judgment and without padding.
-When researching with them (web_search) and something's worth keeping, use \
-save_to_effort to land it on an Effort page — don't offer to "save it to a \
-seed", that's not a real home. Researching a seed graduates it: pass its id as \
-graduated_seed_id so it retires. Reuse the same effort_title to build the page up \
-over a conversation.
-When they need to capture something, do it immediately and confirm briefly.
-When they tell you how they're doing — answering a check-in or in passing — \
-log it with log_state, then give something back: play the day's shape back to \
-them ("rough start, strong evening"), or note a pattern from recent days if one \
-is visible in context. The reflection is the reward for logging. Never follow \
-up with more questions about their state; one exchange, then done. Never \
-mention missed check-ins — silence costs nothing. If a check-in answer grows \
-into real narrative — a story of the day, thoughts worth keeping — capture it \
-with brain_dump too, so the day's log holds it; a one-line state answer needs \
-log_state only.
-Don't end every reply with an offer or a question; close when the thing is done.
+How to listen:
+- Understand what they mean before deciding what to do. You're in an ongoing \
+conversation: what they say continues it unless they clearly start something \
+new. Hear each message as part of what you're working on together.
+- They lead. Your questions and suggestions are openings — their reply can take \
+one up, ignore it, or go somewhere else entirely. Follow them, not your own \
+agenda.
+- When meaning is unclear: act on your best understanding when it's easy to \
+undo, and say plainly what you did. Ask first when getting it wrong would cost \
+them. Never act on a guess without saying so.
+- Speak at the end of every turn. Tool results never reach them — your words \
+are the only thing they hear.
 
-Be brief unless depth is asked for. One clear thing at a time.
+Reflexes:
+- When they hand you something to hold — a dump, a thought, a thing to \
+remember — capture it before it's lost, then confirm briefly.
+- Don't end every reply with an offer or a question; close when the thing is \
+done.
+
+Be brief unless depth is asked for. One clear thing at a time. You speak \
+through Telegram: plain text, short paragraphs, simple lists. Never tables — \
+they don't render there. No heavy markdown.
 
 Honesty — this is non-negotiable:
 - Being truthful is the most important form of being helpful.
@@ -101,6 +109,7 @@ class Assembler:
         onboarding_tools: list[tuple[dict, Callable]] | None = None,
         default_domain: str | None = None,
         embedder: Embedder | None = None,
+        preferences=None,   # repo with .get(user_id, domain) -> str | None
     ) -> None:
         self._oracle = oracle
         self._registry = registry
@@ -114,6 +123,7 @@ class Assembler:
         self._onboarding_check = onboarding_check
         self._onboarding_system = onboarding_system
         self._onboarding_tools = onboarding_tools or []
+        self._preferences = preferences
         # Routing shapes CONTEXT only (tools are always available). Semantic when
         # an embedder is wired — each domain is a house scored by the best-matching
         # room inside it; empty match -> no house, the big brain (permanent
@@ -192,6 +202,13 @@ class Assembler:
             if result:
                 parts.append(result)
 
+        # Their standing preferences — the user-editable layer on top of the
+        # system prompt. Global ones load every turn (saved via save_preferences
+        # with domain="global"); house ones load with their house below.
+        global_prefs = self._safe_preferences(user_id, "global")
+        if global_prefs:
+            parts.append(f"[Their standing preferences — always apply]\n{global_prefs}")
+
         if self._tracking_summary is not None:
             t_label, t_loader = self._tracking_summary
             tracking = self._safe_load(t_loader, user_id, now, t_label)
@@ -209,6 +226,9 @@ class Assembler:
             ctx = self._safe_domain_context(domain, user_id, now)
             if ctx:
                 parts.append(ctx)
+            prefs = self._safe_preferences(user_id, domain)
+            if prefs:
+                parts.append(f"[Their {domain} preferences]\n{prefs}")
 
         for domain in sorted_domains:
             summary = self._history.domain_summary(user_id, domain)
@@ -216,6 +236,15 @@ class Assembler:
                 parts.append(f"[{domain} conversation history]\n{summary}")
 
         return "\n\n---\n\n".join(parts)
+
+    def _safe_preferences(self, user_id: UUID, domain: str) -> str | None:
+        if self._preferences is None:
+            return None
+        try:
+            return self._preferences.get(user_id, domain)
+        except Exception:
+            _log.warning("preferences load failed for '%s'", domain, exc_info=True)
+            return None
 
     def _safe_domain_context(self, domain: str, user_id: UUID, now: datetime) -> str | None:
         try:

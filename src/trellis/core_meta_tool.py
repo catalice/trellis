@@ -3,7 +3,7 @@ Always-available tools — passed to the assembler regardless of domain routing.
 
 Tools Claude always has access to:
   - update_current_context: record what's going on right now
-  - save_preferences: save domain-specific coaching preferences
+  - save_preferences: save standing preferences — global (every turn) or per-domain
 """
 from __future__ import annotations
 
@@ -78,11 +78,12 @@ def handle_update_current_context(
 SAVE_PREFERENCES_TOOL = {
     "name": "save_preferences",
     "description": (
-        "Save the user's stated preferences for a domain. Call when the user expresses "
-        "how they want to be coached, taught, or supported in a specific area — e.g. "
-        "'I want to learn from the scaffold up', 'don't give me long plans', "
-        "'I prefer shorter sessions'. These preferences load automatically whenever "
-        "that domain is active."
+        "Save the user's standing preferences. Call when they express how they want "
+        "Trellis to behave. Use domain='global' for anything that applies everywhere — "
+        "formatting, tone, how to speak to them ('no tables', 'keep replies short'); "
+        "global preferences load on every turn. Use a specific domain only for "
+        "preferences about that area ('I prefer shorter sessions' -> move); those "
+        "load when the domain is active."
     ),
     "input_schema": {
         "type": "object",
@@ -90,15 +91,18 @@ SAVE_PREFERENCES_TOOL = {
         "properties": {
             "domain": {
                 "type": "string",
-                "enum": ["focus", "sense", "move", "learn"],
-                "description": "Which domain these preferences apply to.",
+                "enum": ["global", "focus", "sense", "move"],
+                "description": (
+                    "'global' for preferences that apply to every reply; otherwise "
+                    "the domain they're about. When in doubt, use 'global'."
+                ),
             },
             "content": {
                 "type": "string",
                 "description": (
                     "The user's preferences in plain text. Write in second person "
-                    "as a reminder to future Trellis — e.g. 'You prefer teaching "
-                    "from the big picture down, not facts first.'"
+                    "as a reminder to future Trellis — e.g. 'You never use tables; "
+                    "they don't render in Telegram.'"
                 ),
             },
         },

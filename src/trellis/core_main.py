@@ -301,6 +301,7 @@ def main() -> None:
         summariser=summariser,
         default_domain="focus",
         embedder=embedder,
+        preferences=preferences_repository,
         onboarding_check=lambda uid: needs_onboarding(profile_service, uid),
         onboarding_system=ONBOARDING_SYSTEM,
         onboarding_tools=[

@@ -1,7 +1,7 @@
 """
 Tools for the Sense (Mind) room — wellbeing tracking + readiness. The reflecting
 happens in the oracle turn (guidance in domain_sense_claude); these let it log how
-she's doing and read what's stored.
+they're doing and read what's stored.
 
 The room owns ONE tool — log_state (a write). Reads are context, not tools: the
 context loader (when Sense is routed) carries recent tracking + readiness, and the
@@ -35,10 +35,10 @@ LOG_STATE_TOOL: dict = {
     "name": "log_state",
     "description": (
         "Log how the user is doing right now — energy, mood, and body/context events. "
-        "Call whenever she describes her state (answering a check-in or spontaneously), "
-        "or mentions taking meds, sleep, or her period. Multiple logs per day are "
-        "expected; the within-day curve is the point. Derive scores from her words; "
-        "never ask her to rate herself."
+        "Call whenever they describe their state (answering a check-in or spontaneously), "
+        "or mention taking meds, sleep, or their period. Multiple logs per day are "
+        "expected; the within-day curve is the point. Derive scores from their words; "
+        "never ask them to rate themselves."
     ),
     "input_schema": {
         "type": "object",
@@ -46,9 +46,9 @@ LOG_STATE_TOOL: dict = {
             "note": {
                 "type": "string",
                 "description": (
-                    "Her words about how she's doing, first person, verbatim — "
+                    "Their words about how they're doing, first person, verbatim — "
                     "never paraphrase into third person ('feeling flat', not "
-                    "'she feels flat'). Voice notes: transcript as she said it."
+                    "'they feel flat'). Voice notes: transcript as they said it."
                 ),
             },
             "felt_at": {
@@ -63,11 +63,11 @@ LOG_STATE_TOOL: dict = {
             },
             "energy": {
                 "type": "integer", "minimum": 1, "maximum": 5,
-                "description": "Energy derived from her words: 1 empty/shutdown, 3 okay, 5 on top of the world. Omit if she said nothing about energy.",
+                "description": "Energy derived from their words: 1 empty/shutdown, 3 okay, 5 on top of the world. Omit if they said nothing about energy.",
             },
             "mood": {
                 "type": "integer", "minimum": 1, "maximum": 5,
-                "description": "Mood derived from her words: 1 awful, 3 neutral, 5 great. Omit if unclear. Mood and energy are independent — 'good mood, sleepy' is mood 4, energy 2.",
+                "description": "Mood derived from their words: 1 awful, 3 neutral, 5 great. Omit if unclear. Mood and energy are independent — 'good mood, sleepy' is mood 4, energy 2.",
             },
             "meds": {
                 "type": "array",
@@ -75,11 +75,11 @@ LOG_STATE_TOOL: dict = {
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "e.g. 'dex'"},
-                        "time": {"type": "string", "description": "Local HH:MM if she said when; omit otherwise."},
+                        "time": {"type": "string", "description": "Local HH:MM if they said when; omit otherwise."},
                     },
                     "required": ["name"],
                 },
-                "description": "Medication she mentions taking.",
+                "description": "Medication they mention taking.",
             },
             "sleep_hours": {
                 "type": "number",
@@ -87,11 +87,11 @@ LOG_STATE_TOOL: dict = {
             },
             "sleep_quality": {
                 "type": "string",
-                "description": "Her description of sleep quality, if mentioned: 'badly', 'great', etc.",
+                "description": "Their description of sleep quality, if mentioned: 'badly', 'great', etc.",
             },
             "period": {
                 "type": "string", "enum": ["started", "ended"],
-                "description": "If she says her period started or ended.",
+                "description": "If they say their period started or ended.",
             },
         },
         "required": ["note"],
@@ -105,7 +105,7 @@ LOG_STATE_TOOL: dict = {
 def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_service, tz) -> str:
     note = str(input_dict.get("note", "")).strip()
     if not note:
-        return "note is required — her words about how she's doing."
+        return "note is required — their words about how they're doing."
 
     energy = input_dict.get("energy")
     mood = input_dict.get("mood")

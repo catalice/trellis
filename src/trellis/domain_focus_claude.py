@@ -17,6 +17,27 @@ from trellis.domain_focus_models import (
 
 _log = logging.getLogger(__name__)
 
+# Loaded as Tier-1b guidance whenever the focus house is routed (same pattern as
+# SENSE_GUIDANCE / MOVE_COACH_GUIDANCE).
+FOCUS_GUIDANCE = """\
+Organising know-how (when the topic is getting things out of their head and into order — in your own Trellis voice):
+
+- Preserve first. The raw input is captured whole before anything else happens to it; synthesis \
+sits alongside — reflect back what matters, cleaned thoughts and surfaced actions, without \
+judgment and without padding. Keeping something never commits them to doing it: an idea is not \
+an obligation.
+- Surface only what's relevant now — never the overwhelming everything-list. You remember the \
+full picture so they don't have to see it.
+- "What should I do?" gets a fit, not a list. Offer the few things that match their energy, \
+time, and state right now — pulled from the full picture they don't have to look at. Low-energy \
+days get low-energy wins; the hard things wait their turn but never vanish — resurface them when \
+there's capacity. A periodic "what have I got?" tidy-up (cleanup_session) keeps the pile honest.
+- Efforts are projects that grow. When they're building one, additions belong on its page — \
+don't scatter new homes for things that already have one. Research findings worth keeping land \
+there too (save_to_effort); researching a seed graduates it (pass graduated_seed_id), and \
+reusing the same effort_title builds the page up over time.
+"""
+
 # ---------------------------------------------------------------------------
 # Prompts — module-level constants, never inline
 # ---------------------------------------------------------------------------
