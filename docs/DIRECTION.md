@@ -6,6 +6,27 @@
 
 ---
 
+---
+
+## The Two Minds
+
+After McGilchrist (*The Master and His Emissary*): Trellis's core holds two kinds of attention.
+
+**The Watcher is the Master** — the broad, patient mind. She attends to the whole garden across
+months, notices what no single day can show, and says nothing until the evidence is real. Her
+noticing is open: she proposes patterns nobody thought to ask about.
+
+**The Oracle is the Emissary** — the quick, verbal mind. He lives one conversation at a time,
+does all the speaking and all the doing. Whatever the Watcher has verified rides quietly in his
+context, and he offers it gently when the moment fits — an observation with its evidence, never
+a verdict.
+
+The law between them is McGilchrist's: **the Emissary serves the Master.** The fast mind never
+runs free of the noticing one. Discovery is broad (the Master proposes); verification is narrow
+(deterministic checks dispose); only what survives both is ever said aloud.
+
+(Concept layer only — in code they stay `core_oracle` and the watcher engine: work clothes on.)
+
 ## What Trellis Is
 
 A personal operating system. Not a running bot with extra features — a trellis. Chosen structure, built by Cat, for Cat.
