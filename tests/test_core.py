@@ -293,7 +293,7 @@ class TestVaultTrainingPlan:
         vault = ObsidianVault(tmp_path, TZ, None, None, None,
                               move_repo=self._MoveRepo(plan, runs))
         vault.plan_changed(UID)
-        page = (tmp_path / "Training" / "Plan.md").read_text()
+        page = (tmp_path / "Calendar" / "Training.md").read_text()
         assert "Base phase" in page and "28min run-walk base" in page
         assert "- [x] Sun 02 Aug — easy: 28min 3:1 run-walk — 3.26km done" in page
         assert "- [ ] Tue 04 Aug — long: 40min easy" in page
@@ -303,7 +303,7 @@ class TestVaultTrainingPlan:
         vault = ObsidianVault(tmp_path, TZ, None, None, None,
                               move_repo=self._MoveRepo(None, []))
         vault.plan_changed(UID)
-        assert "No plan yet" in (tmp_path / "Training" / "Plan.md").read_text()
+        assert "No plan yet" in (tmp_path / "Calendar" / "Training.md").read_text()
 
 
 class TestVaultDailyProperties:

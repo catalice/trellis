@@ -76,7 +76,7 @@ _TASKS_PATH = "Calendar/Tasks.md"
 _SEEDS_PATH = "Calendar/Seeds.md"
 _TRACKING_PATH = "Calendar/Tracking.md"
 _TRACKING_BASE_PATH = "Calendar/Tracking.base"
-_TRAINING_PLAN_PATH = "Training/Plan.md"
+_TRAINING_PLAN_PATH = "Calendar/Training.md"
 
 # Written ONCE if absent, then never touched — it's the user's file to tweak in
 # Obsidian's Bases UI. It turns the daily notes' frontmatter into a sortable
