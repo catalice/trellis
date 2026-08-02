@@ -264,3 +264,82 @@ class TestPreferencesLoading:
     def test_no_prefs_no_crash(self):
         a = self._assembler({})
         assert a._build_context(UID, NOW, domains={"move"}) is not None
+
+
+class TestVaultTrainingPlan:
+    """Training/Plan.md — the coach's plan made inspectable, with completed
+    runs ticked off against planned sessions."""
+
+    class _MoveRepo:
+        def __init__(self, plan, runs): self._plan, self._runs = plan, runs
+        def get(self, user_id): return self._plan
+        def recent_runs(self, user_id, *, limit): return self._runs[:limit]
+
+    def test_plan_page_matches_runs(self, tmp_path):
+        from datetime import date as d
+        from trellis.domain_move_models import RunLog, TrainingPlan
+        plan = TrainingPlan(
+            user_id=UID, goal_id=None, baseline="28min run-walk base",
+            plan={"arc": "Base phase, 6 weeks to 5k.",
+                  "week": [
+                      {"date": "2026-08-02", "type": "easy", "detail": "28min 3:1 run-walk"},
+                      {"date": "2026-08-04", "type": "long", "detail": "40min easy"},
+                  ]},
+        )
+        runs = [RunLog(id=uuid4(), user_id=UID, ran_on=d(2026, 8, 2),
+                       note="Barcelona Running (avg HR 152)", distance_km=3.26),
+                RunLog(id=uuid4(), user_id=UID, ran_on=d(2026, 7, 30),
+                       note="Drill workout", distance_km=6.38)]
+        vault = ObsidianVault(tmp_path, TZ, None, None, None,
+                              move_repo=self._MoveRepo(plan, runs))
+        vault.plan_changed(UID)
+        page = (tmp_path / "Training" / "Plan.md").read_text()
+        assert "Base phase" in page and "28min run-walk base" in page
+        assert "- [x] Sun 02 Aug — easy: 28min 3:1 run-walk — 3.26km done" in page
+        assert "- [ ] Tue 04 Aug — long: 40min easy" in page
+        assert "Drill workout" in page  # unmatched run listed under Recent Runs
+
+    def test_no_plan_no_crash(self, tmp_path):
+        vault = ObsidianVault(tmp_path, TZ, None, None, None,
+                              move_repo=self._MoveRepo(None, []))
+        vault.plan_changed(UID)
+        assert "No plan yet" in (tmp_path / "Training" / "Plan.md").read_text()
+
+
+class TestVaultDailyProperties:
+    """Daily notes carry frontmatter properties so a Base can table the whole
+    tracking history. Body stays append-only; only the metadata block rewrites."""
+
+    class _StateRepo:
+        def __init__(self, states, events, period_start=None):
+            self._s, self._e, self._p = states, events, period_start
+        def list_states_since(self, user_id, *, since): return self._s
+        def list_events_since(self, user_id, *, since): return self._e
+        def last_period_start(self, user_id): return self._p
+
+    def test_state_log_stamps_frontmatter(self, tmp_path):
+        from trellis.domain_sense_models import StateLog
+        log = StateLog(id=uuid4(), user_id=UID, note="feeling okay",
+                       energy=3, mood=4, felt_at=NOW, logged_at=NOW)
+        vault = ObsidianVault(tmp_path, TZ, None, None, None,
+                              state_repo=self._StateRepo([log], []))
+        vault.state_logged(log)
+        note = (tmp_path / "Calendar" / "Captures" / "2026-07-20.md").read_text()
+        assert note.startswith("---\n")
+        assert "energy: 3" in note and "mood: 4" in note
+        assert "tracking e3/m4" in note  # receipt body preserved below
+
+    def test_frontmatter_rewrites_body_survives(self, tmp_path):
+        from trellis.domain_sense_models import StateLog
+        log1 = StateLog(id=uuid4(), user_id=UID, note="meh", energy=2, mood=2,
+                        felt_at=NOW, logged_at=NOW)
+        log2 = StateLog(id=uuid4(), user_id=UID, note="better", energy=4, mood=4,
+                        felt_at=NOW + timedelta(hours=3), logged_at=NOW + timedelta(hours=3))
+        repo = self._StateRepo([log1, log2], [])
+        vault = ObsidianVault(tmp_path, TZ, None, None, None, state_repo=repo)
+        vault.state_logged(log1)
+        vault.state_logged(log2)
+        note = (tmp_path / "Calendar" / "Captures" / "2026-07-20.md").read_text()
+        assert note.count("---\n") == 2          # exactly one frontmatter block
+        assert "energy: 3.0" in note             # average of 2 and 4
+        assert note.count("tracking") == 2       # both receipts kept

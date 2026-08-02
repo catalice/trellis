@@ -22,7 +22,7 @@ break the bot.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from uuid import UUID
 
@@ -36,6 +36,14 @@ from trellis.domain_focus_models import (
 from trellis.domain_sense_models import StateLog, TrackingEventType
 
 _log = logging.getLogger(__name__)
+
+
+def _title_from_daily_path(path: Path) -> str | None:
+    """Daily-note title from its YYYY-MM-DD filename; None for non-daily paths."""
+    try:
+        return date.fromisoformat(path.stem).strftime("%A %d %B %Y")
+    except ValueError:
+        return None
 
 _TASKS_HEADER = """\
 # Tasks
@@ -67,6 +75,30 @@ _DAILY_DIR = "Calendar/Captures"
 _TASKS_PATH = "Calendar/Tasks.md"
 _SEEDS_PATH = "Calendar/Seeds.md"
 _TRACKING_PATH = "Calendar/Tracking.md"
+_TRACKING_BASE_PATH = "Calendar/Tracking.base"
+_TRAINING_PLAN_PATH = "Training/Plan.md"
+
+# Written ONCE if absent, then never touched — it's the user's file to tweak in
+# Obsidian's Bases UI. It turns the daily notes' frontmatter into a sortable
+# table of every day ever (the long view; Tracking.md stays the 14-day glance).
+_TRACKING_BASE_CONTENT = """\
+filters:
+  and:
+    - file.inFolder("Calendar/Captures")
+views:
+  - type: table
+    name: All days
+    order:
+      - file.name
+      - energy
+      - mood
+      - sleep_hours
+      - meds
+      - cycle_day
+    sort:
+      - property: file.name
+        direction: DESC
+"""
 
 
 class ObsidianVault:
@@ -78,6 +110,7 @@ class ObsidianVault:
         reminder_repo,
         effort_repo,
         state_repo=None,
+        move_repo=None,
     ) -> None:
         self._vault = vault
         self._tz = tz
@@ -85,6 +118,7 @@ class ObsidianVault:
         self._reminders = reminder_repo
         self._efforts = effort_repo
         self._states = state_repo
+        self._move = move_repo
 
     # --- Daily notes (journal) ---------------------------------------------
 
@@ -248,6 +282,10 @@ class ObsidianVault:
             else:
                 title = f"# {local.strftime('%A %d %B %Y')}\n"
                 path.write_text(title + line, encoding="utf-8")
+            felt_day = log.felt_at.astimezone(self._tz).date()
+            self._update_daily_properties(log.user_id, felt_day)
+            if felt_day != local.date():
+                self._update_daily_properties(log.user_id, local.date())
         except Exception:
             _log.warning("obsidian: state receipt write failed", exc_info=True)
 
@@ -333,6 +371,158 @@ class ObsidianVault:
             path.write_text("\n".join(parts), encoding="utf-8")
         except Exception:
             _log.warning("obsidian: Tracking.md write failed", exc_info=True)
+        self._ensure_tracking_base()
+        # Events (meds/sleep/period) don't say which day changed — refresh the
+        # last few days' properties so the Base stays true without new wiring.
+        try:
+            today = datetime.now(self._tz).date()
+            for offset in range(3):
+                self._update_daily_properties(user_id, today - timedelta(days=offset))
+        except Exception:
+            _log.warning("obsidian: daily property refresh failed", exc_info=True)
+
+    def _ensure_tracking_base(self) -> None:
+        """Write Tracking.base ONCE if absent — never overwrite: after creation
+        it's the user's file to reshape in Obsidian's Bases UI."""
+        try:
+            path = self._vault / _TRACKING_BASE_PATH
+            if not path.exists() and self._vault.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(_TRACKING_BASE_CONTENT, encoding="utf-8")
+        except Exception:
+            _log.warning("obsidian: Tracking.base write failed", exc_info=True)
+
+    def _update_daily_properties(self, user_id: UUID, day: date) -> None:
+        """Upsert frontmatter properties on the day's note (energy, mood, sleep,
+        meds, cycle day) so Bases can table the whole history. Body untouched —
+        the note stays append-only; only the metadata block is rewritten."""
+        if self._states is None:
+            return
+        try:
+            day_start = datetime.combine(day, datetime.min.time(), tzinfo=self._tz)
+            states = [
+                s for s in self._states.list_states_since(user_id, since=day_start)
+                if s.felt_at.astimezone(self._tz).date() == day
+            ]
+            events = [
+                e for e in self._states.list_events_since(user_id, since=day_start)
+                if e.occurred_at.astimezone(self._tz).date() == day
+            ]
+            props: dict = {}
+            energies = [s.energy for s in states if s.energy]
+            moods = [s.mood for s in states if s.mood]
+            if energies:
+                props["energy"] = round(sum(energies) / len(energies), 1)
+            if moods:
+                props["mood"] = round(sum(moods) / len(moods), 1)
+            sleeps = [e.value for e in events
+                      if e.event_type == TrackingEventType.SLEEP and e.value is not None]
+            if sleeps:
+                props["sleep_hours"] = round(float(sleeps[-1]), 1)
+            meds = [e.detail for e in events
+                    if e.event_type == TrackingEventType.MEDS and e.detail]
+            if meds:
+                props["meds"] = meds
+            period_start = self._states.last_period_start(user_id)
+            if period_start is not None:
+                delta = (day - period_start.occurred_at.astimezone(self._tz).date()).days
+                if 0 <= delta < 60:
+                    props["cycle_day"] = delta + 1
+            if not props:
+                return
+            path = self._vault / _DAILY_DIR / f"{day.strftime('%Y-%m-%d')}.md"
+            self._upsert_frontmatter(path, props)
+        except Exception:
+            _log.warning("obsidian: daily properties update failed", exc_info=True)
+
+    def _upsert_frontmatter(self, path: Path, props: dict) -> None:
+        lines = ["---"]
+        for key, val in props.items():
+            if isinstance(val, list):
+                lines.append(f"{key}:")
+                lines.extend(f"  - {v}" for v in val)
+            else:
+                lines.append(f"{key}: {val}")
+        lines.append("---")
+        block = "\n".join(lines) + "\n"
+        if path.exists():
+            text = path.read_text(encoding="utf-8")
+            if text.startswith("---\n"):
+                end = text.find("\n---\n", 4)
+                if end != -1:
+                    text = text[end + 5:]
+            path.write_text(block + text, encoding="utf-8")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            title = f"# {day_title}\n" if (day_title := _title_from_daily_path(path)) else ""
+            path.write_text(block + title, encoding="utf-8")
+
+    # --- Training plan page --------------------------------------------------
+
+    def plan_changed(self, user_id: UUID) -> None:
+        """Rewrite Training/Plan.md — the arc, baseline, this week's sessions
+        with completed runs matched by date, and recent runs. Write-only view,
+        same contract as Tasks.md: edits there don't sync back."""
+        if self._move is None:
+            return
+        try:
+            plan = self._move.get(user_id)
+            runs = self._move.recent_runs(user_id, limit=12)
+            runs_by_date = {r.ran_on.isoformat(): r for r in runs}
+            now = datetime.now(self._tz)
+
+            parts = [
+                "# Training Plan\n",
+                "> Live view — managed by Trellis (your coach). Edits here won't "
+                "sync back; tell Trellis instead.\n",
+                f"_Updated {now.strftime('%d %b %Y, %H:%M')}_\n",
+            ]
+            plan_doc = plan.plan if plan is not None and plan.plan else {}
+            arc = plan_doc.get("arc")
+            if arc:
+                parts.append(f"## Arc\n{arc}\n")
+            if plan is not None and plan.baseline:
+                parts.append(f"## Baseline\n{plan.baseline}\n")
+
+            week = plan_doc.get("week") or []
+            matched_dates: set[str] = set()
+            if week:
+                lines = ["## This Week\n"]
+                for s in week:
+                    s_date = str(s.get("date", ""))
+                    s_type = s.get("type", "session")
+                    s_detail = s.get("detail", "")
+                    run = runs_by_date.get(s_date)
+                    try:
+                        day_name = date.fromisoformat(s_date).strftime("%a %d %b")
+                    except ValueError:
+                        day_name = s_date
+                    if run is not None:
+                        matched_dates.add(s_date)
+                        dist = f" — {run.distance_km}km done" if run.distance_km else " — done"
+                        lines.append(f"- [x] {day_name} — {s_type}: {s_detail}{dist}")
+                    else:
+                        lines.append(f"- [ ] {day_name} — {s_type}: {s_detail}")
+                parts.append("\n".join(lines) + "\n")
+
+            extra_runs = [r for r in runs if r.ran_on.isoformat() not in matched_dates]
+            if extra_runs:
+                lines = ["## Recent Runs\n"]
+                for r in extra_runs[:8]:
+                    dist = f" — {r.distance_km}km" if r.distance_km is not None else ""
+                    lines.append(f"- {r.ran_on.strftime('%a %d %b')}{dist}: {r.note}")
+                parts.append("\n".join(lines) + "\n")
+
+            if len(parts) == 3:
+                parts.append("_No plan yet — ask Trellis to build one._\n")
+
+            path = self._vault / _TRAINING_PLAN_PATH
+            if not self._vault.exists():
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(parts), encoding="utf-8")
+        except Exception:
+            _log.warning("obsidian: Training plan write failed", exc_info=True)
 
     # --- Effort pages -------------------------------------------------------
 

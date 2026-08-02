@@ -58,6 +58,7 @@ class MoveService:
         garmin_push: GarminWorkoutPort | None = None,
         garmin_read: GarminActivityPort | None = None,
         garmin_sync: GarminSyncPort | None = None,
+        projection=None,   # vault view with .plan_changed(user_id); best-effort
     ) -> None:
         self._repo = repo
         self._goals = goals
@@ -65,6 +66,17 @@ class MoveService:
         self._garmin_push = garmin_push
         self._garmin_read = garmin_read
         self._garmin_sync = garmin_sync
+        self._projection = projection
+
+    def _project_plan(self, user_id: UUID) -> None:
+        """Refresh the vault's Training/Plan.md. Never raises — a failed vault
+        write must not break the bot."""
+        if self._projection is None:
+            return
+        try:
+            self._projection.plan_changed(user_id)
+        except Exception:
+            _log.warning("plan projection failed", exc_info=True)
 
     # -- plan (persist what the coach authors) --------------------------------
 
@@ -82,13 +94,15 @@ class MoveService:
         """Upsert the coach's plan. Any field left None keeps its stored value, so
         the coach can update just the week, just the baseline, etc."""
         existing = self._repo.get(user_id)
-        return self._repo.upsert(TrainingPlan(
+        saved = self._repo.upsert(TrainingPlan(
             user_id=user_id,
             goal_id=goal_id if goal_id is not None else (existing.goal_id if existing else None),
             baseline=baseline if baseline is not None else (existing.baseline if existing else None),
             plan=plan if plan is not None else (existing.plan if existing else {}),
             updated_at=datetime.now(timezone.utc),
         ))
+        self._project_plan(user_id)
+        return saved
 
     def training_goals(self, user_id: UUID) -> list:
         return self._goals.list_training_goals(user_id)
@@ -143,6 +157,8 @@ class MoveService:
                 id=uuid4(), user_id=user_id, ran_on=ran_on,
                 note=note, distance_km=dist_km, created_at=now,
             )))
+        if logged:
+            self._project_plan(user_id)   # new runs tick off planned sessions
         return logged
 
     def sync_garmin(self, user_id: UUID, *, now: datetime, days: int = 3) -> dict:

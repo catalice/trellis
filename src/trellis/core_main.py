@@ -169,10 +169,13 @@ def main() -> None:
     goal_repo = PostgresGoalRepository(database)
     state_repo = PostgresStateRepository(database)
 
+    move_repo = PostgresMoveRepository(database)
+
     vault = ObsidianVault(
         settings.obsidian_vault, settings.timezone,
         task_repo, reminder_repo, effort_repo,
         state_repo=state_repo,
+        move_repo=move_repo,
     )
 
     capture_service = CaptureService(capture_repo, projection=vault, memory=memory)
@@ -219,12 +222,13 @@ def main() -> None:
             )
 
     move_service = MoveService(
-        PostgresMoveRepository(database),
+        move_repo,
         goal_service,
         settings.timezone,
         garmin_push=garmin_push,
         garmin_read=garmin_read,
         garmin_sync=garmin_sync,
+        projection=vault,
     )
 
     # --- Registry ---
