@@ -15,7 +15,7 @@ Registration: sense_tools(...)
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date as _date, datetime, time as _time
 from typing import Any, Callable
 from uuid import UUID
 
@@ -93,8 +93,16 @@ LOG_STATE_TOOL: dict = {
                 "type": "string", "enum": ["started", "ended"],
                 "description": "If they say their period started or ended.",
             },
+            "period_date": {
+                "type": "string",
+                "description": (
+                    "YYYY-MM-DD — ONLY when the period event was on a PAST date "
+                    "(e.g. logging history from another app). Omit for today. "
+                    "For several past cycles, call once per event with its date."
+                ),
+            },
         },
-        "required": ["note"],
+        "required": [],
     },
 }
 
@@ -104,37 +112,37 @@ LOG_STATE_TOOL: dict = {
 
 def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_service, tz) -> str:
     note = str(input_dict.get("note", "")).strip()
-    if not note:
-        return "note is required — their words about how they're doing."
-
     energy = input_dict.get("energy")
     mood = input_dict.get("mood")
     parts: list[str] = []
 
-    felt_at = None
-    felt_str = str(input_dict.get("felt_at", "")).strip()
-    if felt_str:
-        try:
-            felt_at = datetime.fromisoformat(felt_str)
-            if felt_at.tzinfo is None:
-                felt_at = felt_at.replace(tzinfo=tz)
-        except ValueError:
-            felt_at = None
+    # A state entry needs their words; pure events (period/meds/sleep) don't —
+    # forcing a note here is how phantom state rows got fabricated (3 Aug).
+    if note:
+        felt_at = None
+        felt_str = str(input_dict.get("felt_at", "")).strip()
+        if felt_str:
+            try:
+                felt_at = datetime.fromisoformat(felt_str)
+                if felt_at.tzinfo is None:
+                    felt_at = felt_at.replace(tzinfo=tz)
+            except ValueError:
+                felt_at = None
 
-    log = sense_service.log_state(
-        user_id, note,
-        energy=int(energy) if energy is not None else None,
-        mood=int(mood) if mood is not None else None,
-        now=now,
-        felt_at=felt_at,
-    )
-    scores = ", ".join(
-        s for s in (
-            f"energy {log.energy}" if log.energy else "",
-            f"mood {log.mood}" if log.mood else "",
-        ) if s
-    )
-    parts.append(f"State logged{f' ({scores})' if scores else ''}.")
+        log = sense_service.log_state(
+            user_id, note,
+            energy=int(energy) if energy is not None else None,
+            mood=int(mood) if mood is not None else None,
+            now=now,
+            felt_at=felt_at,
+        )
+        scores = ", ".join(
+            s for s in (
+                f"energy {log.energy}" if log.energy else "",
+                f"mood {log.mood}" if log.mood else "",
+            ) if s
+        )
+        parts.append(f"State logged{f' ({scores})' if scores else ''}.")
 
     for med in input_dict.get("meds") or []:
         if not isinstance(med, dict) or not med.get("name"):
@@ -168,12 +176,25 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
 
     period = input_dict.get("period")
     if period in ("started", "ended"):
+        occurred = now
+        when = ""
+        period_date_str = str(input_dict.get("period_date", "")).strip()
+        if period_date_str:
+            try:
+                d = _date.fromisoformat(period_date_str)
+                occurred = datetime.combine(d, _time(10, 0), tzinfo=tz)
+                when = f" ({period_date_str})"
+            except ValueError:
+                return f"period_date '{period_date_str}' isn't a valid YYYY-MM-DD date — nothing was logged."
         sense_service.log_event(
             user_id,
             TrackingEventType.PERIOD_START if period == "started" else TrackingEventType.PERIOD_END,
-            occurred_at=now,
+            occurred_at=occurred,
         )
-        parts.append(f"Period {period}.")
+        parts.append(f"Period {period}{when}.")
+
+    if not parts:
+        return "Nothing to log — pass their words (note) and/or meds, sleep, or period."
 
     summary = sense_service.today_summary(user_id, now)
     if summary:

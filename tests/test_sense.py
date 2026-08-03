@@ -136,10 +136,26 @@ class TestLogStateHandler:
         reply, repo = self._handle({"note": "period started", "period": "started"})
         assert [e.event_type for e in repo.events] == [TrackingEventType.PERIOD_START]
 
+    def test_backdated_period_event(self):
+        # The 3 Aug mess: history from Flo got stamped "now" (no date field) and
+        # fabricated phantom state rows (note was forced). Now: period_date
+        # backdates the event, and no note means no state row.
+        reply, repo = self._handle({"period": "started", "period_date": "2026-04-20"})
+        assert "Period started (2026-04-20)" in reply
+        assert "State logged" not in reply
+        event = repo.events[-1]
+        assert event.occurred_at.astimezone(TZ).date().isoformat() == "2026-04-20"
+        assert not repo.states  # no phantom state row
+
+    def test_bad_period_date_logs_nothing(self):
+        reply, repo = self._handle({"period": "started", "period_date": "April 20th"})
+        assert "isn't a valid" in reply
+        assert not repo.events
+
     def test_note_required(self):
         reply, repo = self._handle({"energy": 3})
         assert repo.states == []
-        assert "note is required" in reply
+        assert "Nothing to log" in reply
 
     def test_bad_med_time_still_logs_med(self):
         reply, repo = self._handle({
