@@ -56,7 +56,9 @@ def make_summariser(
                 temperature=0,
             )
             summary = response.choices[0].message.content.strip()
-            history.save_domain_summary(user_id, domain, summary, len(turns))
+            # turns_covered stores the TOTAL turn count at summarisation time —
+            # it's the cursor max_turns_covered() reads, not the window size.
+            history.save_domain_summary(user_id, domain, summary, history.turn_count(user_id))
         except Exception:
             _log.warning("groq summarisation failed for domain '%s'", domain, exc_info=True)
 

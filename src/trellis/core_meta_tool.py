@@ -83,7 +83,10 @@ SAVE_PREFERENCES_TOOL = {
         "formatting, tone, how to speak to them ('no tables', 'keep replies short'); "
         "global preferences load on every turn. Use a specific domain only for "
         "preferences about that area ('I prefer shorter sessions' -> move); those "
-        "load when the domain is active."
+        "load when the domain is active. Preferences ACCUMULATE: a new one is added "
+        "to what's already saved — send just the new preference, not a rewrite of "
+        "the old ones. Set replace=true ONLY when deliberately rewriting the whole "
+        "set (correcting or consolidating)."
     ),
     "input_schema": {
         "type": "object",
@@ -105,6 +108,15 @@ SAVE_PREFERENCES_TOOL = {
                     "they don't render in Telegram.'"
                 ),
             },
+            "replace": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "True ONLY to rewrite this domain's ENTIRE preference set "
+                    "(content must then include everything that should survive). "
+                    "Default false: content is appended to the existing preferences."
+                ),
+            },
         },
         "required": ["domain", "content"],
     },
@@ -120,11 +132,13 @@ def handle_save_preferences(
 ) -> str:
     domain = input_dict.get("domain", "").strip()
     content = input_dict.get("content", "").strip()
+    replace = bool(input_dict.get("replace", False))
     if not domain or not content:
         return "Domain and content are required."
     try:
-        preferences_repository.set(user_id, domain, content)
-        return f"Preferences saved for {domain}."
+        preferences_repository.set(user_id, domain, content, replace=replace)
+        verb = "rewritten" if replace else "added"
+        return f"Preferences {verb} for {domain}."
     except Exception:
         _log.exception("save_preferences failed for user %s", user_id)
         return "Couldn't save preferences — try again in a moment."

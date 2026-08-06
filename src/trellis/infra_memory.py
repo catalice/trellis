@@ -83,12 +83,10 @@ class MemoryIndex:
             return False
 
     def remember_many(self, items: "list[tuple[UUID, str, UUID, str]]") -> int:
-        """Batch-file many cards in as few embedding REQUESTS as possible: the
-        embedder batches internally, so N rows cost ~ceil(N / batch) requests, not
-        N. That's what a backfill wants — GitHub Models' free tier caps *requests*
-        (15/min, 150/day), not size (64k tokens/request). items are
-        (user_id, entity_kind, entity_id, text); returns how many were filed. A
-        failed embed files none — re-run later, it's idempotent."""
+        """Batch-file many cards in ONE embedder call — the local model is much
+        faster embedding a batch than N single texts, which is what a backfill
+        wants. items are (user_id, entity_kind, entity_id, text); returns how
+        many were filed. A failed embed files none — re-run later, idempotent."""
         rows = [(u, k, e, (t or "").strip()) for (u, k, e, t) in items]
         rows = [r for r in rows if r[3]]
         if self._embedder is None or not rows:

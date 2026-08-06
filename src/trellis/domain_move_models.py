@@ -29,4 +29,5 @@ class RunLog:
     ran_on: date
     note: str                     # "easy 5k, felt strong" — the coach's/user's words
     distance_km: float | None = None
+    garmin_activity_id: str | None = None   # the run's real identity, for dedupe
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

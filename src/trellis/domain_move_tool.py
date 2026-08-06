@@ -336,13 +336,24 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
         # is surfaced every turn by sense_snapshot; the coach reads it from context
         # and factors it into how hard to push.
 
-        # Always give the real calendar so runs land on real days.
+        # Always give the real calendar so runs land on real days — and use it to
+        # catch a stored week left entirely in the past (Sunday review skipped):
+        # surface that loudly so the coach reviews + re-authors before anything else.
         try:
             week = move_service.current_week(now)
             parts.append(
                 "This week's real dates:\n"
                 + "\n".join(f"  {d['weekday']} {d['date']}" + (" (today)" if d["is_today"] else "") for d in week)
             )
+            monday = week[0]["date"]
+            stored = [str(s.get("date", "")) for s in move_service.week_sessions(user_id) if s.get("date")]
+            if stored and all(d < monday for d in stored):
+                parts.append(
+                    "THE STORED WEEK HAS PASSED (last planned day "
+                    + max(stored)
+                    + "). Hold the weekly review NOW: look at what was actually run, "
+                    "then author this week fresh from what you learned — before anything else."
+                )
         except Exception:
             _log.warning("training_context: week dates failed", exc_info=True)
 

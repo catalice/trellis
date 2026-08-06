@@ -206,18 +206,36 @@ class TestOracleSilentFinish:
 
         return Oracle(client=FakeClient(responses), model="test")
 
-    def test_silent_end_turn_replies_with_tool_results(self):
+    def test_silent_end_turn_is_nudged_once(self):
+        """A silent end_turn after tools now gets ONE nudge call asking the
+        model to speak — the model's own words beat a receipt dump."""
         tool_use = self._Block(type="tool_use", name="save_to_effort", id="t1",
                                input={"text": "cabinet door"})
         oracle = self._oracle([
             self._Resp("tool_use", [tool_use]),
             self._Resp("end_turn", []),          # model goes silent
+            self._Resp("end_turn", [self._Block(type="text", text="Kept that on your Dining Area page.")]),
+        ])
+        result = oracle.run("sys", [{"role": "user", "content": "hi"}],
+                            tools=[{"name": "save_to_effort"}],
+                            handlers={"save_to_effort": lambda inp: "Saved to effort 'Dining Area Upgrade'."})
+        assert result.text == "Kept that on your Dining Area page."
+        assert result.tool_calls[0].name == "save_to_effort"
+
+    def test_silent_after_nudge_falls_back_to_tool_results(self):
+        """If the nudge ALSO comes back silent, the deterministic fallback
+        (tool-result receipts) still guarantees a reply — never a failure."""
+        tool_use = self._Block(type="tool_use", name="save_to_effort", id="t1",
+                               input={"text": "cabinet door"})
+        oracle = self._oracle([
+            self._Resp("tool_use", [tool_use]),
+            self._Resp("end_turn", []),          # silent
+            self._Resp("end_turn", []),          # nudge ignored — still silent
         ])
         result = oracle.run("sys", [{"role": "user", "content": "hi"}],
                             tools=[{"name": "save_to_effort"}],
                             handlers={"save_to_effort": lambda inp: "Saved to effort 'Dining Area Upgrade'."})
         assert result.text == "Saved to effort 'Dining Area Upgrade'."
-        assert result.tool_calls[0].name == "save_to_effort"
 
     def test_text_reply_unchanged(self):
         oracle = self._oracle([

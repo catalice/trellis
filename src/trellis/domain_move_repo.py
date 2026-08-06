@@ -56,10 +56,14 @@ class PostgresMoveRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO training_runs (id, user_id, ran_on, note, distance_km, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO training_runs
+                        (id, user_id, ran_on, note, distance_km, garmin_activity_id, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (run.id, run.user_id, run.ran_on, run.note, run.distance_km, run.created_at),
+                    (
+                        run.id, run.user_id, run.ran_on, run.note,
+                        run.distance_km, run.garmin_activity_id, run.created_at,
+                    ),
                 )
         return run
 
@@ -95,5 +99,6 @@ def _run_row(row: dict) -> RunLog:
         ran_on=row["ran_on"],
         note=row["note"],
         distance_km=float(row["distance_km"]) if row.get("distance_km") is not None else None,
+        garmin_activity_id=row.get("garmin_activity_id"),
         created_at=row["created_at"],
     )

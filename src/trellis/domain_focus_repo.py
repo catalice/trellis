@@ -58,16 +58,6 @@ class PostgresCaptureRepository:
                 )
         return capture
 
-    def get(self, capture_id: UUID) -> Capture | None:
-        with self._db.connect() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM captures WHERE id = %s",
-                    (capture_id,),
-                )
-                row = cur.fetchone()
-                return _capture(row) if row else None
-
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Capture]:
         with self._db.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -199,38 +189,6 @@ class PostgresEffortRepository:
                 )
                 return [_effort(r) for r in cur.fetchall()]
 
-    def update_intensity(self, effort_id: UUID, intensity: EffortIntensity) -> Effort:
-        with self._db.connect() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    UPDATE efforts SET intensity = %s, updated_at = NOW()
-                    WHERE id = %s
-                    RETURNING *
-                    """,
-                    (str(intensity), effort_id),
-                )
-                row = cur.fetchone()
-                if row is None:
-                    raise LookupError(effort_id)
-                return _effort(row)
-
-    def update_notes(self, effort_id: UUID, notes: str) -> Effort:
-        with self._db.connect() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    """
-                    UPDATE efforts SET notes = %s, updated_at = NOW()
-                    WHERE id = %s
-                    RETURNING *
-                    """,
-                    (notes, effort_id),
-                )
-                row = cur.fetchone()
-                if row is None:
-                    raise LookupError(effort_id)
-                return _effort(row)
-
 
 # ---------------------------------------------------------------------------
 # TaskRepository — Postgres
@@ -274,8 +232,10 @@ class PostgresTaskRepository:
                 cur.execute(
                     """
                     SELECT * FROM tasks
-                    WHERE user_id = %s AND status IN ('open', 'in_progress')
-                    ORDER BY due_at NULLS LAST, priority DESC, created_at
+                    WHERE user_id = %s AND status = 'open'
+                    ORDER BY due_at NULLS LAST,
+                        CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+                        created_at
                     """,
                     (user_id,),
                 )

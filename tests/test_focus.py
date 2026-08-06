@@ -19,7 +19,6 @@ from trellis.domain_focus_models import (
     BrainDumpResult,
     Capture,
     CaptureType,
-    CleanupAssignment,
     Effort,
     EffortIntensity,
     ExtractedTask,
@@ -67,7 +66,7 @@ class FakeTaskRepo:
 
     def list_open(self, user_id):
         return [t for t in self.tasks.values()
-                if t.user_id == user_id and t.status in (TaskStatus.OPEN, TaskStatus.IN_PROGRESS)]
+                if t.user_id == user_id and t.status == TaskStatus.OPEN]
 
     def list_parked(self, user_id):
         return [t for t in self.tasks.values()
@@ -383,12 +382,6 @@ class TestTaskService:
         assert local.weekday() == 1
         assert local.hour == 19
 
-    def test_overdue(self):
-        svc = self._service()
-        svc.create(UID, "no deadline", now=NOW - timedelta(days=3))
-        svc.create(UID, "was due", due="2026-07-19T09:00", now=NOW - timedelta(days=2))
-        assert [t.title for t in svc.overdue(UID, NOW)] == ["was due"]
-
 
 class TestSetReminderHandler:
     """Timezone math is Python's job — Claude sends local wall-clock time."""
@@ -462,38 +455,9 @@ class TestGoalService:
         assert [g.title for g in training] == ["Half marathon"]
         assert len(svc.list_active(UID)) == 2
 
-    def test_achieve(self):
-        svc = GoalService(FakeGoalRepo())
-        g = svc.add(UID, "X", GoalType.HABIT, now=NOW)
-        achieved = svc.achieve(UID, g.id, now=NOW)
-        assert achieved.status == GoalStatus.ACHIEVED
-        assert svc.list_active(UID) == []
-
     def test_update_unknown_goal_raises(self):
         with pytest.raises(GoalNotFoundError):
             GoalService(FakeGoalRepo()).update(UID, uuid4(), title="x", now=NOW)
-
-
-class TestCleanupService:
-    def test_apply_counts(self):
-        captures = FakeCaptureRepo()
-        efforts = FakeEffortRepo()
-        svc = CleanupService(captures, efforts, FakeClaude(None))
-        c1 = captures.save(Capture(id=uuid4(), user_id=UID, raw="a",
-                                   capture_type=CaptureType.IDEA, synthesis=None,
-                                   summary="a", effort_id=None, created_at=NOW))
-        c2 = captures.save(Capture(id=uuid4(), user_id=UID, raw="b",
-                                   capture_type=CaptureType.IDEA, synthesis=None,
-                                   summary="b", effort_id=None, created_at=NOW))
-        eid = uuid4()
-        summary = svc.apply(UID, [
-            CleanupAssignment(capture_id=c1.id, effort_id=eid, action="assigned"),
-            CleanupAssignment(capture_id=c2.id, effort_id=None, action="archived"),
-        ])
-        assert summary.assigned == 1
-        assert summary.archived == 1
-        assert captures.captures[c1.id].effort_id == eid
-        assert c2.id in captures.archived
 
 
 # ---------------------------------------------------------------------------

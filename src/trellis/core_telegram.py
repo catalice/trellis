@@ -43,7 +43,7 @@ class TelegramTrellis:
         reminders: ReminderService | None = None,
         transcriber: Transcriber | None = None,
         memory: MemoryIndex | None = None,
-        daily_garmin_sync: Callable[[], None] | None = None,
+        garmin_sync: Callable[[], None] | None = None,
     ):
         self.settings = settings
         self.database = database
@@ -51,9 +51,13 @@ class TelegramTrellis:
         self.reminders = reminders
         self.transcriber = transcriber
         self.memory = memory
-        self._daily_garmin_sync = daily_garmin_sync
+        self._garmin_sync = garmin_sync
         self._reminder_delivery_task: asyncio.Task | None = None
         self._garmin_sync_task: asyncio.Task | None = None
+        # One lock per user: turns are processed strictly in arrival order, so a
+        # rapid second message always sees the first exchange in history (and
+        # replies can't interleave or land in scrambled order).
+        self._turn_locks: dict = {}
         self.logger = logging.getLogger(__name__)
 
     def build(self) -> Application:
@@ -76,7 +80,7 @@ class TelegramTrellis:
             self._reminder_delivery_task = asyncio.create_task(
                 self._deliver_due_reminders_loop(application)
             )
-        if self._daily_garmin_sync is not None:
+        if self._garmin_sync is not None:
             self._garmin_sync_task = asyncio.create_task(self._garmin_sync_loop())
 
     async def _post_shutdown(self, application: Application) -> None:
@@ -100,7 +104,7 @@ class TelegramTrellis:
         await asyncio.sleep(60)
         while True:
             try:
-                await asyncio.to_thread(self._daily_garmin_sync)
+                await asyncio.to_thread(self._garmin_sync)
             except Exception:
                 self.logger.exception("Garmin sync failed")
             await asyncio.sleep(6 * 3600)
@@ -179,20 +183,22 @@ class TelegramTrellis:
         await self._respond(update, user_id, transcript)
 
     async def _respond(self, update: Update, user_id, text: str) -> None:
-        # A real "working" message, not just the typing indicator — sent now and
-        # edited into the final reply, so there's visible feedback the whole turn.
-        placeholder = await update.message.reply_text("🧠 on it…")
-        try:
-            reply = await asyncio.to_thread(
-                self.assembler.handle_turn, user_id, text
-            )
-        except Exception:
-            self.logger.exception("Oracle failed for user %s", user_id)
-            reply = "Something went wrong. Nothing was changed — please try again."
+        lock = self._turn_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            # A real "working" message, not just the typing indicator — sent now and
+            # edited into the final reply, so there's visible feedback the whole turn.
+            placeholder = await update.message.reply_text("🧠 on it…")
+            try:
+                reply = await asyncio.to_thread(
+                    self.assembler.handle_turn, user_id, text
+                )
+            except Exception:
+                self.logger.exception("Oracle failed for user %s", user_id)
+                reply = "Something went wrong. Nothing was changed — please try again."
 
-        final = reply or "Something went wrong — no response was generated. Please try again."
-        await self._deliver(update, placeholder, final)
-        await self._maybe_alert_embed_failures(update)
+            final = reply or "Something went wrong — no response was generated. Please try again."
+            await self._deliver(update, placeholder, final)
+            await self._maybe_alert_embed_failures(update)
 
     async def _deliver(self, update: Update, placeholder, text: str) -> None:
         """Land the reply no matter what. Try Markdown first; if Telegram can't

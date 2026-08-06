@@ -71,7 +71,9 @@ class Oracle:
     ) -> OracleResult:
         kwargs: dict = {
             "model": self._model,
-            "max_tokens": 8192,
+            # On Sonnet 5 adaptive thinking is on by default and max_tokens caps
+            # thinking + reply TOGETHER — 8192 could truncate a reply mid-thought.
+            "max_tokens": 16000,
             "system": system,
             "messages": messages,
         }
@@ -80,10 +82,32 @@ class Oracle:
 
         calls: list[ToolCall] = []
         response = None
+        nudged = False
         for _ in range(_MAX_TOOL_ITERATIONS):
             response = self._api_call(kwargs)
 
             if response.stop_reason == "end_turn":
+                # The NUDGE: a silent end_turn after tool calls means the model
+                # decided the results speak for themselves — they don't (tool
+                # results never reach the user). ONE follow-up call asks it to
+                # speak; the deterministic fallback in _finish stays as backstop.
+                if calls and not nudged and not self._extract_text(response):
+                    nudged = True
+                    _log.warning("oracle: silent end_turn after tools — nudging")
+                    followup: list[dict] = list(kwargs["messages"])
+                    if response.content:
+                        followup.append({"role": "assistant", "content": response.content})
+                    followup.append({
+                        "role": "user",
+                        "content": (
+                            "[Trellis internal: your turn ended without a message. "
+                            "The user has seen NOTHING — tool results never reach "
+                            "them. Reply now in your own words, addressing "
+                            "everything they said.]"
+                        ),
+                    })
+                    kwargs["messages"] = followup
+                    continue
                 return self._finish(response, calls)
 
             if response.stop_reason == "tool_use":
@@ -139,12 +163,13 @@ class Oracle:
 
     @staticmethod
     def _extract_text(response) -> str:
-        for block in response.content:
-            if hasattr(block, "text"):
-                return block.text
-        _log.warning(
-            "oracle: no text block in response; stop_reason=%s content_types=%s",
-            getattr(response, "stop_reason", None),
-            [getattr(b, "type", type(b).__name__) for b in response.content],
-        )
-        return ""
+        """ALL text blocks, joined — a response can carry several (e.g. text
+        around tool use); taking only the first silently drops the rest."""
+        texts = [
+            block.text
+            for block in response.content
+            if getattr(block, "type", None) == "text" and getattr(block, "text", "")
+        ]
+        if not texts:
+            return ""
+        return "\n\n".join(t.strip() for t in texts if t.strip())

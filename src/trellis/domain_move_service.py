@@ -132,9 +132,14 @@ class MoveService:
         if self._garmin_read is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
         activities = self._garmin_read.recent_activities(user_id, limit=limit)
-        existing = {
+        known = self._repo.recent_runs(user_id, limit=200)
+        # Dedupe on the run's real identity (Garmin activity id). Rows imported
+        # before the id existed have None — the (date, ~distance) heuristic
+        # remains ONLY as the legacy fallback for those.
+        existing_ids = {r.garmin_activity_id for r in known if r.garmin_activity_id}
+        legacy_keys = {
             (r.ran_on, round(r.distance_km, 1) if r.distance_km is not None else None)
-            for r in self._repo.recent_runs(user_id, limit=200)
+            for r in known if not r.garmin_activity_id
         }
         logged: list[RunLog] = []
         for act in activities:
@@ -145,17 +150,24 @@ class MoveService:
             ran_on = _activity_date(act, self._tz)
             if ran_on is None:
                 continue
+            activity_id = str(getattr(act, "activity_id", "") or "") or None
+            if activity_id and activity_id in existing_ids:
+                continue
             dist_km = round(act.distance_meters / 1000, 2) if getattr(act, "distance_meters", None) else None
             key = (ran_on, round(dist_km, 1) if dist_km is not None else None)
-            if key in existing:
+            if key in legacy_keys:
                 continue
-            existing.add(key)
+            if activity_id:
+                existing_ids.add(activity_id)
+            else:
+                legacy_keys.add(key)
             note = (getattr(act, "name", None) or "run").strip()
             if getattr(act, "average_heart_rate", None):
                 note += f" (avg HR {act.average_heart_rate})"
             logged.append(self._repo.add_run(RunLog(
                 id=uuid4(), user_id=user_id, ran_on=ran_on,
-                note=note, distance_km=dist_km, created_at=now,
+                note=note, distance_km=dist_km,
+                garmin_activity_id=activity_id, created_at=now,
             )))
         if logged:
             self._project_plan(user_id)   # new runs tick off planned sessions

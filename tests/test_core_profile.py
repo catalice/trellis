@@ -129,27 +129,6 @@ class TestCurrentContextService(unittest.TestCase):
                                   valid_days=14, today=self.today)
         self.assertEqual("New", ctx.physical_notes)
 
-    def test_clear_specific_field(self):
-        self.service.update(self.user_id, physical_notes="Back sore",
-                            misc_notes="Travelling", valid_days=14, today=self.today)
-        self.service.clear(self.user_id, ["physical_notes"])
-        ctx = self.repo.get(self.user_id)
-        self.assertIsNone(ctx.physical_notes)
-        self.assertEqual("Travelling", ctx.misc_notes)
-
-    def test_clear_all_fields(self):
-        self.service.update(self.user_id, physical_notes="Back sore",
-                            cognitive_notes="Tired", misc_notes="Travelling",
-                            valid_days=14, today=self.today)
-        self.service.clear(self.user_id)
-        ctx = self.repo.get(self.user_id)
-        self.assertIsNone(ctx.physical_notes)
-        self.assertIsNone(ctx.cognitive_notes)
-        self.assertIsNone(ctx.misc_notes)
-
-    def test_clear_is_noop_when_no_context(self):
-        self.service.clear(self.user_id)  # should not raise
-
     def test_for_coach_includes_all_set_fields(self):
         ctx = self.service.update(self.user_id, physical_notes="Back sore",
                                   cognitive_notes="Foggy", misc_notes="Travelling",

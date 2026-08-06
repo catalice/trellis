@@ -63,7 +63,6 @@ The router logs the winning room per turn (debug) — misroutes are self-explain
 **Python owns:**
 - Data persistence (all DB writes)
 - Garmin sync and health data
-- Readiness scoring (deterministic calculation)
 - Structural validation
 - Tool execution and side effects
 - Anything that must produce the same result every time
@@ -108,7 +107,7 @@ infra_obsidian.py    # vault projection
 infra_postgres.py    # DB connection + migrate() only — no repo classes here
 infra_router.py      # SemanticRouter — houses scored by best-matching room
 infra_search.py      # web search (Tavily)
-infra_tracking.py    # health records, readiness scoring, cycle, self-reports
+infra_tracking.py    # synced Garmin health records + sync-run bookkeeping
 
 # Houses — exactly 5 files each
 domain_{move|sense|focus|learn}_models.py
@@ -181,8 +180,8 @@ Health and wellbeing tracking — the monitoring house (Mind).
 
 **What it owns:**
 - Self-reported state: mood, energy, meds, sleep, period/cycle (`log_state`)
-- Garmin health data: sleep score, HRV, body battery, resting heart rate, readiness — Sense OWNS this; Move borrows it
-- The wellbeing snapshot + readiness band
+- Garmin health data: sleep score, HRV, body battery, resting heart rate — Sense OWNS this; Move borrows it
+- The wellbeing snapshot: raw signals with loud staleness marking — there is NO computed readiness score or band; Claude reads the numbers and judges
 
 **Why health lives here and not in Move:** the axis is doing (Move) vs monitoring (Sense). Health data was once mis-filed in the coach — that's why "what's my readiness" mis-routed. Re-homed; don't move it back.
 
@@ -293,7 +292,7 @@ Three tiers. Every piece of data belongs in exactly one.
 ```
 Today: Monday 2 July
 Tasks: 3 overdue, 2 due today
-Readiness: STEADY
+Readiness: sleep 82 (7.4h), HRV 55, body battery 71
 Reminders: 1 due at 18:00
 ```
 
@@ -324,8 +323,9 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 - **Don't build what wasn't asked for.**
 - **Content belongs to Claude.** Never hardcode session content, coaching rules, or synthesis logic in Python.
-- **max_tokens too low truncates JSON silently.** Always set 8192+ for structured responses.
-- **ReadinessBand has no MODERATE.** Valid values: LOW, STEADY, READY, STRONG.
+- **max_tokens too low truncates JSON silently.** Always set 16000+ for structured responses (on Sonnet 5, thinking shares the max_tokens cap).
+- **Preferences accumulate.** save_preferences APPENDS by default; replace=true only for deliberate rewrites — a new preference must never silently erase an old one.
+- **Exactness ≠ permanence.** One exact prescription per session, but every prescription is re-chosen in the Sunday weekly review — never carried forward by default.
 - **Don't revert a commit by amending.** Create a new commit.
 - **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.
 - **Never gate tools by routing.** Routing shapes context only.

@@ -143,7 +143,7 @@ class BrainDumpClaude:
         try:
             response = self._client.messages.create(
                 model=self._model,
-                max_tokens=8192,
+                max_tokens=16000,
                 system=f"{_SYNTHESIS_SYSTEM}\n\nCurrent date and time: {current_date_line}",
                 messages=[{"role": "user", "content": raw_text}],
             )
@@ -160,7 +160,7 @@ class BrainDumpClaude:
         try:
             response = self._client.messages.create(
                 model=self._model,
-                max_tokens=8192,
+                max_tokens=16000,
                 system=_EFFORT_SUGGESTION_SYSTEM,
                 messages=[{"role": "user", "content": f"Recent captures:\n{combined}"}],
             )

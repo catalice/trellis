@@ -40,7 +40,7 @@ class Settings:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             anthropic_model=os.getenv(
                 "ANTHROPIC_MODEL",
-                "claude-sonnet-4-6",
+                "claude-sonnet-5",
             ),
             database_url=os.getenv(
                 "DATABASE_URL",

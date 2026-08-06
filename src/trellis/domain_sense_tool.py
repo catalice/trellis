@@ -244,7 +244,15 @@ def _fmt_health(health: "dict | None") -> "str | None":
     bits = []
     stale = health.get("stale_days")
     if stale == 0:
-        bits.append("TODAY")
+        synced = health.get("synced_at")
+        if synced:
+            bits.append(
+                f"TODAY, synced {synced} — sleep/HRV are fixed at wake, but "
+                "body battery and steps move all day: they're as-of the sync, "
+                "not now. Later in the day, sync_garmin before quoting them"
+            )
+        else:
+            bits.append("TODAY")
     elif stale is not None:
         ago = "YESTERDAY" if stale == 1 else f"{stale} DAYS AGO"
         bits.append(

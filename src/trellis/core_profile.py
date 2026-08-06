@@ -120,22 +120,6 @@ class CurrentContextService:
             return None
         return ctx
 
-    def clear(self, user_id: UUID, fields: list[str] | None = None) -> None:
-        """Set specified fields to None. Clears all three if fields is None or empty."""
-        existing = self.repository.get(user_id)
-        if existing is None:
-            return
-        clear_all = not fields
-        ctx = CurrentContext(
-            user_id=user_id,
-            physical_notes=None if (clear_all or "physical_notes" in fields) else existing.physical_notes,
-            cognitive_notes=None if (clear_all or "cognitive_notes" in fields) else existing.cognitive_notes,
-            misc_notes=None if (clear_all or "misc_notes" in fields) else existing.misc_notes,
-            valid_until=existing.valid_until,
-            updated_at=datetime.now(timezone.utc),
-        )
-        self.repository.upsert(ctx)
-
     def update(
         self,
         user_id: UUID,
@@ -265,7 +249,18 @@ class PostgresPreferencesRepository:
                 row = cur.fetchone()
                 return row[0] if row else None
 
-    def set(self, user_id: UUID, domain: str, content: str) -> None:
+    def set(self, user_id: UUID, domain: str, content: str, *, replace: bool = False) -> None:
+        """Save a preference. Preferences ACCUMULATE by default — a new one is
+        appended to the domain's existing text, so saving 'keep replies short'
+        can never silently erase 'no tables'. replace=True rewrites the whole
+        domain deliberately (corrections, consolidation)."""
+        if not replace:
+            existing = self.get(user_id, domain)
+            if existing:
+                if content.strip() in existing:
+                    content = existing
+                else:
+                    content = existing.rstrip() + "\n" + content.strip()
         with self.database.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(

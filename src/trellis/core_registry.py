@@ -68,15 +68,6 @@ class TrellisRegistry:
             return None
         return d.context_loader(user_id, now)
 
-    def tools_for(self, domains: set[str]) -> list[tuple[ToolSchema, ToolHandler]]:
-        """Returns tools for the given set of domain names."""
-        result = []
-        for name in domains:
-            d = self._domains.get(name)
-            if d:
-                result.extend(d.tools)
-        return result
-
     def all_tools(self) -> list[tuple[ToolSchema, ToolHandler]]:
         """Every registered domain's tools. Tool AVAILABILITY is never gated by
         keyword routing — the model always sees every tool and decides what to call

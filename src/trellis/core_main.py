@@ -136,14 +136,13 @@ def main() -> None:
     web_search = TavilySearch(settings.tavily_api_key) if settings.tavily_api_key else None
 
     # Embeddings — semantic memory, LOCAL (fastembed/bge-small). No key, no
-    # network, no rate limits — always available. The model loads lazily on first
-    # embed. Any failure degrades gracefully (embed returns None -> NULL embedding,
-    # recall reports unavailable), nothing crashes.
+    # network, no rate limits — always constructed. The model loads lazily on
+    # first embed; any runtime failure degrades gracefully (embed returns None ->
+    # NULL embedding, recall reports unavailable), nothing crashes.
     embedder = LocalEmbedder()
 
     # The one Trellis-wide meaning index — every domain files cards here and
-    # recall searches across the lot. Uses the embedder above; when that's None,
-    # remember() no-ops and recall reports itself unavailable. Nothing breaks.
+    # recall searches across the lot.
     memory = MemoryIndex(database, embedder)
 
     summariser = None
@@ -277,18 +276,17 @@ def main() -> None:
         (
             BRAIN_DUMP_TOOL,
             lambda uid, inp, now: handle_brain_dump(
-                uid, inp, now, brain_dump_service=brain_dump_service
+                uid, inp, now, brain_dump_service=brain_dump_service,
+                tz=settings.timezone,
             ),
         ),
         *meta_tools(context_service, preferences_repository),
     ]
-    # Recall is Trellis-wide, so it's always available (like brain_dump) — but only
-    # when embeddings are configured, so there's no dead tool otherwise.
-    if embedder is not None:
-        always_tools.append((
-            RECALL_TOOL,
-            lambda uid, inp, now: handle_recall(uid, inp, now, memory=memory),
-        ))
+    # Recall is Trellis-wide, so it's always available (like brain_dump).
+    always_tools.append((
+        RECALL_TOOL,
+        lambda uid, inp, now: handle_recall(uid, inp, now, memory=memory),
+    ))
 
     assembler = Assembler(
         oracle=oracle,
@@ -313,7 +311,8 @@ def main() -> None:
             (
                 BRAIN_DUMP_TOOL,
                 lambda uid, inp, now: handle_brain_dump(
-                    uid, inp, now, brain_dump_service=brain_dump_service
+                    uid, inp, now, brain_dump_service=brain_dump_service,
+                    tz=settings.timezone,
                 ),
             ),
             (
@@ -323,20 +322,25 @@ def main() -> None:
         ],
     )
 
-    # Daily background Garmin refresh — keeps each connected user's health/readiness
-    # and recent runs current without them asking. Best-effort per user (non-connected
-    # users just raise "connect first", which we swallow). Same path as the on-demand
-    # sync_garmin tool. Only wired when Garmin sync is configured.
-    daily_garmin_sync = None
+    # Background Garmin refresh (every 6h — see core_telegram) — keeps each
+    # connected user's health/readiness and recent runs current without them
+    # asking. Same path as the on-demand sync_garmin tool. Only wired when
+    # Garmin sync is configured. Not-connected is expected (debug); anything
+    # else is a real failure and must be VISIBLE (warning).
+    background_garmin_sync = None
     if garmin_sync is not None:
-        def daily_garmin_sync() -> None:
+        def background_garmin_sync() -> None:
             now = datetime.now(timezone.utc)
             for uid, _telegram_id in database.list_users():
                 try:
                     move_service.sync_garmin(uid, now=now, days=3)
-                except Exception:
+                except RuntimeError:
                     logging.getLogger("trellis.core_main").debug(
-                        "daily garmin sync skipped for %s", uid, exc_info=True
+                        "garmin sync skipped for %s (not connected)", uid
+                    )
+                except Exception:
+                    logging.getLogger("trellis.core_main").warning(
+                        "garmin sync failed for %s", uid, exc_info=True
                     )
 
     application = TelegramTrellis(
@@ -346,7 +350,7 @@ def main() -> None:
         reminder_service,
         transcriber=transcriber,
         memory=memory,
-        daily_garmin_sync=daily_garmin_sync,
+        garmin_sync=background_garmin_sync,
     ).build()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

@@ -488,8 +488,36 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: daily properties update failed", exc_info=True)
 
+    # The frontmatter keys Trellis owns. Everything else in a note's frontmatter
+    # is the USER'S (added in Obsidian) and must survive a rewrite — the
+    # append-only promise covers their metadata, not just their body text.
+    _MANAGED_FRONTMATTER_KEYS = ("energy", "mood", "entries", "sleep_hours", "meds", "cycle_day")
+
     def _upsert_frontmatter(self, path: Path, props: dict) -> None:
-        lines = ["---"]
+        user_lines: list[str] = []
+        body = ""
+        if path.exists():
+            text = path.read_text(encoding="utf-8")
+            if text.startswith("---\n"):
+                end = text.find("\n---\n", 4)
+                if end != -1:
+                    in_managed_list = False
+                    for line in text[4:end].splitlines():
+                        if line.startswith("  - ") and in_managed_list:
+                            continue
+                        in_managed_list = False
+                        key = line.split(":", 1)[0].strip() if ":" in line else None
+                        if key in self._MANAGED_FRONTMATTER_KEYS:
+                            in_managed_list = line.rstrip().endswith(":")
+                            continue
+                        user_lines.append(line)
+                    body = text[end + 5:]
+                else:
+                    body = text
+            else:
+                body = text
+
+        lines = ["---", *user_lines]
         for key, val in props.items():
             if isinstance(val, list):
                 lines.append(f"{key}:")
@@ -498,13 +526,9 @@ class ObsidianVault:
                 lines.append(f"{key}: {val}")
         lines.append("---")
         block = "\n".join(lines) + "\n"
+
         if path.exists():
-            text = path.read_text(encoding="utf-8")
-            if text.startswith("---\n"):
-                end = text.find("\n---\n", 4)
-                if end != -1:
-                    text = text[end + 5:]
-            path.write_text(block + text, encoding="utf-8")
+            path.write_text(block + body, encoding="utf-8")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             title = f"# {day_title}\n" if (day_title := _title_from_daily_path(path)) else ""

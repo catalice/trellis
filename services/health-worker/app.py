@@ -67,11 +67,6 @@ class ActivityDetailRequest(BaseModel):
     activity_id: str = Field(min_length=1)
 
 
-class DailyHealthRequest(BaseModel):
-    session_dump: str = Field(min_length=1)
-    date: Date
-
-
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
@@ -168,21 +163,6 @@ def activity_detail(req: ActivityDetailRequest, x_worker_secret: str = Header(..
     except Exception as error:
         detail = _safe_error(error, req.session_dump)
         logger.warning("Garmin activity detail failed: %s", detail, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=detail,
-        ) from error
-
-
-@app.post("/daily-health")
-def daily_health(req: DailyHealthRequest, x_worker_secret: str = Header(...)) -> dict:
-    _auth(x_worker_secret)
-    try:
-        logger.info("Garmin daily health requested for %s", req.date)
-        return garmin_service.fetch_daily_health(req.session_dump, req.date.isoformat())
-    except Exception as error:
-        detail = _safe_error(error, req.session_dump)
-        logger.warning("Garmin daily health failed: %s", detail, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=detail,

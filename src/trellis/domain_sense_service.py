@@ -180,6 +180,15 @@ class SenseService:
         if out and now is not None and getattr(h, "observed_on", None) is not None:
             today = now.astimezone(self._tz).date()
             out["stale_days"] = max(0, (today - h.observed_on).days)
+        # WHEN the record was synced (local HH:MM) — day-granular staleness isn't
+        # enough for intraday metrics: body battery/steps move all day, so a
+        # morning sync's numbers are "as of then", not "now". Facts are Python's.
+        synced = getattr(h, "updated_at", None)
+        if out and synced is not None:
+            try:
+                out["synced_at"] = synced.astimezone(self._tz).strftime("%H:%M")
+            except (ValueError, OSError):
+                pass
         return out or None
 
 

@@ -126,6 +126,20 @@ class PostgresConversationHistory:
                     (user_id, domain, summary, turns_covered),
                 )
 
+    def max_turns_covered(self, user_id: UUID) -> int:
+        """The turn_count recorded at the most recent summarisation, across all
+        domains — the summariser's cursor. Lives in the DB, not process memory,
+        so a restart doesn't re-trigger summarisation (0 if never summarised)."""
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(MAX(turns_covered), 0) FROM conversation_summaries"
+                    " WHERE user_id = %s",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        return row[0] if row else 0
+
     def turn_count(self, user_id: UUID) -> int:
         """Returns total number of turns stored for this user."""
         with self.database.connect() as conn:

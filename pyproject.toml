@@ -8,8 +8,8 @@ dependencies = [
   # PINNED to the garth-token era: stored Garmin sessions are garth dumps (the
   # health worker reads with garth too). 0.3.x rewrote auth to DI tokens and cannot
   # load them — a rebuild silently broke push on 2 Aug 2026. Bump only deliberately,
-  # with a migration plan for stored sessions.
-  # that build_garmin_workout builds structured watch workouts on.
+  # with a migration plan for stored sessions. garminconnect also provides the
+  # typed workout models that build_garmin_workout builds watch workouts on.
   "garminconnect==0.2.40",
   "pydantic>=2,<3",
   "groq>=0.29,<1",

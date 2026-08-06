@@ -44,7 +44,6 @@ class HealthWorkerContractTest(unittest.TestCase):
                 ("post", "/sync"),
                 ("post", "/activities"),
                 ("post", "/activity-detail"),
-                ("post", "/daily-health"),
             },
             routes,
         )

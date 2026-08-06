@@ -304,6 +304,7 @@ def handle_brain_dump(
     now: datetime,
     *,
     brain_dump_service,
+    tz,
 ) -> str:
     raw = str(input_dict.get("text", "")).strip()
     if not raw:
@@ -326,7 +327,7 @@ def handle_brain_dump(
     if result.tasks_created:
         task_lines = ["\nTasks created:"]
         for t in result.tasks_created:
-            due = f" (due {_fmt_datetime(t.due_at)})" if t.due_at else ""
+            due = f" (due {_fmt_datetime(t.due_at, tz)})" if t.due_at else ""
             task_lines.append(f"  • {t.title}{due} [{t.priority}/{t.energy}]")
         parts.append("".join(task_lines))
 
@@ -352,6 +353,7 @@ def handle_focus_get(
     capture_service,
     effort_service,
     reminder_service,
+    tz,
 ) -> str:
     what = str(input_dict.get("what", ""))
 
@@ -366,11 +368,11 @@ def handle_focus_get(
         if overdue:
             lines.append("OVERDUE:")
             for t in overdue:
-                lines.append(f"  [{t.id}] {t.title} — due {_fmt_datetime(t.due_at)} | {t.priority}/{t.energy}")
+                lines.append(f"  [{t.id}] {t.title} — due {_fmt_datetime(t.due_at, tz)} | {t.priority}/{t.energy}")
         if rest:
             lines.append("Open:")
             for t in rest:
-                due = f" — due {_fmt_datetime(t.due_at)}" if t.due_at else ""
+                due = f" — due {_fmt_datetime(t.due_at, tz)}" if t.due_at else ""
                 lines.append(f"  [{t.id}] {t.title}{due} | {t.priority}/{t.energy}")
         if parked:
             lines.append("Parked (not now, on the shelf):")
@@ -419,13 +421,13 @@ def handle_focus_get(
         lines = []
         if upcoming:
             lines.append("Scheduled:")
-            lines.extend(f"  [{r.id}] {r.label} @ {_fmt_datetime(r.remind_at)}" for r in upcoming)
+            lines.extend(f"  [{r.id}] {r.label} @ {_fmt_datetime(r.remind_at, tz)}" for r in upcoming)
         if recent:
             lines.append("Recent (delivery status):")
-            lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at)} — {r.status}" for r in recent)
+            lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at, tz)} — {r.status}" for r in recent)
         return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
 
-    return f"Unknown option: {what!r}. Use: tasks, goals, inbox, efforts, reminders."
+    return f"Unknown option: {what!r}. Use: tasks, seeds, goals, inbox, efforts, reminders."
 
 
 def handle_create_task(
@@ -434,6 +436,7 @@ def handle_create_task(
     now: datetime,
     *,
     task_service,
+    tz,
 ) -> str:
     title = str(input_dict.get("title", "")).strip()
     if not title:
@@ -460,7 +463,7 @@ def handle_create_task(
         due=input_dict.get("due"),
         now=now,
     )
-    due = f" — due {_fmt_datetime(task.due_at)}" if task.due_at else ""
+    due = f" — due {_fmt_datetime(task.due_at, tz)}" if task.due_at else ""
     return f"Task created: {task.title}{due} [{task.id}]"
 
 
@@ -565,7 +568,7 @@ def handle_set_reminder(
 
     recur = bool(input_dict.get("recur_daily", False))
     reminder = reminder_service.set(user_id, label, remind_at, task_id=task_id, recur_daily=recur, now=now)
-    return f"Reminder set: {reminder.label} @ {_fmt_datetime(reminder.remind_at)} [{reminder.id}]"
+    return f"Reminder set: {reminder.label} @ {_fmt_datetime(reminder.remind_at, tz)} [{reminder.id}]"
 
 
 def handle_cancel_reminder(
@@ -777,8 +780,8 @@ def handle_save_to_effort(
             from trellis.domain_focus_models import TaskStatus
             task_service.update(user_id, UUID(seed_id), status=TaskStatus.DROPPED, now=now)
             retired = " (seed retired — it's an effort now)"
-        except (ValueError, Exception):
-            pass
+        except Exception:
+            _log.warning("save_to_effort: seed retirement failed", exc_info=True)
     return f"Saved to effort '{effort.title}'{retired}. It's on your {effort.title} page."
 
 
@@ -1045,11 +1048,12 @@ def focus_tools(
                 capture_service=capture_service,
                 effort_service=effort_service,
                 reminder_service=reminder_service,
+                tz=tz,
             ),
         ),
         (
             CREATE_TASK_TOOL,
-            lambda uid, inp, now: handle_create_task(uid, inp, now, task_service=task_service),
+            lambda uid, inp, now: handle_create_task(uid, inp, now, task_service=task_service, tz=tz),
         ),
         (
             COMPLETE_TASK_TOOL,
@@ -1111,7 +1115,9 @@ def focus_tools(
     return tools
 
 
-def _fmt_datetime(dt: datetime | None) -> str:
+def _fmt_datetime(dt: datetime | None, tz) -> str:
+    """Render a stored (tz-aware) datetime in the USER'S timezone. Never label a
+    local time as UTC — a wrong label invites the model to 'correct' it."""
     if dt is None:
         return "—"
-    return dt.strftime("%d %b %H:%M UTC")
+    return dt.astimezone(tz).strftime("%d %b %H:%M")

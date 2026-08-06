@@ -279,13 +279,6 @@ class GarminClient:
         )
         return _normalize_activity_detail(response, location="/activity-detail response")
 
-    def daily_health(self, session_dump: str, on_date: date) -> GarminDailyHealth:
-        _require_session(session_dump)
-        response = self._post(
-            "/daily-health", {"session_dump": session_dump, "date": on_date.isoformat()}
-        )
-        return _normalize_health(response, fallback_date=on_date, location="/daily-health response")
-
     def _post(self, path: str, body: Mapping[str, Any]) -> Any:
         return self._transport.request_json(
             "POST",
@@ -347,26 +340,6 @@ class GarminDirectService:
             raise
         except Exception as exc:
             raise RuntimeError(f"Failed to schedule workout {workout_id}: {exc}") from exc
-
-    def list_workouts(self, user_id: UUID, *, limit: int = 20) -> list[dict]:
-        try:
-            client = self._connect(user_id)
-            result = client.get_workouts(0, limit)
-            return result if isinstance(result, list) else []
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f"Failed to list Garmin workouts: {exc}") from exc
-
-    def delete_workout(self, user_id: UUID, workout_id: str) -> None:
-        try:
-            client = self._connect(user_id)
-            client.delete_workout(workout_id)
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f"Failed to delete workout {workout_id}: {exc}") from exc
-
 
 class _DirectConnectionRepo(Protocol):
     def get_session_dump(self, user_id: UUID) -> str | None: ...
@@ -593,20 +566,6 @@ class GarminSyncService:
             start_date=start_date,
             end_date=today,
         )
-
-    def sync_if_stale(
-        self,
-        user_id: UUID,
-        *,
-        stale_after_minutes: int = 10,
-        days: int = 2,
-    ) -> bool:
-        last = self.connection_repository.get_last_sync_at(user_id)
-        now = datetime.now(timezone.utc)
-        if last is not None and (now - last).total_seconds() < stale_after_minutes * 60:
-            return False
-        self.sync_recent(user_id, days=days, now=now)
-        return True
 
     def _sync_daily_health(
         self, user_id: UUID, session_dump: str, *,

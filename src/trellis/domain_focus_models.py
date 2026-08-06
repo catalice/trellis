@@ -27,7 +27,6 @@ class EffortIntensity(StrEnum):
 
 class TaskStatus(StrEnum):
     OPEN = "open"
-    IN_PROGRESS = "in_progress"
     DONE = "done"
     DROPPED = "dropped"      # decided never — invisible everywhere
     ARCHIVED = "archived"
@@ -260,21 +259,3 @@ class Goal:
 # ---------------------------------------------------------------------------
 # (Self-tracking — StateLog / TrackingEvent / TrackingEventType — moved to the
 # Sense room: domain_sense_models.py.)
-# ---------------------------------------------------------------------------
-# Cleanup session result — what a weekly cleanup conversation produces
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class CleanupAssignment:
-    capture_id: UUID
-    effort_id: UUID | None                # None = leave in inbox
-    action: str                           # "assigned" | "archived" | "task_created" | "left"
-
-
-@dataclass(frozen=True)
-class CleanupSummary:
-    captures_reviewed: int
-    assigned: int
-    tasks_created: int
-    archived: int
-    effort_suggestions: tuple[str, ...]   # themes that kept recurring, worth making Efforts

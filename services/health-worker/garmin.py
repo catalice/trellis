@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import queue
 import threading
-import urllib.error
-import urllib.request
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-_AUTH_WORKER_URL = os.getenv("AUTH_WORKER_URL", "").rstrip("/")
-_AUTH_WORKER_SECRET = os.getenv("AUTH_WORKER_SECRET", "")
 
 _pending: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()
@@ -28,9 +22,6 @@ LOGIN_TIMEOUT_SECS = 60
 def authenticate(email: str, password: str) -> dict[str, Any]:
     """Start Garmin authentication."""
     _cleanup_expired()
-
-    if _use_auth_worker():
-        return _authenticate_via_auth_worker(email, password)
 
     session_id = str(uuid.uuid4())
     mfa_q: queue.Queue[str] = queue.Queue()
@@ -76,19 +67,6 @@ def complete_mfa(session_id: str, mfa_code: str) -> dict[str, Any]:
     if not session:
         raise RuntimeError("MFA session not found or expired. Please connect again.")
 
-    if "auth_worker_state" in session:
-        logger.info("Completing Garmin MFA through auth worker")
-        result = _auth_worker_request(
-            "/login-complete",
-            {"state": session["auth_worker_state"], "mfa_code": mfa_code},
-        )
-        with _lock:
-            _pending.pop(session_id, None)
-        return {
-            "status": "success",
-            "session_dump": _tokens_to_garth_dump(result["tokens"]),
-        }
-
     session["mfa_queue"].put(mfa_code)
 
     deadline = datetime.utcnow() + timedelta(seconds=LOGIN_TIMEOUT_SECS)
@@ -121,12 +99,6 @@ def fetch_metrics(session_dump: str, start_date: date, end_date: date) -> list[d
         current += timedelta(days=1)
 
     return results
-
-
-def fetch_daily_health(session_dump: str, metric_date: str) -> dict:
-    """Fetch daily health metrics for a specific ISO date."""
-    garmin = _garmin_from_session(session_dump)
-    return _fetch_daily_health_from_client(garmin, metric_date, include_date=False)
 
 
 def fetch_recent_activities(
@@ -261,7 +233,6 @@ def _fetch_daily_health_from_client(
         hrv = garmin.get_hrv_data(metric_date)
         if hrv:
             summary = hrv.get("hrvSummary") or {}
-            row["hrv_summary_keys"] = sorted(summary.keys())
             row["hrv_weekly_avg"] = summary.get("weeklyAvg")
             row["hrv_last_night"] = _first_present(
                 summary,
@@ -361,83 +332,6 @@ def _apply_browser_headers(garmin: Any) -> None:
     )
 
 
-def _use_auth_worker() -> bool:
-    return bool(_AUTH_WORKER_URL and _AUTH_WORKER_SECRET)
-
-
-def _authenticate_via_auth_worker(email: str, password: str) -> dict[str, Any]:
-    logger.info("Starting Garmin auth through external auth worker")
-    result = _auth_worker_request("/login-start", {"email": email, "password": password})
-
-    if result.get("mfa_required"):
-        session_id = str(uuid.uuid4())
-        with _lock:
-            _pending[session_id] = {
-                "auth_worker_state": result["state"],
-                "created_at": datetime.utcnow(),
-            }
-        return {"status": "mfa_required", "session_id": session_id}
-
-    return {
-        "status": "success",
-        "session_dump": _tokens_to_garth_dump(result["tokens"]),
-    }
-
-
-def _auth_worker_request(path: str, body: dict[str, Any]) -> dict[str, Any]:
-    data = json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(
-        f"{_AUTH_WORKER_URL}{path}",
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "X-Worker-Secret": _AUTH_WORKER_SECRET,
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            parsed = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(
-            f"Auth worker HTTP {error.code}: {_redact(detail, *body.values())}"
-        ) from error
-    if not isinstance(parsed, dict):
-        raise RuntimeError("Auth worker returned non-object JSON")
-    return parsed
-
-
-def _tokens_to_garth_dump(tokens: dict[str, Any]) -> str:
-    from garminconnect import Garmin
-    from garth.auth_tokens import OAuth1Token, OAuth2Token
-
-    oauth1 = tokens["oauth1"]
-    oauth2 = tokens["oauth2"]
-
-    client = Garmin()
-    client.garth.configure(
-        oauth1_token=OAuth1Token(
-            oauth_token=oauth1["oauth_token"],
-            oauth_token_secret=oauth1["oauth_token_secret"],
-            mfa_token=oauth1.get("mfa_token"),
-            domain="garmin.com",
-        ),
-        oauth2_token=OAuth2Token(
-            scope=oauth2["scope"],
-            jti=oauth2["jti"],
-            token_type=oauth2["token_type"],
-            access_token=oauth2["access_token"],
-            refresh_token=oauth2["refresh_token"],
-            expires_in=int(oauth2["expires_in"]),
-            expires_at=int(oauth2["expires_at"]),
-            refresh_token_expires_in=int(oauth2["refresh_token_expires_in"]),
-            refresh_token_expires_at=int(oauth2["refresh_token_expires_at"]),
-        ),
-    )
-    return client.garth.dumps()
-
-
 def _cleanup_expired() -> None:
     cutoff = datetime.utcnow() - timedelta(minutes=10)
     with _lock:
@@ -475,6 +369,4 @@ def _redact(message: str, *secrets: Any) -> str:
     for secret in secrets:
         if isinstance(secret, str) and secret:
             result = result.replace(secret, "[redacted]")
-    if _AUTH_WORKER_SECRET:
-        result = result.replace(_AUTH_WORKER_SECRET, "[redacted]")
     return result

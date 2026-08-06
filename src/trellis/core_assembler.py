@@ -45,6 +45,9 @@ How to listen:
 - Understand what they mean before deciding what to do. You're in an ongoing \
 conversation: what they say continues it unless they clearly start something \
 new. Hear each message as part of what you're working on together.
+- Answer ALL of it. One message often carries several things — a task and a \
+question, two questions, a feeling and a favour. Address every part. Doing \
+the task does not answer the question.
 - They lead. Your questions and suggestions are openings — their reply can take \
 one up, ignore it, or go somewhere else entirely. Follow them, not your own \
 agenda.
@@ -85,11 +88,13 @@ duplicate or overwrite. Never silently discard existing content.
 
 
 class _HistoryRepo(Protocol):
-    def append(self, user_id: UUID, role: str, content: str) -> None: ...
+    def append(self, user_id: UUID, role: str, content: str, metadata: dict | None = None) -> None: ...
     def recent(self, user_id: UUID, limit: int) -> list: ...
     def to_messages(self, turns: list) -> list[dict]: ...
     def domain_summary(self, user_id: UUID, domain: str) -> str | None: ...
     def turn_count(self, user_id: UUID) -> int: ...
+    def max_turns_covered(self, user_id: UUID) -> int: ...
+    def prune(self, user_id: UUID, keep: int = 50) -> None: ...
 
 
 class Assembler:
@@ -137,7 +142,6 @@ class Assembler:
             )
         else:
             self._router = keyword_router
-        self._last_summarised: dict[UUID, int] = {}
 
     def handle_turn(self, user_id: UUID, message: str) -> str:
         now = datetime.now(timezone.utc)
@@ -281,7 +285,9 @@ class Assembler:
         if self._summariser is None:
             return
         count = self._history.turn_count(user_id)
-        last = self._last_summarised.get(user_id, 0)
+        # The cursor lives in the DB (turns_covered at last summarisation), so a
+        # restart doesn't reset it and re-fire the summariser on the first turn.
+        last = self._history.max_turns_covered(user_id)
         if count - last < self._summarise_after:
             return
         for domain in domains:
@@ -289,7 +295,13 @@ class Assembler:
                 self._summariser(user_id, domain, self._history)
             except Exception:
                 _log.warning("summarisation failed for domain '%s'", domain, exc_info=True)
-        self._last_summarised[user_id] = count
+        # History is summarised — trim the raw transcript so it can't grow
+        # unboundedly (500 turns ≫ the 10-turn context window + 40-turn summary
+        # window; plenty of slack, bounded table).
+        try:
+            self._history.prune(user_id, keep=500)
+        except Exception:
+            _log.warning("history prune failed", exc_info=True)
 
     # --- Helpers ------------------------------------------------------------
 

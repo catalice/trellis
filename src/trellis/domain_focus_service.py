@@ -10,8 +10,6 @@ from uuid import UUID, uuid4
 from trellis.domain_focus_models import (
     Capture,
     CaptureType,
-    CleanupAssignment,
-    CleanupSummary,
     Effort,
     EffortIntensity,
     Goal,
@@ -36,7 +34,6 @@ _log = logging.getLogger(__name__)
 
 class CaptureRepository(Protocol):
     def save(self, capture: Capture) -> Capture: ...
-    def get(self, capture_id: UUID) -> Capture | None: ...
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Capture]: ...
     def list_unassigned(self, user_id: UUID, *, since: date) -> list[Capture]: ...
     def assign_to_effort(self, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
@@ -49,8 +46,6 @@ class EffortRepository(Protocol):
     def get(self, effort_id: UUID) -> Effort | None: ...
     def get_by_title(self, user_id: UUID, title: str) -> Effort | None: ...
     def list_all(self, user_id: UUID) -> list[Effort]: ...
-    def update_intensity(self, effort_id: UUID, intensity: EffortIntensity) -> Effort: ...
-    def update_notes(self, effort_id: UUID, notes: str) -> Effort: ...
 
 
 class TaskRepository(Protocol):
@@ -276,29 +271,6 @@ class EffortService:
         if self._memory is not None:
             self._memory.remember(effort.user_id, "effort", effort.id, effort.embedding_text())
 
-    def create(
-        self,
-        user_id: UUID,
-        title: str,
-        intensity: EffortIntensity,
-        notes: str | None = None,
-    ) -> Effort:
-        now = datetime.now(timezone.utc)
-        effort = self._repo.save(Effort(
-            id=uuid4(),
-            user_id=user_id,
-            title=title,
-            intensity=intensity,
-            notes=notes,
-            obsidian_path=_effort_obsidian_path(title),
-            created_at=now,
-            updated_at=now,
-        ))
-        self._embed(effort)
-        if self._projection:
-            self._projection.effort_created(effort)
-        return effort
-
     def find_or_create(self, user_id: UUID, title: str, now: datetime) -> Effort:
         """Return the effort with this title, creating it (active) if new.
         This is how a seed graduates: research it, and it gets a home."""
@@ -322,15 +294,6 @@ class EffortService:
 
     def list_all(self, user_id: UUID) -> list[Effort]:
         return self._repo.list_all(user_id)
-
-    def list_active(self, user_id: UUID) -> list[Effort]:
-        return [e for e in self._repo.list_all(user_id) if e.intensity == EffortIntensity.ACTIVE]
-
-    def set_intensity(self, effort_id: UUID, intensity: EffortIntensity) -> Effort:
-        return self._repo.update_intensity(effort_id, intensity)
-
-    def add_notes(self, effort_id: UUID, notes: str) -> Effort:
-        return self._repo.update_notes(effort_id, notes)
 
     def summary_for_context(self, user_id: UUID) -> str | None:
         efforts = self._repo.list_all(user_id)
@@ -462,16 +425,6 @@ class TaskService:
         self._vault_refresh(user_id)
         return updated
 
-    def drop(self, user_id: UUID, task_id: UUID, *, now: datetime) -> Task:
-        task = self._repo.get(task_id)
-        if task is None or task.user_id != user_id:
-            raise TaskNotFoundError(task_id)
-        dropped = self._repo.update(task_id, status=TaskStatus.DROPPED, updated_at=now)
-        if self._memory is not None:
-            self._memory.forget("seed", task_id)
-        self._vault_refresh(user_id)
-        return dropped
-
     def delete(self, user_id: UUID, task_id: UUID) -> bool:
         """Erase an erroneous task (duplicate, mis-extraction) — not a decision.
         A task she decided against gets status=dropped; a task that should
@@ -482,9 +435,6 @@ class TaskService:
                 self._memory.forget("seed", task_id)
             self._vault_refresh(user_id)
         return deleted
-
-    def overdue(self, user_id: UUID, now: datetime) -> list[Task]:
-        return [t for t in self.list_open(user_id) if t.is_overdue(now)]
 
     def due_today(self, user_id: UUID, now: datetime) -> list[Task]:
         today = now.astimezone(self._tz).date()
@@ -631,15 +581,6 @@ class GoalService:
             kwargs["status"] = status
         return self._repo.update(goal_id, **kwargs)
 
-    def achieve(self, user_id: UUID, goal_id: UUID, *, now: datetime) -> Goal:
-        return self.update(user_id, goal_id, status=GoalStatus.ACHIEVED, now=now)
-
-    def summary_for_context(self, user_id: UUID) -> str | None:
-        goals = self._repo.list_active(user_id)
-        if not goals:
-            return None
-        return "\n".join(f"- {g.summary()}" for g in goals)
-
 
 # ---------------------------------------------------------------------------
 # CleanupService — weekly review: surfaces unassigned captures, suggests efforts
@@ -666,28 +607,6 @@ class CleanupService:
         if not summaries:
             return []
         return self._claude.suggest_efforts(summaries)
-
-    def apply(
-        self,
-        user_id: UUID,
-        assignments: list[CleanupAssignment],
-    ) -> CleanupSummary:
-        assigned = tasks_created = archived = 0
-        for a in assignments:
-            if a.action == "assigned" and a.effort_id:
-                self._captures.assign_to_effort(a.capture_id, a.effort_id)
-                assigned += 1
-            elif a.action == "archived":
-                self._captures.archive(a.capture_id)
-                archived += 1
-
-        return CleanupSummary(
-            captures_reviewed=len(assignments),
-            assigned=assigned,
-            tasks_created=tasks_created,
-            archived=archived,
-            effort_suggestions=(),
-        )
 
 
 # ---------------------------------------------------------------------------
