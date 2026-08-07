@@ -290,18 +290,19 @@ class Assembler:
         last = self._history.max_turns_covered(user_id)
         if count - last < self._summarise_after:
             return
+        # Prune BEFORE summarising: the summariser stores the current turn_count
+        # as the cursor, so pruning must happen first or the stored cursor sits
+        # above the post-prune count and silently doubles the interval. 500 kept
+        # turns ≫ the 10-turn context window + 40-turn summary window.
+        try:
+            self._history.prune(user_id, keep=500)
+        except Exception:
+            _log.warning("history prune failed", exc_info=True)
         for domain in domains:
             try:
                 self._summariser(user_id, domain, self._history)
             except Exception:
                 _log.warning("summarisation failed for domain '%s'", domain, exc_info=True)
-        # History is summarised — trim the raw transcript so it can't grow
-        # unboundedly (500 turns ≫ the 10-turn context window + 40-turn summary
-        # window; plenty of slack, bounded table).
-        try:
-            self._history.prune(user_id, keep=500)
-        except Exception:
-            _log.warning("history prune failed", exc_info=True)
 
     # --- Helpers ------------------------------------------------------------
 

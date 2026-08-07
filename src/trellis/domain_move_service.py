@@ -127,8 +127,9 @@ class MoveService:
 
     def import_recent_runs(self, user_id: UUID, *, now: datetime, limit: int = 20) -> list[RunLog]:
         """Pull recent RUNNING activities from Garmin and log any new ones. Recent +
-        small (not bulk history — that's the CSV). Dedupes against already-logged runs
-        by (date, ~distance). Raises RuntimeError if Garmin isn't wired/connected."""
+        small (not bulk history — that's the CSV). Dedupes by Garmin activity id
+        (legacy rows without one fall back to date+~distance). Raises RuntimeError
+        if Garmin isn't wired/connected."""
         if self._garmin_read is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
         activities = self._garmin_read.recent_activities(user_id, limit=limit)
