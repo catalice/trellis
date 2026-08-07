@@ -336,13 +336,13 @@ class PostgresReminderRepository:
                     """
                     INSERT INTO reminders (
                         id, user_id, label, remind_at, status,
-                        task_id, recur_daily, created_at
+                        task_id, recurrence, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         reminder.id, reminder.user_id, reminder.label,
                         reminder.remind_at, reminder.status,
-                        reminder.task_id, reminder.recur_daily,
+                        reminder.task_id, reminder.recurrence,
                         reminder.created_at,
                     ),
                 )
@@ -535,7 +535,7 @@ def _reminder(row: dict) -> Reminder:
         remind_at=row["remind_at"],
         status=row["status"],
         task_id=row.get("task_id"),
-        recur_daily=row.get("recur_daily", False),
+        recurrence=row.get("recurrence"),
         created_at=row["created_at"],
     )
 

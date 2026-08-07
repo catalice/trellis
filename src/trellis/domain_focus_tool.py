@@ -156,7 +156,7 @@ UPDATE_TASK_TOOL: dict = {
 
 SET_REMINDER_TOOL: dict = {
     "name": "set_reminder",
-    "description": "Set a reminder. Works for appointments, time-sensitive tasks, recurring nudges.",
+    "description": "Set a reminder. Works for appointments, time-sensitive tasks, and recurring nudges (daily, weekly, monthly or yearly).",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -173,10 +173,14 @@ SET_REMINDER_TOOL: dict = {
                 "type": "string",
                 "description": "Optionally link to an existing task.",
             },
-            "recur_daily": {
-                "type": "boolean",
-                "description": "If true, fires at the same time every day until cancelled.",
-                "default": False,
+            "recurrence": {
+                "type": "string",
+                "enum": ["daily", "weekly", "monthly", "yearly"],
+                "description": (
+                    "How it repeats, if it does: 'every Sunday evening' -> weekly "
+                    "with remind_at on the next Sunday; 'monthly' fires the same "
+                    "day each month (clamped for short months). Omit for a one-off."
+                ),
             },
         },
         "required": ["label", "remind_at"],
@@ -566,9 +570,12 @@ def handle_set_reminder(
         except ValueError:
             pass
 
-    recur = bool(input_dict.get("recur_daily", False))
-    reminder = reminder_service.set(user_id, label, remind_at, task_id=task_id, recur_daily=recur, now=now)
-    return f"Reminder set: {reminder.label} @ {_fmt_datetime(reminder.remind_at, tz)} [{reminder.id}]"
+    recurrence = input_dict.get("recurrence")
+    if recurrence not in ("daily", "weekly", "monthly", "yearly"):
+        recurrence = None
+    reminder = reminder_service.set(user_id, label, remind_at, task_id=task_id, recurrence=recurrence, now=now)
+    repeats = f", repeats {reminder.recurrence}" if reminder.recurrence else ""
+    return f"Reminder set: {reminder.label} @ {_fmt_datetime(reminder.remind_at, tz)}{repeats} [{reminder.id}]"
 
 
 def handle_cancel_reminder(

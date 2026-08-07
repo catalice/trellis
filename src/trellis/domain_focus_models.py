@@ -220,7 +220,7 @@ class Reminder:
     remind_at: datetime
     status: str                           # scheduled | sent | cancelled
     task_id: UUID | None = None
-    recur_daily: bool = False
+    recurrence: str | None = None         # daily | weekly | monthly | yearly; None = one-off
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

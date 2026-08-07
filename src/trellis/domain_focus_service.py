@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import logging
 import re
 from dataclasses import dataclass
@@ -470,7 +471,7 @@ class ReminderService:
         remind_at: datetime,
         *,
         task_id: UUID | None = None,
-        recur_daily: bool = False,
+        recurrence: str | None = None,
         now: datetime,
     ) -> Reminder:
         reminder = self._repo.save(Reminder(
@@ -480,7 +481,7 @@ class ReminderService:
             remind_at=remind_at,
             status="scheduled",
             task_id=task_id,
-            recur_daily=recur_daily,
+            recurrence=recurrence,
             created_at=now,
         ))
         self._vault_refresh(user_id)
@@ -505,13 +506,15 @@ class ReminderService:
     def recent(self, user_id: UUID, *, limit: int = 10) -> list[Reminder]:
         return self._repo.list_recent(user_id, limit=limit)
 
-    def reschedule_daily(self, user_id: UUID, reminder: Reminder, *, now: datetime) -> Reminder:
+    def reschedule(self, user_id: UUID, reminder: Reminder, *, now: datetime) -> Reminder:
+        """Schedule the next occurrence of a recurring reminder — always strictly
+        in the future, so downtime can't queue a backlog of stale firings."""
         return self.set(
             user_id,
             reminder.label,
-            reminder.remind_at + timedelta(days=1),
+            _next_occurrence(reminder.remind_at, reminder.recurrence or "daily", now),
             task_id=reminder.task_id,
-            recur_daily=True,
+            recurrence=reminder.recurrence,
             now=now,
         )
 
@@ -612,6 +615,33 @@ class CleanupService:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _next_occurrence(after: datetime, recurrence: str, now: datetime) -> datetime:
+    nxt = _advance(after, recurrence)
+    while nxt <= now:
+        nxt = _advance(nxt, recurrence)
+    return nxt
+
+
+def _advance(dt: datetime, recurrence: str) -> datetime:
+    if recurrence == "weekly":
+        return dt + timedelta(days=7)
+    if recurrence == "monthly":
+        return _add_months(dt, 1)
+    if recurrence == "yearly":
+        return _add_months(dt, 12)
+    return dt + timedelta(days=1)  # daily
+
+
+def _add_months(dt: datetime, months: int) -> datetime:
+    """Same wall-clock time, N months on — day clamped to the target month's
+    length (31 Jan + 1 month = 28/29 Feb), so "monthly" never skips a month."""
+    month_index = dt.month - 1 + months
+    year = dt.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
 
 def _parse_local_due(value: str | None, tz: tzinfo) -> datetime | None:
     """Parse an explicit user-local due date from Claude: "YYYY-MM-DD[THH:MM]".

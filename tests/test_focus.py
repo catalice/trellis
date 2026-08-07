@@ -440,10 +440,34 @@ class TestReminderService:
 
     def test_reschedule_daily_advances_one_day(self):
         svc = ReminderService(FakeReminderRepo(), TZ)
-        r = svc.set(UID, "Meds", NOW, recur_daily=True, now=NOW)
-        next_r = svc.reschedule_daily(UID, r, now=NOW)
+        r = svc.set(UID, "Meds", NOW, recurrence="daily", now=NOW)
+        next_r = svc.reschedule(UID, r, now=NOW)
         assert next_r.remind_at == NOW + timedelta(days=1)
-        assert next_r.recur_daily is True
+        assert next_r.recurrence == "daily"
+
+    def test_weekly_reschedules_a_week_on(self):
+        svc = ReminderService(FakeReminderRepo(), TZ)
+        r = svc.set(UID, "Weekly review", NOW, recurrence="weekly", now=NOW)
+        next_r = svc.reschedule(UID, r, now=NOW)
+        assert next_r.remind_at == NOW + timedelta(days=7)
+        assert next_r.recurrence == "weekly"
+
+    def test_monthly_clamps_short_months(self):
+        from datetime import datetime, timezone as _tz
+        svc = ReminderService(FakeReminderRepo(), TZ)
+        jan31 = datetime(2026, 1, 31, 10, 0, tzinfo=_tz.utc)
+        r = svc.set(UID, "Rent", jan31, recurrence="monthly", now=jan31)
+        next_r = svc.reschedule(UID, r, now=jan31)
+        assert next_r.remind_at == datetime(2026, 2, 28, 10, 0, tzinfo=_tz.utc)
+
+    def test_recurring_catchup_skips_missed_firings(self):
+        """After downtime, the next firing is in the FUTURE — no stale backlog."""
+        svc = ReminderService(FakeReminderRepo(), TZ)
+        three_weeks_ago = NOW - timedelta(days=21)
+        r = svc.set(UID, "Weekly review", three_weeks_ago, recurrence="weekly", now=three_weeks_ago)
+        next_r = svc.reschedule(UID, r, now=NOW)
+        assert next_r.remind_at > NOW
+        assert next_r.remind_at <= NOW + timedelta(days=7)
 
 
 class TestGoalService:

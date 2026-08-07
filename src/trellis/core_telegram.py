@@ -18,7 +18,8 @@ from trellis.domain_focus_service import ReminderService
 Transcriber = Callable[[bytes], str]
 
 # NOTE: check-ins are NOT hardcoded here. When the user wants a morning/evening
-# check-in, the oracle creates a real recurring reminder (set_reminder, recur_daily)
+# check-in or a weekly review, the oracle creates a real recurring reminder
+# (set_reminder with recurrence daily/weekly/monthly/yearly)
 # — persisted, user-owned, editable, and surviving restarts. There is deliberately
 # no baked-in ping schedule; that was removed because it wasn't tied to the user's
 # choice and silently died on restart.
@@ -135,8 +136,8 @@ class TelegramTrellis:
                     text=f"Reminder: {reminder.label}",
                 )
                 self.reminders.mark_sent(reminder.id)
-                if reminder.recur_daily:
-                    self.reminders.reschedule_daily(user_id, reminder, now=now)
+                if reminder.recurrence:
+                    self.reminders.reschedule(user_id, reminder, now=now)
                 delivered += 1
         return delivered
 
