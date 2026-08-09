@@ -292,13 +292,17 @@ def _activity_date(activity: Any, tz: tzinfo) -> date | None:
         return None
 
 
-_MAX_SPLITS = 40
+_MAX_SPLITS = 60
 
 
 def _extract_splits(detail: Any) -> list[dict]:
     """Pull a per-split/lap breakdown from a GarminActivityDetail, defensively —
     Garmin's split payloads vary in shape and key casing. Returns compact dicts:
-    {i, distance_km, time, pace, avg_hr, max_hr}. Empty list if nothing usable."""
+    {i, type, distance_km, time, pace, avg_hr, max_hr, count?}. Empty list if
+    nothing usable. count > 1 marks an AGGREGATE row (splitSummaries totals one
+    row per segment TYPE) — the formatter must present those as per-type totals,
+    never as a lap-by-lap timeline (audit item 26: run-walk workouts have an
+    empty lap array, and the aggregates dressed up as laps read as nonsense)."""
     rows = _split_rows(detail)
     out: list[dict] = []
     for i, row in enumerate(rows[:_MAX_SPLITS], start=1):
@@ -310,6 +314,12 @@ def _extract_splits(detail: Any) -> list[dict]:
         max_hr = _num(row, "maxHR", "maxHr", "maximumHr")
         speed = _num(row, "averageSpeed", "avgSpeed")  # m/s
         entry: dict[str, Any] = {"i": i}
+        raw_type = row.get("type") or row.get("splitType")
+        if raw_type:
+            entry["type"] = _split_label(raw_type)
+        count = _num(row, "noOfSplits")
+        if count and count > 1:
+            entry["count"] = int(count)
         if dist_m:
             entry["distance_km"] = round(dist_m / 1000, 3)
         if secs:
@@ -325,20 +335,45 @@ def _extract_splits(detail: Any) -> list[dict]:
             entry["avg_hr"] = int(avg_hr)
         if max_hr:
             entry["max_hr"] = int(max_hr)
-        if len(entry) > 1:  # more than just the index
+        if secs:
+            entry["_secs"] = secs
+        # A type label alone isn't a split — keep only rows carrying a metric.
+        if any(k in entry for k in ("distance_km", "time", "pace", "avg_hr", "max_hr")):
             out.append(entry)
+    # Typed payloads wrap the real segments in a whole-session container row
+    # (e.g. one INTERVAL_ACTIVE spanning everything) — it duplicates the overall
+    # line and wrecks the timeline. Drop any row covering ~the whole duration.
+    total = sum(e.get("_secs", 0) for e in out)
+    if len(out) > 3 and total:
+        out = [e for e in out if e.get("_secs", 0) < 0.9 * (total - e.get("_secs", 0))]
+    for n, e in enumerate(out, start=1):
+        e.pop("_secs", None)
+        e["i"] = n
     return out
 
 
+def _split_label(raw_type: Any) -> str:
+    """Garmin segment type -> a label a human reads: RWD_RUN -> run,
+    INTERVAL_ACTIVE -> work, INTERVAL_REST -> recovery."""
+    t = str(raw_type).upper()
+    for prefix in ("RWD_", "INTERVAL_"):
+        if t.startswith(prefix):
+            t = t[len(prefix):]
+    return {"ACTIVE": "work", "REST": "recovery"}.get(t, t.lower().replace("_", " "))
+
+
 def _split_rows(detail: Any) -> list:
-    """Find the list of split/lap dicts across Garmin's varying shapes."""
+    """Find the list of split/lap dicts across Garmin's varying shapes.
+    Preference order matters: typed splits FIRST (the chronological, labelled
+    timeline — run-walk workouts often have an empty lap array), then laps,
+    then splitSummaries LAST (aggregates per type, not a timeline)."""
     candidates = []
-    for source in ("split_summaries", "splits", "typed_splits"):
+    for source in ("typed_splits", "splits", "split_summaries"):
         val = getattr(detail, source, None)
         candidates.append(val)
     raw = getattr(detail, "raw", None)
     if isinstance(raw, dict):
-        candidates.extend([raw.get("splitSummaries"), raw.get("splits"), raw.get("typedSplits")])
+        candidates.extend([raw.get("typedSplits"), raw.get("splits"), raw.get("splitSummaries")])
     for val in candidates:
         rows = _as_split_list(val)
         if rows:

@@ -207,3 +207,68 @@ class TestActivityVisibility(unittest.TestCase):
         logged = svc.import_recent_runs(uuid.uuid4(), now=datetime.now(tzu.utc))
         self.assertEqual(len(logged), 1)
         self.assertIn("Barcelona Running", logged[0].note)
+
+
+class TestSplitExtraction(unittest.TestCase):
+    """Audit item 26: run-walk workouts have an EMPTY lap array; the old code
+    fell through to splitSummaries (aggregates per type) and presented them as
+    sequential laps — muddled nonsense. Typed chronological splits win now."""
+
+    class _Detail:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    def test_typed_splits_preferred_over_summaries(self):
+        from trellis.domain_move_service import _extract_splits
+        detail = self._Detail(
+            splits=[],
+            split_summaries={"splitSummaries": [
+                {"splitType": "RWD_RUN", "noOfSplits": 14, "distance": 2110.0,
+                 "duration": 1500.0, "averageHR": 152.0},
+            ]},
+            typed_splits={"splits": [
+                {"type": "RWD_RUN", "distance": 640.0, "duration": 252.0,
+                 "averageHR": 168.0, "maxHR": 191.0},
+                {"type": "RWD_WALK", "distance": 90.0, "duration": 61.0,
+                 "averageHR": 142.0},
+            ]},
+        )
+        rows = _extract_splits(detail)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["type"], "run")
+        self.assertEqual(rows[1]["type"], "walk")
+        self.assertNotIn("count", rows[0])
+
+    def test_summaries_marked_as_aggregates(self):
+        from trellis.domain_move_service import _extract_splits
+        detail = self._Detail(
+            splits=[], typed_splits={},
+            split_summaries={"splitSummaries": [
+                {"splitType": "RWD_RUN", "noOfSplits": 14, "distance": 2110.0,
+                 "duration": 1500.0, "averageHR": 152.0},
+                {"splitType": "RWD_WALK", "noOfSplits": 13, "distance": 900.0,
+                 "duration": 780.0, "averageHR": 130.0},
+            ]},
+        )
+        rows = _extract_splits(detail)
+        self.assertEqual(rows[0]["type"], "run")
+        self.assertEqual(rows[0]["count"], 14)
+
+    def test_interval_types_get_coaching_labels(self):
+        from trellis.domain_move_service import _split_label
+        self.assertEqual(_split_label("INTERVAL_ACTIVE"), "work")
+        self.assertEqual(_split_label("INTERVAL_REST"), "recovery")
+        self.assertEqual(_split_label("RWD_STAND"), "stand")
+
+    def test_formatter_labels_aggregates_honestly(self):
+        from trellis.domain_move_tool import _fmt_run_detail
+        text = _fmt_run_detail({
+            "overall": {"name": "Run-walk", "date": "2026-08-05"},
+            "splits": [
+                {"i": 1, "type": "run", "count": 14, "distance_km": 2.11,
+                 "time": "25:00", "avg_hr": 152},
+            ],
+        })
+        self.assertIn("Split totals by TYPE", text)
+        self.assertIn("run ×14", text)
+        self.assertNotIn("#1", text)

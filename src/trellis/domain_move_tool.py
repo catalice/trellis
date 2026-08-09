@@ -281,13 +281,27 @@ def _fmt_run_detail(detail: dict) -> str:
     lines = [f"{head} — " + ", ".join(bits) if bits else head]
     splits = detail.get("splits") or []
     if splits:
-        lines.append("Splits:")
+        aggregated = any(s.get("count") for s in splits)
+        lines.append(
+            "Split totals by TYPE (no lap-by-lap data for this activity):"
+            if aggregated else "Splits (in order):"
+        )
         for s in splits:
-            seg = [f"  #{s['i']}"]
-            if s.get("distance_km") is not None:
-                seg.append(f"{s['distance_km']}km")
-            if s.get("time"):
-                seg.append(s["time"])
+            if aggregated:
+                seg = [f"  {s.get('type', 'segment')} ×{s.get('count', 1)}"]
+                if s.get("distance_km") is not None:
+                    seg.append(f"{s['distance_km']}km total")
+                if s.get("time"):
+                    seg.append(f"{s['time']} total")
+            else:
+                head = f"  #{s['i']}"
+                if s.get("type"):
+                    head += f" {s['type']}"
+                seg = [head]
+                if s.get("distance_km") is not None:
+                    seg.append(f"{s['distance_km']}km")
+                if s.get("time"):
+                    seg.append(s["time"])
             if s.get("pace"):
                 seg.append(s["pace"])
             if s.get("avg_hr"):
