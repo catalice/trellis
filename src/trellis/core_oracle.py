@@ -14,6 +14,27 @@ _MAX_TOOL_ITERATIONS = 8
 _RETRY_DELAYS = (1.0, 3.0)  # two retries, exponential-ish
 _TRACE_RESULT_CHARS = 200  # must fit a confirmation label + its 36-char id (120 chopped ids — audit item 25)
 
+# The ANSWER CHECK (audit item 29): prompt lines reliably lose to tool-momentum
+# on this model — three live failures of "did the work, ignored the questions".
+# So it's a gate, not an instruction: when a turn used tools AND her message
+# asked a question, the draft doesn't ship until one tiny standalone call
+# confirms every question is answered (or rewrites so it is). A few hundred
+# tokens, no tools, only on the turn-shape that keeps failing. Scaffolding
+# around a model weakness — remove it the day a model holds the instruction.
+_ANSWER_CHECK_SYSTEM = """\
+You review a draft reply from Trellis (a personal assistant on Telegram).
+You are given THEIR MESSAGE, the ACTIONS taken this turn, and the DRAFT reply.
+
+If the draft genuinely answers EVERY question in their message, return the
+draft EXACTLY as it is — change nothing.
+
+If any question is unanswered, rewrite the reply: answer every question first,
+in Trellis's warm plain voice with its reasoning, THEN the brief report of
+actions taken. Keep it concise. Plain text, no tables, no headers.
+
+Return ONLY the final reply text — no commentary, no quotes around it.\
+"""
+
 
 @dataclass(frozen=True)
 class ToolCall:
@@ -69,6 +90,8 @@ class Oracle:
         tools: list[dict],
         handlers: dict[str, Callable[[dict], str]],
     ) -> OracleResult:
+        last = messages[-1]["content"] if messages else ""
+        user_message = last if isinstance(last, str) else ""
         kwargs: dict = {
             "model": self._model,
             # On Sonnet 5 adaptive thinking is on by default and max_tokens caps
@@ -108,7 +131,7 @@ class Oracle:
                     })
                     kwargs["messages"] = followup
                     continue
-                return self._finish(response, calls)
+                return self._answer_checked(user_message, self._finish(response, calls))
 
             if response.stop_reason == "tool_use":
                 tool_results = []
@@ -131,10 +154,10 @@ class Oracle:
                 ]
                 continue
 
-            return self._finish(response, calls)
+            return self._answer_checked(user_message, self._finish(response, calls))
 
         _log.warning("oracle hit iteration cap")
-        return self._finish(response, calls)
+        return self._answer_checked(user_message, self._finish(response, calls))
 
     def _finish(self, response, calls: list[ToolCall]) -> OracleResult:
         """Final result for the turn. The model occasionally ends its turn with
@@ -149,6 +172,39 @@ class Oracle:
                 len(calls),
             )
         return OracleResult(text, tuple(calls))
+
+    def _answer_checked(self, user_message: str, result: OracleResult) -> OracleResult:
+        """The gate: tool-turn + question in her message -> one tiny review call.
+        Best-effort — any failure ships the draft unchanged."""
+        if not result.tool_calls or not result.text or "?" not in user_message:
+            return result
+        try:
+            actions = "; ".join(
+                f"{c.name}: {c.result_summary}" for c in result.tool_calls
+            ) or "(none)"
+            response = self._client.messages.create(
+                model=self._model,
+                max_tokens=4000,
+                system=_ANSWER_CHECK_SYSTEM,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"THEIR MESSAGE:\n{user_message}\n\n"
+                        f"ACTIONS TAKEN:\n{actions}\n\n"
+                        f"DRAFT REPLY:\n{result.text}"
+                    ),
+                }],
+            )
+            checked = "\n\n".join(
+                b.text.strip() for b in response.content
+                if getattr(b, "type", None) == "text" and getattr(b, "text", "").strip()
+            )
+            if checked and checked != result.text:
+                _log.info("oracle: answer check rewrote the reply")
+            return OracleResult(checked or result.text, result.tool_calls)
+        except Exception:
+            _log.warning("oracle: answer check failed — shipping draft", exc_info=True)
+            return result
 
     def _call(self, name: str, input_dict: dict, handlers: dict[str, Callable[[dict], str]]) -> str:
         handler = handlers.get(name)
