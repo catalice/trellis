@@ -232,3 +232,41 @@ class TestWiderFrame(unittest.TestCase):
         self.assertEqual(row["ran_km"], 6.4)
         self.assertEqual(row["run_avg_hr"], 168)
         self.assertEqual(row["tasks_done"], 1)
+
+
+class TestPatternResponseByWords(unittest.TestCase):
+    class _Repo:
+        def __init__(self, patterns):
+            self._p = patterns
+
+        def find_by_words(self, user_id, words):
+            return [p for p in self._p if words.lower() in p["hypothesis"].lower()]
+
+    class _Watcher:
+        def __init__(self, repo):
+            self._repo = repo
+            self.resolved = []
+
+        def respond(self, user_id, pattern_id, verdict, note):
+            self.resolved.append((pattern_id, verdict))
+            return {"hypothesis": "match"}
+
+    def test_matches_single_pattern_by_phrase(self):
+        pid = uuid4()
+        w = self._Watcher(self._Repo([{"id": pid, "hypothesis": "Days with meds logged tend to have higher mood"}]))
+        reply = handle_pattern_response(
+            uuid4(), {"pattern": "meds", "verdict": "dismissed"},
+            datetime.now(timezone.utc), watcher=w)
+        self.assertIn("never come up again", reply)
+        self.assertEqual(w.resolved[0][0], pid)
+
+    def test_ambiguous_phrase_asks_which(self):
+        w = self._Watcher(self._Repo([
+            {"id": uuid4(), "hypothesis": "Stress higher during menstruation"},
+            {"id": uuid4(), "hypothesis": "Stress lower after runs"},
+        ]))
+        reply = handle_pattern_response(
+            uuid4(), {"pattern": "stress", "verdict": "dismissed"},
+            datetime.now(timezone.utc), watcher=w)
+        self.assertIn("which one", reply)
+        self.assertEqual(w.resolved, [])

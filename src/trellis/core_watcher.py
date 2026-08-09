@@ -104,11 +104,29 @@ class PostgresWatcherRepository:
                         (evidence, Json(stats), pattern_id),
                     )
                 else:
+                    # A verified-but-undiscussed pattern that stops verifying
+                    # goes back to 'proposed' — otherwise the chat could offer
+                    # it while its own evidence line says "keep gathering".
+                    # Adopted is untouched: her verdict outranks a noisy week.
                     cur.execute(
-                        "UPDATE watcher_patterns SET evidence = %s, stats = %s"
-                        " WHERE id = %s",
+                        """
+                        UPDATE watcher_patterns
+                        SET status = CASE WHEN status = 'verified'
+                                          THEN 'proposed' ELSE status END,
+                            evidence = %s, stats = %s
+                        WHERE id = %s
+                        """,
                         (evidence, Json(stats), pattern_id),
                     )
+
+    def find_by_words(self, user_id: UUID, words: str) -> list[dict]:
+        """Patterns whose hypothesis contains her words (case-insensitive) —
+        so 'the meds one' can be dismissed from the page without an id."""
+        needle = (words or "").strip().lower()
+        if not needle:
+            return []
+        return [p for p in self.all_for(user_id)
+                if needle in p["hypothesis"].lower()]
 
     def resolve(self, user_id: UUID, pattern_id: UUID, status: str,
                 note: str | None) -> dict | None:
@@ -130,11 +148,25 @@ class PostgresWatcherRepository:
         with self._db.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT MAX(proposed_at) FROM watcher_patterns WHERE user_id = %s",
+                    "SELECT last_discovery_at FROM watcher_meta WHERE user_id = %s",
                     (user_id,),
                 )
                 row = cur.fetchone()
         return row[0] if row else None
+
+    def mark_discovery_ran(self, user_id: UUID, at: datetime) -> None:
+        """Advance the weekly clock even when discovery proposed nothing —
+        'zero is a fine answer' must not turn into daily Claude calls."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO watcher_meta (user_id, last_discovery_at)
+                    VALUES (%s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET last_discovery_at = EXCLUDED.last_discovery_at
+                    """,
+                    (user_id, at),
+                )
 
 
 # --- The daily frame (facts are Python's) ----------------------------------
@@ -488,6 +520,7 @@ class Watcher:
             last = self._repo.last_discovery_at(user_id)
             if last is None or (now - last) >= timedelta(days=_DISCOVERY_EVERY_DAYS):
                 self._discover(user_id, frame)
+                self._repo.mark_discovery_ran(user_id, now)
             self._project(user_id)
         except Exception:
             _log.warning("watcher tick failed", exc_info=True)
@@ -715,26 +748,43 @@ PATTERN_RESPONSE_TOOL: dict = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "pattern_id": {"type": "string", "description": "UUID from the Watcher context."},
+            "pattern": {
+                "type": "string",
+                "description": (
+                    "Which pattern: the [id] from the Watcher context when you have "
+                    "one, OR a distinctive phrase from the hypothesis in her words "
+                    "('meds', 'body battery on run days') — she may be reacting to "
+                    "the Watcher page in her vault, which shows patterns you can't "
+                    "see in context yet."
+                ),
+            },
             "verdict": {"type": "string", "enum": ["adopted", "dismissed", "watching"]},
             "note": {"type": "string", "description": "Her reasoning, briefly, if she gave one."},
         },
-        "required": ["pattern_id", "verdict"],
+        "required": ["pattern", "verdict"],
     },
 }
 
 
 def handle_pattern_response(user_id: UUID, input_dict: dict, now: datetime, *,
                             watcher: Watcher) -> str:
-    pid_raw = str(input_dict.get("pattern_id", "")).strip()
+    ref = str(input_dict.get("pattern") or input_dict.get("pattern_id") or "").strip()
     verdict = str(input_dict.get("verdict", "")).strip()
     if verdict not in ("adopted", "dismissed", "watching"):
         return "verdict must be adopted, dismissed, or watching."
-    try:
-        pid = UUID(pid_raw)
-    except ValueError:
-        return f"Invalid pattern_id: {pid_raw!r}"
+    if not ref:
+        return "pattern is required — an id or a phrase from the hypothesis."
     note = str(input_dict.get("note", "")).strip() or None
+    try:
+        pid = UUID(ref)
+    except ValueError:
+        matches = watcher._repo.find_by_words(user_id, ref)
+        if not matches:
+            return f"No pattern matches {ref!r} — check the Watcher page wording."
+        if len(matches) > 1:
+            options = "; ".join(m["hypothesis"][:60] for m in matches[:4])
+            return f"{len(matches)} patterns match {ref!r} — which one? ({options})"
+        pid = matches[0]["id"]
     row = watcher.respond(user_id, pid, verdict, note)
     if row is None:
         return "No pattern with that id."
