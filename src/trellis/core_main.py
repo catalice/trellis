@@ -17,6 +17,13 @@ from trellis.core_oracle import Oracle
 from trellis.core_registry import TrellisRegistry
 from trellis.core_summariser import make_summariser
 from trellis.core_telegram import TelegramTrellis, make_transcriber
+from trellis.core_watcher import (
+    PATTERN_RESPONSE_TOOL,
+    PostgresWatcherRepository,
+    Watcher,
+    WatcherDiscovery,
+    handle_pattern_response,
+)
 from trellis.infra_embeddings import LocalEmbedder
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_obsidian import ObsidianVault
@@ -271,6 +278,18 @@ def main() -> None:
 
     oracle = Oracle(client=anthropic_client, model=settings.anthropic_model)
 
+    # --- The Watcher (the big brain's slow mind) ---
+    # Discovery is the ONLY source of hypotheses — nothing is planted here.
+    watcher = Watcher(
+        PostgresWatcherRepository(database),
+        WatcherDiscovery(anthropic_client, settings.anthropic_model),
+        state_repo=state_repo,
+        health_repo=health_reader,
+        run_repo=move_repo,
+        tz=settings.timezone,
+        vault=vault,
+    )
+
     # Always-available tools — offered every turn regardless of the routed domain.
     always_tools = [
         (
@@ -281,6 +300,10 @@ def main() -> None:
             ),
         ),
         *meta_tools(context_service, preferences_repository),
+        (
+            PATTERN_RESPONSE_TOOL,
+            lambda uid, inp, now: handle_pattern_response(uid, inp, now, watcher=watcher),
+        ),
     ]
     # Recall is Trellis-wide, so it's always available (like brain_dump).
     always_tools.append((
@@ -300,6 +323,7 @@ def main() -> None:
             ("move_snapshot", move_snapshot(move_service)),
         ],
         always_tools=always_tools,
+        intelligence=("watcher", watcher.intelligence_context),
         summariser=summariser,
         default_domain="focus",
         embedder=embedder,
@@ -351,6 +375,10 @@ def main() -> None:
         transcriber=transcriber,
         memory=memory,
         garmin_sync=background_garmin_sync,
+        watcher_tick=lambda: [
+            watcher.tick(uid, datetime.now(timezone.utc))
+            for uid, _tg in database.list_users()
+        ],
     ).build()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

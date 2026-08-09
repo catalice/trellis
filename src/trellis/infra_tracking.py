@@ -197,6 +197,17 @@ class HealthSyncRun:
 
 class HealthRepository(Protocol):
     def upsert_daily_health(self, record: GarminDailyHealthRecord) -> GarminDailyHealthRecord: ...
+    def daily_health_since(self, user_id: UUID, *, since: date) -> list[GarminDailyHealthRecord]:
+        """All synced daily-health rows from `since` on — the Watcher's frame."""
+        with self.database.connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM garmin_daily_health WHERE user_id = %s"
+                    " AND observed_on >= %s ORDER BY observed_on",
+                    (user_id, since),
+                )
+                return [self._daily_health(r) for r in cursor.fetchall()]
+
     def latest_daily_health(self, user_id: UUID) -> GarminDailyHealthRecord | None: ...
     def upsert_activity(self, record: GarminActivityRecord) -> GarminActivityRecord: ...
     def latest_activities(self, user_id: UUID, *, limit: int, activity_type: str | None = None) -> tuple[GarminActivityRecord, ...]: ...
@@ -265,6 +276,17 @@ class PostgresHealthRepository:
                     ),
                 )
                 return self._daily_health(cursor.fetchone())
+
+    def daily_health_since(self, user_id: UUID, *, since: date) -> list[GarminDailyHealthRecord]:
+        """All synced daily-health rows from `since` on — the Watcher's frame."""
+        with self.database.connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM garmin_daily_health WHERE user_id = %s"
+                    " AND observed_on >= %s ORDER BY observed_on",
+                    (user_id, since),
+                )
+                return [self._daily_health(r) for r in cursor.fetchall()]
 
     def latest_daily_health(self, user_id: UUID) -> GarminDailyHealthRecord | None:
         with self.database.connect() as connection:

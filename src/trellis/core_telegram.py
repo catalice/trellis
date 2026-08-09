@@ -45,6 +45,7 @@ class TelegramTrellis:
         transcriber: Transcriber | None = None,
         memory: MemoryIndex | None = None,
         garmin_sync: Callable[[], None] | None = None,
+        watcher_tick: Callable[[], None] | None = None,
     ):
         self.settings = settings
         self.database = database
@@ -53,6 +54,8 @@ class TelegramTrellis:
         self.transcriber = transcriber
         self.memory = memory
         self._garmin_sync = garmin_sync
+        self._watcher_tick = watcher_tick
+        self._watcher_task: asyncio.Task | None = None
         self._reminder_delivery_task: asyncio.Task | None = None
         self._garmin_sync_task: asyncio.Task | None = None
         # One lock per user: turns are processed strictly in arrival order, so a
@@ -83,9 +86,11 @@ class TelegramTrellis:
             )
         if self._garmin_sync is not None:
             self._garmin_sync_task = asyncio.create_task(self._garmin_sync_loop())
+        if self._watcher_tick is not None:
+            self._watcher_task = asyncio.create_task(self._watcher_loop())
 
     async def _post_shutdown(self, application: Application) -> None:
-        for attr in ("_reminder_delivery_task", "_garmin_sync_task"):
+        for attr in ("_reminder_delivery_task", "_garmin_sync_task", "_watcher_task"):
             task = getattr(self, attr)
             if task is None:
                 continue
@@ -109,6 +114,18 @@ class TelegramTrellis:
             except Exception:
                 self.logger.exception("Garmin sync failed")
             await asyncio.sleep(6 * 3600)
+
+    async def _watcher_loop(self) -> None:
+        """Daily tick for the Watcher: verification every tick (cheap, pure
+        Python), discovery only when it's been quiet a week (one Claude call).
+        First tick after a short startup delay so a restart never skips a day."""
+        await asyncio.sleep(120)
+        while True:
+            try:
+                await asyncio.to_thread(self._watcher_tick)
+            except Exception:
+                self.logger.exception("Watcher tick failed")
+            await asyncio.sleep(24 * 3600)
 
     async def _deliver_due_reminders_loop(self, application: Application) -> None:
         while True:

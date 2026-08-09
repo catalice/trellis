@@ -89,6 +89,7 @@ _TRACKING_BASE_PATH = "Calendar/Tracking/Overview.base"
 _TRAINING_PLAN_PATH = "Calendar/Training/Training.md"
 _TRACKING_HISTORY_DIR = "Calendar/Tracking/History"
 _TRAINING_WEEKS_DIR = "Calendar/Training/Weeks"
+_WATCHER_PATH = "Calendar/Watcher.md"
 
 # Written ONCE if absent, then never touched — it's the user's file to tweak in
 # Obsidian's Bases UI. It turns the daily notes' frontmatter into a sortable
@@ -628,6 +629,28 @@ class ObsidianVault:
         path = self._vault / _TRAINING_WEEKS_DIR / f"{iso_year:04d}-W{iso_week:02d}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # --- The Watcher's window ------------------------------------------------
+
+    def watcher_page(self, body: str) -> None:
+        """The window into the slow mind — everything the Watcher is thinking,
+        by status. Rewritten on every tick/verdict; same write-only contract."""
+        try:
+            if not self._vault.exists():
+                return
+            path = self._vault / _WATCHER_PATH
+            path.parent.mkdir(parents=True, exist_ok=True)
+            header = (
+                "# The Watcher\n\n"
+                "> Trellis's slow mind — patterns it wonders about across weeks and "
+                "months. It only speaks in chat once something is verified; this page "
+                "shows everything, including the half-formed. Live view — tell "
+                "Trellis your verdicts, edits here don't sync back.\n\n"
+                f"_Updated {datetime.now(self._tz).strftime('%a %d %b, %H:%M')}_\n\n"
+            )
+            path.write_text(header + body, encoding="utf-8")
+        except Exception:
+            _log.warning("obsidian: Watcher page write failed", exc_info=True)
 
     # --- Effort pages -------------------------------------------------------
 
