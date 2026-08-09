@@ -89,7 +89,7 @@ _TRACKING_BASE_PATH = "Calendar/Tracking/Overview.base"
 _TRAINING_PLAN_PATH = "Calendar/Training/Training.md"
 _TRACKING_HISTORY_DIR = "Calendar/Tracking/History"
 _TRAINING_WEEKS_DIR = "Calendar/Training/Weeks"
-_WATCHER_PATH = "Calendar/Watcher.md"
+_WATCHER_PATH = "Atlas/Watcher.md"
 
 # Written ONCE if absent, then never touched — it's the user's file to tweak in
 # Obsidian's Bases UI. It turns the daily notes' frontmatter into a sortable
