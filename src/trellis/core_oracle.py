@@ -147,10 +147,26 @@ class Oracle:
                             "tool_use_id": block.id,
                             "content": result,
                         })
+                # HER idea (item 29b): the not-answering failure is DISTANCE —
+                # by reply time her message is buried under tool results and
+                # recency wins. So her message rides right behind every round
+                # of results: when the model writes, her questions are the
+                # LAST thing it read. Prevention (this) + the answer-check
+                # gate (net); the gate's rewrite log decides when the net can
+                # come down.
+                content: list = list(tool_results)
+                if user_message:
+                    content.append({
+                        "type": "text",
+                        "text": (
+                            "[reminder — their message this turn, answer every "
+                            f"part of it when you reply: \"{user_message}\"]"
+                        ),
+                    })
                 kwargs["messages"] = [
                     *kwargs["messages"],
                     {"role": "assistant", "content": response.content},
-                    {"role": "user", "content": tool_results},
+                    {"role": "user", "content": content},
                 ]
                 continue
 

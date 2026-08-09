@@ -295,6 +295,24 @@ class TestAnswerCheck:
         assert "Why 4:1" in check_request["messages"][0]["content"]
         assert "Plan updated." in check_request["messages"][0]["content"]
 
+    def test_her_message_rides_behind_tool_results(self):
+        """Item 29b (her idea): the message is re-attached after every round of
+        tool results, so it's the nearest thing in context at reply time."""
+        tool_use = self._Block(type="tool_use", name="log_state", id="t1", input={})
+        oracle, client = self._oracle([
+            self._Resp("tool_use", [tool_use]),
+            self._Resp("end_turn", [self._Block(type="text", text="Logged. Feeling good?")]),
+        ])
+        oracle.run("sys", [{"role": "user", "content": "log this and also why am I so tired"}],
+                   tools=[{"name": "log_state"}],
+                   handlers={"log_state": lambda inp: "State logged."})
+        second_request = client.messages.requests[1]
+        tool_result_msg = second_request["messages"][-1]["content"]
+        reminder_blocks = [b for b in tool_result_msg
+                           if isinstance(b, dict) and b.get("type") == "text"]
+        assert reminder_blocks, "reminder text block missing after tool results"
+        assert "why am I so tired" in reminder_blocks[0]["text"]
+
     def test_no_question_means_no_extra_call(self):
         tool_use = self._Block(type="tool_use", name="log_state", id="t1", input={})
         oracle, client = self._oracle([
