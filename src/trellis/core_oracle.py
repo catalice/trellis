@@ -12,7 +12,7 @@ _log = logging.getLogger(__name__)
 
 _MAX_TOOL_ITERATIONS = 8
 _RETRY_DELAYS = (1.0, 3.0)  # two retries, exponential-ish
-_TRACE_RESULT_CHARS = 120
+_TRACE_RESULT_CHARS = 200  # must fit a confirmation label + its 36-char id (120 chopped ids — audit item 25)
 
 
 @dataclass(frozen=True)

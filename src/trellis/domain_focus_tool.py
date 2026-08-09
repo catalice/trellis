@@ -66,7 +66,7 @@ FOCUS_GET_TOOL: dict = {
                     "goals: all active goals. "
                     "inbox: unassigned captures for cleanup. "
                     "efforts: all efforts by intensity. "
-                    "reminders: upcoming reminders in the next 24h. "
+                    "reminders: ALL scheduled reminders (with ids + recurrence) + recent delivery status. "
                     "(wellbeing/tracking lives in the Sense room, in context there — not here.)"
                 ),
             }
@@ -420,12 +420,16 @@ def handle_focus_get(
         return "\n".join(lines)
 
     if what == "reminders":
-        upcoming = reminder_service.upcoming(user_id, hours=48, now=now)
+        upcoming = reminder_service.all_scheduled(user_id)
         recent = [r for r in reminder_service.recent(user_id, limit=10) if r.status != "scheduled"]
         lines = []
         if upcoming:
             lines.append("Scheduled:")
-            lines.extend(f"  [{r.id}] {r.label} @ {_fmt_datetime(r.remind_at, tz)}" for r in upcoming)
+            lines.extend(
+                f"  [{r.id}] {r.label} @ {_fmt_datetime(r.remind_at, tz)}"
+                + (f" (repeats {r.recurrence})" if r.recurrence else "")
+                for r in upcoming
+            )
         if recent:
             lines.append("Recent (delivery status):")
             lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at, tz)} — {r.status}" for r in recent)

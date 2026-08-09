@@ -142,6 +142,12 @@ class FakeReminderRepo:
         return [r for r in self.reminders.values()
                 if r.status == "scheduled" and r.remind_at <= before]
 
+    def list_scheduled(self, user_id):
+        return sorted(
+            (r for r in self.reminders.values() if r.status == "scheduled"),
+            key=lambda r: r.remind_at,
+        )
+
     def cancel(self, rid) -> None:
         from dataclasses import replace
         self.reminders[rid] = replace(self.reminders[rid], status="cancelled")
@@ -381,6 +387,28 @@ class TestTaskService:
         local = task.due_at.astimezone(TZ)
         assert local.weekday() == 1
         assert local.hour == 19
+
+
+class TestReminderVisibility:
+    """Audit item 25: a reminder days out was invisible to focus_get (48h
+    window), so the model couldn't look up its id to cancel it."""
+
+    def test_focus_get_lists_far_future_reminders(self):
+        from trellis.domain_focus_tool import handle_focus_get
+        from trellis.domain_focus_service import CaptureService, EffortService
+        svc = ReminderService(FakeReminderRepo(), TZ)
+        r = svc.set(UID, "Sunday review", NOW + timedelta(days=5),
+                    recurrence="weekly", now=NOW)
+        reply = handle_focus_get(
+            UID, {"what": "reminders"}, NOW,
+            task_service=TaskService(FakeTaskRepo(), TZ),
+            goal_service=GoalService(FakeGoalRepo()),
+            capture_service=CaptureService(FakeCaptureRepo()),
+            effort_service=EffortService(FakeEffortRepo()),
+            reminder_service=svc, tz=TZ,
+        )
+        assert str(r.id) in reply
+        assert "repeats weekly" in reply
 
 
 class TestSetReminderHandler:

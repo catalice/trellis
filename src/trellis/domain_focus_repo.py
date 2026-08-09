@@ -368,6 +368,19 @@ class PostgresReminderRepository:
                 )
                 return [_reminder(r) for r in cur.fetchall()]
 
+    def list_scheduled(self, user_id: UUID) -> list[Reminder]:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT * FROM reminders
+                    WHERE user_id = %s AND status = 'scheduled'
+                    ORDER BY remind_at
+                    """,
+                    (user_id,),
+                )
+                return [_reminder(r) for r in cur.fetchall()]
+
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Reminder]:
         with self._db.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
