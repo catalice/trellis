@@ -256,16 +256,16 @@ Two patterns, chosen by risk profile:
 | **Dispatch read** `{house}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
 | **Specific named write** `save_training_plan`, `complete_task` | All writes | High-stakes. Explicit names prevent confusion. |
 
-**All tools are always available** — routing never gates them. The current 21:
+**All tools are always available** — routing never gates them. The current 22:
 
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`
 - **Focus:** `focus_get`, `create_task`, `complete_task`, `update_task`, `set_reminder`, `cancel_reminder`, `add_goal`, `update_goal`, `save_to_effort`, `cleanup_session`, `delete_entry`, `web_search`
 - **Sense:** `log_state` (the ONE tool — reads are context, not tools)
-- **Move:** `training_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`
+- **Move:** `training_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_run`
 
 (Onboarding mode additionally wires `save_identity`.)
 
-**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 21. A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 22 (update_run was added 9 Aug 2026 — flagged, her call: live use twice demanded her account of a run land on its record). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 

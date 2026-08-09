@@ -115,6 +115,31 @@ PUSH_TO_WATCH_TOOL: dict = {
     },
 }
 
+UPDATE_RUN_TOOL: dict = {
+    "name": "update_run",
+    "description": (
+        "Attach the user's account of a run to its stored record — 'that was a "
+        "social run', 'felt awful, cut it short', 'followed the plan'. Call it "
+        "whenever they tell you about a run (in a review or in passing), so "
+        "future reviews read the truth, not just the Garmin name. Appends to "
+        "the imported note; never erases it."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "date": {
+                "type": "string",
+                "description": "The run's date, YYYY-MM-DD (from training_get history if unsure).",
+            },
+            "note": {
+                "type": "string",
+                "description": "Their account, short and in their spirit: 'social run', 'cut short — knee'.",
+            },
+        },
+        "required": ["date", "note"],
+    },
+}
+
 SYNC_GARMIN_TOOL: dict = {
     "name": "sync_garmin",
     "description": (
@@ -244,6 +269,25 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
         _log.warning("push_to_watch failed", exc_info=True)
         return "Couldn't push to Garmin just now — try again in a moment."
     return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
+
+
+def handle_update_run(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+    raw_date = str(input_dict.get("date", "")).strip()
+    note = str(input_dict.get("note", "")).strip()
+    if not note:
+        return "note is required — their account of the run."
+    try:
+        on_date = date.fromisoformat(raw_date)
+    except ValueError:
+        return f"Invalid date {raw_date!r} — use YYYY-MM-DD (check training_get history)."
+    try:
+        run = move_service.annotate_run(user_id, on_date, note)
+    except Exception:
+        _log.warning("update_run failed", exc_info=True)
+        return "Couldn't update that run just now — try again in a moment."
+    if run is None:
+        return f"No run logged on {raw_date}. Check training_get history for the right date."
+    return f"Run on {raw_date} updated: {run.note}"
 
 
 def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
@@ -434,6 +478,8 @@ def move_tools(move_service) -> list[tuple[dict, Any]]:
          lambda uid, inp, now: handle_push_to_watch(uid, inp, now, move_service=move_service)),
         (SYNC_GARMIN_TOOL,
          lambda uid, inp, now: handle_sync_garmin(uid, inp, now, move_service=move_service)),
+        (UPDATE_RUN_TOOL,
+         lambda uid, inp, now: handle_update_run(uid, inp, now, move_service=move_service)),
     ]
 
 

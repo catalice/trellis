@@ -112,6 +112,27 @@ class MoveService:
     def recent_runs(self, user_id: UUID, *, limit: int = 12) -> list[RunLog]:
         return self._repo.recent_runs(user_id, limit=limit)
 
+    def annotate_run(self, user_id: UUID, on_date: date, annotation: str) -> RunLog | None:
+        """Attach the user's account of a run to its stored record ("that was a
+        social run") — APPENDED to the imported note, never replacing it, so the
+        Garmin name and their words both survive. Returns the updated run, or
+        None if no run is logged on that date."""
+        runs = [r for r in self._repo.recent_runs(user_id, limit=200) if r.ran_on == on_date]
+        if not runs:
+            return None
+        run = runs[0]
+        clean = annotation.strip()
+        if not clean:
+            return run
+        if clean.lower() in (run.note or "").lower():
+            return run
+        note = f"{run.note} — {clean}" if run.note else clean
+        if not self._repo.update_run_note(user_id, run.id, note):
+            return None
+        self._project_plan(user_id)
+        from dataclasses import replace as _replace
+        return _replace(run, note=note)
+
     # -- push a structured workout to the watch (the executive-function win) ----
 
     def push_workout_to_watch(self, user_id: UUID, spec: dict, on_date: date) -> str:

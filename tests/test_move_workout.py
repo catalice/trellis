@@ -272,3 +272,61 @@ class TestSplitExtraction(unittest.TestCase):
         self.assertIn("Split totals by TYPE", text)
         self.assertIn("run ×14", text)
         self.assertNotIn("#1", text)
+
+
+class TestAnnotateRun(unittest.TestCase):
+    """Audit item 28: 'I did a social run just now' had nowhere to land — the
+    run log was Garmin-import-only, so reviews read the generic Garmin name."""
+
+    class _Repo:
+        def __init__(self, runs):
+            self._runs = {r.id: r for r in runs}
+
+        def recent_runs(self, user_id, *, limit):
+            return list(self._runs.values())
+
+        def update_run_note(self, user_id, run_id, note):
+            from dataclasses import replace
+            if run_id in self._runs:
+                self._runs[run_id] = replace(self._runs[run_id], note=note)
+                return True
+            return False
+
+        def get(self, user_id): return None
+        def upsert(self, record): return record
+        def add_run(self, run): return run
+
+    def _service(self, runs):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_move_service import MoveService
+
+        class _Goals:
+            def list_training_goals(self, uid): return []
+
+        return MoveService(self._Repo(runs), _Goals(), ZoneInfo("Europe/Madrid"))
+
+    def test_annotation_appends_to_imported_note(self):
+        import datetime as dt
+        from uuid import uuid4
+        from trellis.domain_move_models import RunLog
+        run = RunLog(id=uuid4(), user_id=uuid4(), ran_on=dt.date(2026, 8, 5),
+                     note="Barcelona Running", distance_km=6.41)
+        svc = self._service([run])
+        updated = svc.annotate_run(run.user_id, dt.date(2026, 8, 5), "social run")
+        self.assertEqual(updated.note, "Barcelona Running — social run")
+
+    def test_no_run_that_date_returns_none(self):
+        import datetime as dt
+        from uuid import uuid4
+        svc = self._service([])
+        self.assertIsNone(svc.annotate_run(uuid4(), dt.date(2026, 8, 5), "social run"))
+
+    def test_duplicate_annotation_is_a_noop(self):
+        import datetime as dt
+        from uuid import uuid4
+        from trellis.domain_move_models import RunLog
+        run = RunLog(id=uuid4(), user_id=uuid4(), ran_on=dt.date(2026, 8, 5),
+                     note="Barcelona Running — social run", distance_km=6.41)
+        svc = self._service([run])
+        updated = svc.annotate_run(run.user_id, dt.date(2026, 8, 5), "Social run")
+        self.assertEqual(updated.note, "Barcelona Running — social run")

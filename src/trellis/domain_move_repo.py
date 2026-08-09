@@ -20,7 +20,17 @@ class TrainingRepository(Protocol):
     def get(self, user_id: UUID) -> TrainingPlan | None: ...
     def upsert(self, record: TrainingPlan) -> TrainingPlan: ...
     def add_run(self, run: RunLog) -> RunLog: ...
+    def update_run_note(self, user_id: UUID, run_id, note: str) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE training_runs SET note = %s WHERE id = %s AND user_id = %s",
+                    (note, run_id, user_id),
+                )
+                return cur.rowcount > 0
+
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]: ...
+    def update_run_note(self, user_id: UUID, run_id: UUID, note: str) -> bool: ...
 
 
 class PostgresMoveRepository:
@@ -66,6 +76,15 @@ class PostgresMoveRepository:
                     ),
                 )
         return run
+
+    def update_run_note(self, user_id: UUID, run_id, note: str) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE training_runs SET note = %s WHERE id = %s AND user_id = %s",
+                    (note, run_id, user_id),
+                )
+                return cur.rowcount > 0
 
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]:
         with self._db.connect() as conn:
