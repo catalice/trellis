@@ -288,6 +288,11 @@ def main() -> None:
         run_repo=move_repo,
         tz=settings.timezone,
         vault=vault,
+        task_repo=task_repo,
+        capture_repo=capture_repo,
+        effort_repo=effort_repo,
+        memory=memory,
+        history=history,
     )
 
     # Always-available tools — offered every turn regardless of the routed domain.

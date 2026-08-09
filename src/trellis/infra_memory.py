@@ -160,6 +160,34 @@ class MemoryIndex:
                     for row in cur.fetchall()
                 ]
 
+    def theme_count(self, user_id: UUID, phrase: str, *, since: Any,
+                    min_similarity: float = 0.5, limit: int = 12) -> tuple[int, list[str]]:
+        """How often a THEME has recurred: cards filed since `since` whose meaning
+        sits within `min_similarity` of the phrase. The Watcher's recurrence test
+        — deterministic given the frozen local embedder. Returns (count, examples)."""
+        clean = (phrase or "").strip()
+        if self._embedder is None or not clean:
+            return 0, []
+        vector = self._embed(clean)
+        if vector is None:
+            return 0, []
+        literal = to_pgvector_literal(vector)
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT content, 1 - (embedding <=> %s::vector) AS similarity
+                    FROM memory_index
+                    WHERE user_id = %s AND embedding IS NOT NULL AND updated_at >= %s
+                      AND 1 - (embedding <=> %s::vector) >= %s
+                    ORDER BY similarity DESC
+                    LIMIT %s
+                    """,
+                    (literal, user_id, since, literal, min_similarity, limit),
+                )
+                rows = cur.fetchall()
+        return len(rows), [r[0][:60] for r in rows[:3]]
+
     # -- failure tracking (for the one-time repeat-failure alert) -------------
 
     def _embed(self, text: str) -> list[float] | None:

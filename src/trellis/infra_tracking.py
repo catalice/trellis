@@ -211,6 +211,19 @@ class HealthRepository(Protocol):
     def latest_daily_health(self, user_id: UUID) -> GarminDailyHealthRecord | None: ...
     def upsert_activity(self, record: GarminActivityRecord) -> GarminActivityRecord: ...
     def latest_activities(self, user_id: UUID, *, limit: int, activity_type: str | None = None) -> tuple[GarminActivityRecord, ...]: ...
+    def activities_since(self, user_id: UUID, *, since: date) -> list[GarminActivityRecord]:
+        """All synced activities from `since` on — the Watcher's training frame."""
+        with self.database.connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM garmin_activities WHERE user_id = %s"
+                    " AND start_time_epoch_seconds >= %s"
+                    " ORDER BY start_time_epoch_seconds",
+                    (user_id, int(datetime.combine(since, datetime.min.time(),
+                                                   tzinfo=timezone.utc).timestamp())),
+                )
+                return [self._activity(r) for r in cursor.fetchall()]
+
     def upsert_activity_detail(self, *, user_id: UUID, activity_id: str, raw_data: dict[str, Any], sync_run_id: UUID | None) -> None: ...
     def start_sync(self, run: HealthSyncRun) -> HealthSyncRun: ...
     def finish_sync(self, run: HealthSyncRun) -> HealthSyncRun: ...
@@ -363,6 +376,19 @@ class PostgresHealthRepository:
                         (user_id, limit),
                     )
                 return tuple(self._activity(row) for row in cursor.fetchall())
+
+    def activities_since(self, user_id: UUID, *, since: date) -> list[GarminActivityRecord]:
+        """All synced activities from `since` on — the Watcher's training frame."""
+        with self.database.connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT * FROM garmin_activities WHERE user_id = %s"
+                    " AND start_time_epoch_seconds >= %s"
+                    " ORDER BY start_time_epoch_seconds",
+                    (user_id, int(datetime.combine(since, datetime.min.time(),
+                                                   tzinfo=timezone.utc).timestamp())),
+                )
+                return [self._activity(r) for r in cursor.fetchall()]
 
     def upsert_activity_detail(
         self, *, user_id: UUID, activity_id: str,

@@ -48,7 +48,10 @@ _EFFECT_THRESHOLDS = {
     "sleep_hours": 0.8,
     "sleep_score": 8.0, "hrv": 6.0, "body_battery": 10.0,
     "resting_hr": 3.0, "stress": 8.0,
+    "ran_km": 1.5, "run_avg_hr": 5.0, "tasks_done": 1.0,
 }
+_THEME_MIN_ITEMS = 5
+_THEME_WINDOW_DAYS = 60
 _FRAME_DAYS = 120          # how far back the daily frame reaches
 _DISCOVERY_EVERY_DAYS = 7  # discovery cadence (verification is cheap, runs each tick)
 _MAX_NEW_HYPOTHESES = 3
@@ -150,7 +153,7 @@ class _RunRepo(Protocol):
 
 
 def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
-                      tz, today: date) -> dict[date, dict[str, Any]]:
+                      tz, today: date, activities=(), task_events=()) -> dict[date, dict[str, Any]]:
     """One row per day with everything the verifier can test against. Pure
     function of the data — deterministic, unit-testable."""
     frame: dict[date, dict[str, Any]] = {}
@@ -202,6 +205,24 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
 
     for r in runs:
         row(r.ran_on)["ran"] = True
+        dist = getattr(r, "distance_km", None)
+        if dist is not None:
+            row(r.ran_on)["ran_km"] = round(row(r.ran_on).get("ran_km", 0.0) + dist, 2)
+
+    # Garmin activities carry what the run log doesn't: HR per session.
+    for a in activities:
+        epoch = getattr(a, "start_time_epoch_seconds", None)
+        if not epoch:
+            continue
+        d = datetime.fromtimestamp(int(epoch), tz=timezone.utc).astimezone(tz).date()
+        if "run" in (getattr(a, "activity_type", "") or "").lower():
+            if getattr(a, "average_heart_rate", None):
+                row(d)["run_avg_hr"] = a.average_heart_rate
+
+    for ev in task_events:
+        if ev.event_type == "completed":
+            d = ev.occurred_at.astimezone(tz).date()
+            row(d)["tasks_done"] = row(d).get("tasks_done", 0) + 1
 
     # Cycle phase per day, from the most recent period start on or before it.
     for d in list(frame.keys()):
@@ -241,11 +262,30 @@ def _condition_holds(day_row: dict, prev_row: dict | None, condition: str) -> bo
     return None
 
 
-def verify(frame: dict[date, dict], test_spec: dict) -> tuple[bool, str, dict]:
+def verify(frame: dict[date, dict], test_spec: dict,
+           theme_counter: Any = None) -> tuple[bool, str, dict]:
     """Run one test spec against the frame. Returns (verified, evidence, stats).
-    Unknown test types / conditions verify nothing — they report themselves."""
+    Unknown test types / conditions verify nothing — they report themselves.
+    theme_counter(phrase, window_days) -> (count, examples) powers the
+    theme_recurrence test (semantic counting via the memory index)."""
     ttype = str(test_spec.get("type", ""))
     days = sorted(frame.keys())
+
+    if ttype == "theme_recurrence":
+        theme = str(test_spec.get("theme", "")).strip()
+        if not theme:
+            return False, "theme_recurrence needs a theme", {"error": "no_theme"}
+        if theme_counter is None:
+            return False, "no semantic index available — can't count this yet", {"error": "no_counter"}
+        window = int(test_spec.get("window_days", _THEME_WINDOW_DAYS) or _THEME_WINDOW_DAYS)
+        min_items = int(test_spec.get("min_items", _THEME_MIN_ITEMS) or _THEME_MIN_ITEMS)
+        count, examples = theme_counter(theme, window)
+        stats = {"count": count, "window_days": window, "min_items": min_items,
+                 "examples": examples}
+        if count < min_items:
+            return False, f"'{theme}' has come up {count}x in {window}d (need {min_items}) — keep gathering", stats
+        ex = "; ".join(examples)
+        return True, f"'{theme}' has returned {count} times in {window} days (e.g. {ex})", stats
 
     if ttype == "correlation":
         a_key = str(test_spec.get("series_a", ""))
@@ -315,18 +355,25 @@ def _pearson(pairs: list[tuple[float, float]]) -> float:
 # --- Discovery (Claude — the only source of hypotheses) --------------------
 
 _DISCOVERY_SYSTEM = """\
-You are the Watcher — the slow mind of a personal second brain. You are shown a
-compact summary of one person's recorded life (wellbeing states, sleep, meds,
-menstrual cycle, runs and how they felt, health metrics) plus the hypotheses
-you are already tracking.
+You are the Watcher — the slow mind of a personal second brain. You are shown
+EVERYTHING one person's Trellis records: wellbeing states, sleep, meds,
+menstrual cycle, runs (with how they felt in her own words), health metrics,
+task completions, open tasks, seeds (curiosities she planted), efforts (what
+she's building), recent captures, and conversation summaries — plus the
+hypotheses you already track.
 
-Propose AT MOST {max_new} NEW pattern hypotheses worth watching — things the
-data itself hints at. Cross-domain patterns (sleep -> run quality, cycle ->
-energy, meds timing -> afternoon mood) are your specialty. Fewer is better;
-ZERO is a fine answer. Never duplicate or rephrase an existing hypothesis.
+Propose AT MOST {max_new} NEW pattern hypotheses worth watching. You are a
+GUIDE who helps her grow — patterns that could feed her growth are your
+specialty: cross-domain links (sleep -> run quality, cycle -> energy, meds
+timing -> afternoon mood), training progress signals (easy-run HR drifting
+down = base building), and THEMES that keep returning through her seeds and
+captures (a returning theme is something alive in her). You notice and invite;
+you never assign — "this keeps coming back" is yours, "you should" is not.
+Fewer is better; ZERO is a fine answer. Never duplicate or rephrase an
+existing hypothesis.
 
 Return ONLY valid JSON:
-{{"hypotheses": [{{"hypothesis": "<one plain sentence, their data's words>",
+{{"hypotheses": [{{"hypothesis": "<one plain sentence, grounded in what you saw>",
   "test": <test-spec or null>}}]}}
 
 A test-spec makes your hypothesis checkable by deterministic code. Vocabulary
@@ -335,10 +382,13 @@ A test-spec makes your hypothesis checkable by deterministic code. Vocabulary
    "lag_days": <int, 0-3>}} — does one series move with another?
 - {{"type": "condition_compare", "metric": "<metric>", "condition": "<cond>"}}
    — is a metric different under a condition?
+- {{"type": "theme_recurrence", "theme": "<short phrase>", "window_days": 60,
+   "min_items": 5}} — does a theme keep returning through her seeds,
+   captures and efforts? (counted semantically, not by exact words)
 Metrics: energy, mood, sleep_hours, sleep_score, hrv, body_battery,
-resting_hr, stress. Conditions: phase:menstruation, phase:follicular,
-phase:ovulation, phase:luteal, ran_today, ran_yesterday, meds_logged,
-dow:0..6 (Monday=0).
+resting_hr, stress, ran_km, run_avg_hr, tasks_done. Conditions:
+phase:menstruation, phase:follicular, phase:ovulation, phase:luteal,
+ran_today, ran_yesterday, meds_logged, dow:0..6 (Monday=0).
 Use null for a hypothesis you cannot express in that vocabulary — it will be
 shown honestly as not-yet-testable rather than silently dropped.\
 """
@@ -407,7 +457,12 @@ class Watcher:
         health_repo: _HealthRepo,
         run_repo: _RunRepo,
         tz,
-        vault=None,   # projection with .watcher_page(body); best-effort
+        vault=None,        # projection with .watcher_page(body); best-effort
+        task_repo=None,    # focus: tasks/seeds + completion events
+        capture_repo=None, # focus: recent captures for the garden summary
+        effort_repo=None,  # focus: efforts for the garden summary
+        memory=None,       # the meaning index — powers theme_recurrence
+        history=None,      # conversation summaries join the garden summary
     ) -> None:
         self._repo = repo
         self._discovery = discovery
@@ -416,6 +471,11 @@ class Watcher:
         self._runs = run_repo
         self._tz = tz
         self._vault = vault
+        self._tasks = task_repo
+        self._captures = capture_repo
+        self._efforts = effort_repo
+        self._memory = memory
+        self._history = history
 
     # -- the periodic tick (called from the background loop, ~daily) ---------
 
@@ -424,7 +484,7 @@ class Watcher:
         propose if it's been quiet for a week. Never raises."""
         try:
             frame = self._frame(user_id, now)
-            self._verify_all(user_id, frame)
+            self._verify_all(user_id, frame, now)
             last = self._repo.last_discovery_at(user_id)
             if last is None or (now - last) >= timedelta(days=_DISCOVERY_EVERY_DAYS):
                 self._discover(user_id, frame)
@@ -435,23 +495,37 @@ class Watcher:
     def _frame(self, user_id: UUID, now: datetime) -> dict[date, dict]:
         since_dt = now - timedelta(days=_FRAME_DAYS)
         today = now.astimezone(self._tz).date()
+        since_d = today - timedelta(days=_FRAME_DAYS)
         return build_daily_frame(
             user_id,
             states=self._states.list_states_since(user_id, since=since_dt),
             events=self._states.list_events_since(user_id, since=since_dt),
-            health_rows=self._health.daily_health_since(user_id, since=today - timedelta(days=_FRAME_DAYS)),
+            health_rows=self._health.daily_health_since(user_id, since=since_d),
             runs=self._runs.recent_runs(user_id, limit=400),
+            activities=(self._health.activities_since(user_id, since=since_d)
+                        if hasattr(self._health, "activities_since") else ()),
+            task_events=(self._tasks.events_since(user_id, since=since_dt)
+                         if self._tasks is not None else ()),
             tz=self._tz,
             today=today,
         )
 
-    def _verify_all(self, user_id: UUID, frame: dict) -> None:
+    def _theme_counter(self, user_id: UUID, now: datetime):
+        if self._memory is None:
+            return None
+        def count(phrase: str, window_days: int):
+            return self._memory.theme_count(
+                user_id, phrase, since=now - timedelta(days=window_days))
+        return count
+
+    def _verify_all(self, user_id: UUID, frame: dict, now: datetime) -> None:
+        counter = self._theme_counter(user_id, now)
         for p in self._repo.all_for(user_id):
             if p["status"] not in ("proposed", "watching", "verified", "adopted"):
                 continue
             if not p["test_spec"]:
                 continue
-            verified, evidence, stats = verify(frame, p["test_spec"])
+            verified, evidence, stats = verify(frame, p["test_spec"], theme_counter=counter)
             self._repo.set_verification(p["id"], verified=verified,
                                         evidence=evidence, stats=stats)
 
@@ -462,7 +536,7 @@ class Watcher:
                     if p["status"] != "dismissed"]
         dismissed = [p["hypothesis"] for p in self._repo.all_for(user_id)
                      if p["status"] == "dismissed"]
-        summary = self._garden_summary(frame)
+        summary = self._garden_summary(user_id, frame)
         for hypothesis, test in self._discovery.propose(summary, existing + dismissed):
             # a dismissed pattern is never resurrected, even reworded — the
             # prompt forbids duplicates and this is the deterministic backstop
@@ -470,13 +544,29 @@ class Watcher:
                 continue
             self._repo.add(user_id, hypothesis, test)
 
-    def _garden_summary(self, frame: dict[date, dict]) -> str:
-        lines = []
+    def _garden_summary(self, user_id: UUID, frame: dict[date, dict]) -> str:
+        """Everything Trellis knows, compactly — the discovery pass reads ALL of
+        it (her call: it sees everything). Numbers in the daily lines; the mind's
+        garden (seeds, efforts, captures), the runs as she felt them, and the
+        conversation summaries in titles and sentences."""
+        sections = [self._daily_lines(frame)]
+        for build in (self._focus_lines, self._runs_lines, self._summary_lines):
+            try:
+                part = build(user_id)
+                if part:
+                    sections.append(part)
+            except Exception:
+                _log.warning("watcher garden section failed", exc_info=True)
+        return "\n\n".join(sections)
+
+    def _daily_lines(self, frame: dict[date, dict]) -> str:
+        lines = ["DAILY (numbers):"]
         for d in sorted(frame.keys()):
             row = frame[d]
             bits = [d.isoformat()]
             for key in ("energy", "mood", "sleep_hours", "sleep_score", "hrv",
-                        "body_battery", "resting_hr", "stress", "cycle_day"):
+                        "body_battery", "resting_hr", "stress", "cycle_day",
+                        "ran_km", "run_avg_hr", "tasks_done"):
                 if row.get(key) is not None:
                     val = row[key]
                     bits.append(f"{key}={val:.1f}" if isinstance(val, float) else f"{key}={val}")
@@ -489,6 +579,55 @@ class Watcher:
             if len(bits) > 1:
                 lines.append(" ".join(bits))
         return "\n".join(lines)
+
+    def _focus_lines(self, user_id: UUID) -> str:
+        """The mind's garden: seeds (curiosities), efforts (what she's building),
+        recent captures (what's passing through)."""
+        parts: list[str] = []
+        if self._tasks is not None:
+            open_tasks = self._tasks.list_open(user_id)
+            seeds = [t for t in open_tasks if str(getattr(t, "kind", "")) == "seed"]
+            todos = [t for t in open_tasks if str(getattr(t, "kind", "")) != "seed"]
+            if seeds:
+                parts.append("SEEDS (curiosities, no obligation): " +
+                             "; ".join(t.title for t in seeds[:20]))
+            if todos:
+                parts.append(f"OPEN TASKS ({len(todos)}): " +
+                             "; ".join(t.title for t in todos[:10]))
+        if self._efforts is not None:
+            efforts = self._efforts.list_all(user_id)
+            if efforts:
+                parts.append("EFFORTS (active projects): " + "; ".join(
+                    f"{e.title} ({e.intensity})" for e in efforts[:15]))
+        if self._captures is not None:
+            captures = self._captures.list_recent(user_id, limit=30)
+            lines = [f"  {c.created_at.date().isoformat()} {c.summary or c.raw[:60]}"
+                     for c in captures if (c.summary or c.raw)]
+            if lines:
+                parts.append("RECENT CAPTURES:\n" + "\n".join(lines))
+        return "\n".join(parts)
+
+    def _runs_lines(self, user_id: UUID) -> str:
+        """Runs as SHE experienced them — the notes carry her annotations
+        ('social run', 'loved the intervals')."""
+        runs = self._runs.recent_runs(user_id, limit=30)
+        if not runs:
+            return ""
+        lines = ["RUNS (her words in the notes):"]
+        for r in runs:
+            dist = f" {r.distance_km}km" if r.distance_km is not None else ""
+            lines.append(f"  {r.ran_on.isoformat()}{dist}: {r.note}")
+        return "\n".join(lines)
+
+    def _summary_lines(self, user_id: UUID) -> str:
+        if self._history is None:
+            return ""
+        parts = []
+        for domain in ("focus", "sense", "move"):
+            summary = self._history.domain_summary(user_id, domain)
+            if summary:
+                parts.append(f"CONVERSATION ({domain}): {summary}")
+        return "\n".join(parts)
 
     # -- surfacing ------------------------------------------------------------
 
@@ -504,8 +643,10 @@ class Watcher:
         if verified:
             parts.append(
                 "Verified but not yet discussed — offer ONE, gently, only when the "
-                "moment fits (an observation with its evidence, never a verdict; "
-                "record her verdict with pattern_response):"
+                "moment fits. You are a guide who helps her grow: an observation "
+                "with its evidence, connected to what it could feed — an "
+                "invitation, never an assignment, never a verdict. Record her "
+                "verdict with pattern_response:"
             )
             for p in verified:
                 parts.append(f"  [{p['id']}] {p['hypothesis']} — {p['evidence']}")

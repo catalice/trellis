@@ -184,3 +184,51 @@ class TestPatternResponse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThemeRecurrence(unittest.TestCase):
+    def test_returning_theme_verifies(self):
+        verified, evidence, stats = verify({}, {
+            "type": "theme_recurrence", "theme": "making music",
+        }, theme_counter=lambda phrase, window: (7, ["drum machines seed",
+                                                     "PO-33 research",
+                                                     "Making Music effort"]))
+        self.assertTrue(verified)
+        self.assertIn("7 times", evidence)
+        self.assertEqual(stats["count"], 7)
+
+    def test_sparse_theme_keeps_gathering(self):
+        verified, evidence, _ = verify({}, {
+            "type": "theme_recurrence", "theme": "pottery",
+        }, theme_counter=lambda phrase, window: (2, ["ceramics seed"]))
+        self.assertFalse(verified)
+        self.assertIn("keep gathering", evidence)
+
+    def test_no_index_reports_itself(self):
+        verified, evidence, _ = verify({}, {
+            "type": "theme_recurrence", "theme": "anything",
+        })
+        self.assertFalse(verified)
+        self.assertIn("can't count", evidence)
+
+
+class TestWiderFrame(unittest.TestCase):
+    def test_run_metrics_and_task_completions_land(self):
+        uid = uuid4()
+        d = date(2026, 6, 3)
+        runs = [SimpleNamespace(ran_on=d, distance_km=6.4)]
+        activities = [SimpleNamespace(
+            start_time_epoch_seconds=int(datetime(2026, 6, 3, 17, 0,
+                                                  tzinfo=timezone.utc).timestamp()),
+            activity_type="running", average_heart_rate=168)]
+        task_events = [SimpleNamespace(event_type="completed",
+                                       occurred_at=datetime(2026, 6, 3, 9, 0,
+                                                            tzinfo=timezone.utc))]
+        frame = build_daily_frame(uid, states=[], events=[], health_rows=[],
+                                  runs=runs, activities=activities,
+                                  task_events=task_events, tz=TZ,
+                                  today=date(2026, 6, 4))
+        row = frame[d]
+        self.assertEqual(row["ran_km"], 6.4)
+        self.assertEqual(row["run_avg_hr"], 168)
+        self.assertEqual(row["tasks_done"], 1)

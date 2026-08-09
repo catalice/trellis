@@ -305,6 +305,18 @@ class PostgresTaskRepository:
                 )
                 return cur.rowcount > 0
 
+    def events_since(self, user_id: UUID, *, since: datetime) -> list[TaskEvent]:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM task_events WHERE user_id = %s AND occurred_at >= %s"
+                    " ORDER BY occurred_at",
+                    (user_id, since),
+                )
+                return [TaskEvent(id=r["id"], task_id=r["task_id"], user_id=r["user_id"],
+                                  event_type=r["event_type"], reason=r.get("reason"),
+                                  occurred_at=r["occurred_at"]) for r in cur.fetchall()]
+
     def save_event(self, event: TaskEvent) -> None:
         with self._db.connect() as conn:
             with conn.cursor() as cur:
