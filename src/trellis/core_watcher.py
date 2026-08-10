@@ -319,6 +319,33 @@ def verify(frame: dict[date, dict], test_spec: dict,
         ex = "; ".join(examples)
         return True, f"'{theme}' has returned {count} times in {window} days (e.g. {ex})", stats
 
+    if ttype == "trend":
+        metric = str(test_spec.get("metric", ""))
+        direction = str(test_spec.get("direction", "")).strip().lower() or None
+        samples = [(d, float(frame[d][metric])) for d in days
+                   if frame[d].get(metric) is not None]
+        n = len(samples)
+        if n < _MIN_SAMPLES_PER_SIDE * 2:
+            return False, f"only {n} days with {metric} (need {_MIN_SAMPLES_PER_SIDE * 2}) — keep gathering", {"n": n}
+        half = n // 2
+        early = [v for _, v in samples[:half]]
+        late = [v for _, v in samples[-half:]]
+        m_early = sum(early) / len(early)
+        m_late = sum(late) / len(late)
+        diff = m_late - m_early
+        threshold = _EFFECT_THRESHOLDS.get(metric, 0.7)
+        moving = "rising" if diff > 0 else "falling"
+        stats = {"n": n, "mean_early": round(m_early, 2), "mean_late": round(m_late, 2),
+                 "diff": round(diff, 2), "threshold": threshold, "direction": moving}
+        evidence = (f"{metric} {moving}: early-window avg {m_early:.1f} vs recent "
+                    f"{m_late:.1f} over {n} days")
+        ok = abs(diff) >= threshold
+        if ok and direction in ("up", "down"):
+            ok = (diff > 0) == (direction == "up")
+            if not ok:
+                evidence += f" — moving opposite to the hypothesised {direction}"
+        return ok, evidence, stats
+
     if ttype == "correlation":
         a_key = str(test_spec.get("series_a", ""))
         b_key = str(test_spec.get("series_b", ""))
@@ -417,6 +444,9 @@ A test-spec makes your hypothesis checkable by deterministic code. Vocabulary
 - {{"type": "theme_recurrence", "theme": "<short phrase>", "window_days": 60,
    "min_items": 5}} — does a theme keep returning through her seeds,
    captures and efforts? (counted semantically, not by exact words)
+- {{"type": "trend", "metric": "<metric>", "direction": "up"|"down"}} — is a
+   metric drifting over the window? (fitness signals live here: resting_hr
+   falling, easy-run HR falling, weekly km rising)
 Metrics: energy, mood, sleep_hours, sleep_score, hrv, body_battery,
 resting_hr, stress, ran_km, run_avg_hr, tasks_done. Conditions:
 phase:menstruation, phase:follicular, phase:ovulation, phase:luteal,

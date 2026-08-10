@@ -270,3 +270,31 @@ class TestPatternResponseByWords(unittest.TestCase):
             datetime.now(timezone.utc), watcher=w)
         self.assertIn("which one", reply)
         self.assertEqual(w.resolved, [])
+
+
+class TestTrend(unittest.TestCase):
+    def test_falling_rhr_verifies(self):
+        frame = _frame(30, lambda i: {"resting_hr": 53 - (i // 4)})
+        verified, evidence, stats = verify(frame, {
+            "type": "trend", "metric": "resting_hr", "direction": "down"})
+        self.assertTrue(verified)
+        self.assertIn("falling", evidence)
+        self.assertLess(stats["mean_late"], stats["mean_early"])
+
+    def test_wrong_direction_fails_honestly(self):
+        frame = _frame(30, lambda i: {"resting_hr": 45 + (i // 4)})
+        verified, evidence, _ = verify(frame, {
+            "type": "trend", "metric": "resting_hr", "direction": "down"})
+        self.assertFalse(verified)
+        self.assertIn("opposite", evidence)
+
+    def test_flat_metric_stays_silent(self):
+        frame = _frame(30, lambda i: {"resting_hr": 50 + (i % 2)})
+        verified, _, _ = verify(frame, {"type": "trend", "metric": "resting_hr"})
+        self.assertFalse(verified)
+
+    def test_too_few_days_keeps_gathering(self):
+        frame = _frame(8, lambda i: {"resting_hr": 53 - i})
+        verified, evidence, _ = verify(frame, {"type": "trend", "metric": "resting_hr"})
+        self.assertFalse(verified)
+        self.assertIn("keep gathering", evidence)
