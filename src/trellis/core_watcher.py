@@ -63,16 +63,18 @@ class PostgresWatcherRepository:
     def __init__(self, database: Any) -> None:
         self._db = database
 
-    def add(self, user_id: UUID, hypothesis: str, test_spec: dict | None) -> None:
+    def add(self, user_id: UUID, hypothesis: str, test_spec: dict | None,
+            wanted_test: str | None = None) -> None:
         with self._db.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO watcher_patterns (id, user_id, hypothesis, test_spec)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO watcher_patterns (id, user_id, hypothesis, test_spec, wanted_test)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
                     (uuid4(), user_id, hypothesis,
-                     Json(test_spec) if test_spec is not None else None),
+                     Json(test_spec) if test_spec is not None else None,
+                     wanted_test),
                 )
 
     def all_for(self, user_id: UUID) -> list[dict]:
@@ -414,45 +416,38 @@ def _pearson(pairs: list[tuple[float, float]]) -> float:
 # --- Discovery (Claude — the only source of hypotheses) --------------------
 
 _DISCOVERY_SYSTEM = """\
-You are the Watcher — the slow mind of a personal second brain. You are shown
-EVERYTHING one person's Trellis records: wellbeing states, sleep, meds,
-menstrual cycle, runs (with how they felt in her own words), health metrics,
-task completions, open tasks, seeds (curiosities she planted), efforts (what
-she's building), recent captures, and conversation summaries — plus the
-hypotheses you already track.
+You are the Watcher — the slow mind of a personal second brain. Below is
+everything this person's Trellis has recorded, and the hypotheses you already
+track.
 
-Propose AT MOST {max_new} NEW pattern hypotheses worth watching. You are a
-GUIDE who helps her grow — patterns that could feed her growth are your
-specialty: cross-domain links (sleep -> run quality, cycle -> energy, meds
-timing -> afternoon mood), training progress signals (easy-run HR drifting
-down = base building), and THEMES that keep returning through her seeds and
-captures (a returning theme is something alive in her). You notice and invite;
-you never assign — "this keeps coming back" is yours, "you should" is not.
-Fewer is better; ZERO is a fine answer. Never duplicate or rephrase an
-existing hypothesis.
+Propose at most {max_new} NEW hypotheses about patterns in the data — anything
+the data itself suggests, in any territory, crossing any boundary. Ground each
+one in what you actually saw. Fewer is better; zero is a fine answer. Never
+duplicate or rephrase an existing hypothesis. You notice; you never assign.
 
 Return ONLY valid JSON:
-{{"hypotheses": [{{"hypothesis": "<one plain sentence, grounded in what you saw>",
-  "test": <test-spec or null>}}]}}
+{{"hypotheses": [{{"hypothesis": "<one plain sentence>",
+  "test": <test-spec or null>,
+  "wanted_test": "<only when test is null: the check you would run if it
+existed, one plain sentence>"}}]}}
 
-A test-spec makes your hypothesis checkable by deterministic code. Vocabulary
-(these are the VERBS you may use — the content is yours):
+A test-spec lets deterministic code verify the hypothesis. The verbs that
+exist:
 - {{"type": "correlation", "series_a": "<metric>", "series_b": "<metric>",
-   "lag_days": <int, 0-3>}} — does one series move with another?
+   "lag_days": <int, 0-3>}} — do two series move together?
 - {{"type": "condition_compare", "metric": "<metric>", "condition": "<cond>"}}
    — is a metric different under a condition?
-- {{"type": "theme_recurrence", "theme": "<short phrase>", "window_days": 60,
-   "min_items": 5}} — does a theme keep returning through her seeds,
-   captures and efforts? (counted semantically, not by exact words)
 - {{"type": "trend", "metric": "<metric>", "direction": "up"|"down"}} — is a
-   metric drifting over the window? (fitness signals live here: resting_hr
-   falling, easy-run HR falling, weekly km rising)
+   metric drifting over the window?
+- {{"type": "theme_recurrence", "theme": "<short phrase>", "window_days": 60,
+   "min_items": 5}} — does a meaning keep recurring in what she files?
 Metrics: energy, mood, sleep_hours, sleep_score, hrv, body_battery,
 resting_hr, stress, ran_km, run_avg_hr, tasks_done. Conditions:
 phase:menstruation, phase:follicular, phase:ovulation, phase:luteal,
 ran_today, ran_yesterday, meds_logged, dow:0..6 (Monday=0).
-Use null for a hypothesis you cannot express in that vocabulary — it will be
-shown honestly as not-yet-testable rather than silently dropped.\
+If no verb fits, use null and say what check you would run in wanted_test —
+untestable hypotheses are shown honestly, and your wanted tests are how the
+vocabulary grows.\
 """
 
 
@@ -495,7 +490,7 @@ def _parse_hypotheses(raw: str) -> list[tuple[str, dict | None]]:
     except json.JSONDecodeError:
         _log.warning("watcher: discovery response was not valid JSON")
         return []
-    out: list[tuple[str, dict | None]] = []
+    out: list[tuple[str, dict | None, str | None]] = []
     for h in data.get("hypotheses", [])[:_MAX_NEW_HYPOTHESES]:
         if not isinstance(h, dict):
             continue
@@ -503,7 +498,9 @@ def _parse_hypotheses(raw: str) -> list[tuple[str, dict | None]]:
         if not hypothesis:
             continue
         test = h.get("test")
-        out.append((hypothesis, test if isinstance(test, dict) else None))
+        test = test if isinstance(test, dict) else None
+        wanted = str(h.get("wanted_test", "")).strip() or None
+        out.append((hypothesis, test, wanted if test is None else None))
     return out
 
 
@@ -600,12 +597,12 @@ class Watcher:
         dismissed = [p["hypothesis"] for p in self._repo.all_for(user_id)
                      if p["status"] == "dismissed"]
         summary = self._garden_summary(user_id, frame)
-        for hypothesis, test in self._discovery.propose(summary, existing + dismissed):
+        for hypothesis, test, wanted in self._discovery.propose(summary, existing + dismissed):
             # a dismissed pattern is never resurrected, even reworded — the
             # prompt forbids duplicates and this is the deterministic backstop
             if any(hypothesis.lower() == h.lower() for h in existing + dismissed):
                 continue
-            self._repo.add(user_id, hypothesis, test)
+            self._repo.add(user_id, hypothesis, test, wanted)
 
     def _garden_summary(self, user_id: UUID, frame: dict[date, dict]) -> str:
         """Everything Trellis knows, compactly — the discovery pass reads ALL of
@@ -754,7 +751,10 @@ class Watcher:
                     if p.get("evidence"):
                         lines.append(f"  - evidence: {p['evidence']}")
                     if not p.get("test_spec") and p["status"] == "proposed":
-                        lines.append("  - (can't test this one yet — no computable check)")
+                        if p.get("wanted_test"):
+                            lines.append(f"  - wishes it could test: {p['wanted_test']}")
+                        else:
+                            lines.append("  - (can't test this one yet — no computable check)")
                     if p.get("resolution_note"):
                         lines.append(f"  - your note: {p['resolution_note']}")
                 lines.append("")

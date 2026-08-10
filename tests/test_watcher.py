@@ -152,6 +152,18 @@ class TestDiscoveryParsing(unittest.TestCase):
         self.assertEqual(parsed[0][1]["metric"], "mood")
         self.assertIsNone(parsed[1][1])
 
+    def test_wanted_test_survives_only_without_a_test(self):
+        raw = """{"hypotheses": [
+          {"hypothesis": "Rough months follow short cycles", "test": null,
+           "wanted_test": "compare each cycle's length against luteal mood dip depth"},
+          {"hypothesis": "Mood dips in luteal", 
+           "test": {"type": "condition_compare", "metric": "mood", "condition": "phase:luteal"},
+           "wanted_test": "should be ignored — a real test exists"}
+        ]}"""
+        parsed = _parse_hypotheses(raw)
+        self.assertEqual(parsed[0][2], "compare each cycle's length against luteal mood dip depth")
+        self.assertIsNone(parsed[1][2])
+
     def test_garbage_yields_nothing(self):
         self.assertEqual(_parse_hypotheses("not json"), [])
 
