@@ -278,6 +278,36 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
 
 # --- Verification (deterministic) ------------------------------------------
 
+_METRIC_NAMES = {
+    "resting_hr": "resting HR", "run_avg_hr": "run avg HR", "hrv": "HRV",
+    "sleep_hours": "sleep hours", "sleep_score": "sleep score",
+    "body_battery": "body battery", "tasks_done": "tasks completed",
+    "ran_km": "km run",
+}
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _human_metric(metric: str) -> str:
+    return _METRIC_NAMES.get(metric, metric.replace("_", " "))
+
+
+def _human_condition(condition: str) -> str:
+    if condition.startswith("phase:"):
+        phase = condition.split(":", 1)[1]
+        return "during menstruation" if phase == "menstruation" else f"in the {phase} phase"
+    if condition.startswith("dow:"):
+        try:
+            return f"on {_WEEKDAYS[int(condition.split(':', 1)[1])]}s"
+        except (ValueError, IndexError):
+            return condition
+    return {
+        "ran_today": "on run days",
+        "ran_yesterday": "the day after a run",
+        "meds_logged": "on meds days",
+    }.get(condition, condition)
+
+
 def _condition_holds(day_row: dict, prev_row: dict | None, condition: str) -> bool | None:
     """None = condition can't be evaluated for this day (missing data)."""
     if condition.startswith("phase:"):
@@ -328,7 +358,7 @@ def verify(frame: dict[date, dict], test_spec: dict,
                    if frame[d].get(metric) is not None]
         n = len(samples)
         if n < _MIN_SAMPLES_PER_SIDE * 2:
-            return False, f"only {n} days with {metric} (need {_MIN_SAMPLES_PER_SIDE * 2}) — keep gathering", {"n": n}
+            return False, f"only {n} of {_MIN_SAMPLES_PER_SIDE * 2} days with {_human_metric(metric)} so far — keep gathering", {"n": n}
         half = n // 2
         early = [v for _, v in samples[:half]]
         late = [v for _, v in samples[-half:]]
@@ -339,8 +369,8 @@ def verify(frame: dict[date, dict], test_spec: dict,
         moving = "rising" if diff > 0 else "falling"
         stats = {"n": n, "mean_early": round(m_early, 2), "mean_late": round(m_late, 2),
                  "diff": round(diff, 2), "threshold": threshold, "direction": moving}
-        evidence = (f"{metric} {moving}: early-window avg {m_early:.1f} vs recent "
-                    f"{m_late:.1f} over {n} days")
+        evidence = (f"{_human_metric(metric)} {moving}: was averaging {m_early:.1f}, "
+                    f"recently {m_late:.1f} ({n} days)")
         ok = abs(diff) >= threshold
         if ok and direction in ("up", "down"):
             ok = (diff > 0) == (direction == "up")
@@ -360,12 +390,13 @@ def verify(frame: dict[date, dict], test_spec: dict,
             if a_val is not None and b_val is not None:
                 pairs.append((float(a_val), float(b_val)))
         n = len(pairs)
+        a_h, b_h = _human_metric(a_key), _human_metric(b_key)
         if n < _MIN_PAIRS_CORRELATION:
-            return False, f"only {n} usable day-pairs (need {_MIN_PAIRS_CORRELATION}) — keep gathering", {"n": n}
+            return False, f"only {n} of {_MIN_PAIRS_CORRELATION} usable day-pairs so far — keep gathering", {"n": n}
         r = _pearson(pairs)
         stats = {"n": n, "r": round(r, 3), "lag_days": lag}
         direction = "rises with" if r > 0 else "falls as"
-        evidence = f"{a_key} {direction} {b_key}{f' {lag}d later' if lag else ''}: r={r:.2f} over {n} days"
+        evidence = f"{a_h} {direction} {b_h}{f' {lag} day(s) later' if lag else ''} (r={r:.2f}, {n} days)"
         return abs(r) >= _MIN_CORRELATION_R, evidence, stats
 
     if ttype == "condition_compare":
@@ -385,8 +416,9 @@ def verify(frame: dict[date, dict], test_spec: dict,
                 continue
             (with_c if holds else without_c).append(float(val))
         n1, n2 = len(with_c), len(without_c)
+        cond_h = _human_condition(condition)
         if n1 < _MIN_SAMPLES_PER_SIDE or n2 < _MIN_SAMPLES_PER_SIDE:
-            return False, f"{n1} days with / {n2} without (need {_MIN_SAMPLES_PER_SIDE} each) — keep gathering", {"n_with": n1, "n_without": n2}
+            return False, f"only {n1} days {cond_h} vs {n2} otherwise so far (need {_MIN_SAMPLES_PER_SIDE} each) — keep gathering", {"n_with": n1, "n_without": n2}
         m1 = sum(with_c) / n1
         m2 = sum(without_c) / n2
         diff = m1 - m2
@@ -394,7 +426,7 @@ def verify(frame: dict[date, dict], test_spec: dict,
         stats = {"n_with": n1, "n_without": n2,
                  "mean_with": round(m1, 2), "mean_without": round(m2, 2),
                  "diff": round(diff, 2), "threshold": threshold}
-        evidence = (f"{metric} averages {m1:.1f} when {condition} vs {m2:.1f} otherwise "
+        evidence = (f"{_human_metric(metric)} averages {m1:.1f} {cond_h} vs {m2:.1f} otherwise "
                     f"({n1} vs {n2} days)")
         return abs(diff) >= threshold, evidence, stats
 
@@ -736,46 +768,45 @@ class Watcher:
         try:
             patterns = self._repo.all_for(user_id)
             sections = [
-                ("Wondering (not yet enough evidence)",
+                ("Wondering", "gathering evidence — it stays quiet about these",
                  [p for p in patterns if p["status"] == "proposed"]),
-                ("Watching (you said: keep testing)",
+                ("Watching", "your call: keep testing",
                  [p for p in patterns if p["status"] == "watching"]),
-                ("Verified — it may bring these up",
+                ("Verified", "the numbers hold — it may bring these up in chat",
                  [p for p in patterns if p["status"] == "verified"]),
-                ("Adopted (quietly shaping suggestions)",
+                ("Adopted", "you confirmed these — they quietly shape suggestions",
                  [p for p in patterns if p["status"] == "adopted"]),
-                ("Dismissed (will never come back)",
+                ("Dismissed", "your call: never again",
                  [p for p in patterns if p["status"] == "dismissed"]),
             ]
-            def stamp(row: dict) -> str:
-                """Every item carries its dates — so she can tell at a glance
-                what's new, what just verified, and when she ruled."""
+            def dates(row: dict) -> str:
+                """One compact date trail per item: proposed -> verified -> ruled."""
                 bits = []
-                if row.get("proposed_at"):
-                    bits.append(f"proposed {row['proposed_at'].astimezone(self._tz).strftime('%-d %b')}")
-                if row.get("verified_at"):
-                    bits.append(f"verified {row['verified_at'].astimezone(self._tz).strftime('%-d %b')}")
-                if row.get("resolved_at"):
-                    bits.append(f"your verdict {row['resolved_at'].astimezone(self._tz).strftime('%-d %b')}")
-                return f" *({', '.join(bits)})*" if bits else ""
+                for key, label in (("proposed_at", ""), ("verified_at", "verified "),
+                                   ("resolved_at", "ruled ")):
+                    if row.get(key):
+                        bits.append(label + row[key].astimezone(self._tz).strftime("%-d %b"))
+                return " → ".join(bits)
 
             lines: list[str] = []
-            for title, group in sections:
+            for title, subtitle, group in sections:
                 if not group:
                     continue
-                lines.append(f"## {title}\n")
+                lines.append(f"## {title}")
+                lines.append(f"*{subtitle}*\n")
                 for p in group:
-                    lines.append(f"- {p['hypothesis']}{stamp(p)}")
+                    lines.append(f"**{p['hypothesis']}**")
+                    detail = []
                     if p.get("evidence"):
-                        lines.append(f"  - evidence: {p['evidence']}")
+                        detail.append(p["evidence"])
                     if not p.get("test_spec") and p["status"] == "proposed":
-                        if p.get("wanted_test"):
-                            lines.append(f"  - wishes it could test: {p['wanted_test']}")
-                        else:
-                            lines.append("  - (can't test this one yet — no computable check)")
+                        detail.append("wishes it could test: " + p["wanted_test"]
+                                      if p.get("wanted_test") else "no computable check yet")
                     if p.get("resolution_note"):
-                        lines.append(f"  - your note: {p['resolution_note']}")
-                lines.append("")
+                        detail.append(f"your note: {p['resolution_note']}")
+                    detail.append(dates(p))
+                    lines.append("*" + " · ".join(d for d in detail if d) + "*")
+                    lines.append("")
             self._vault.watcher_page("\n".join(lines) if lines else
                                      "Nothing yet. The Watcher is quiet until the data says something.\n")
         except Exception:

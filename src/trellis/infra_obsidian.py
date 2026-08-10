@@ -641,12 +641,9 @@ class ObsidianVault:
             path = self._vault / _WATCHER_PATH
             path.parent.mkdir(parents=True, exist_ok=True)
             header = (
-                "# The Watcher\n\n"
-                "> Trellis's slow mind — patterns it wonders about across weeks and "
-                "months. It only speaks in chat once something is verified; this page "
-                "shows everything, including the half-formed. Live view — tell "
-                "Trellis your verdicts, edits here don't sync back.\n\n"
-                f"_Updated {datetime.now(self._tz).strftime('%a %d %b, %H:%M')}_\n\n"
+                "> Everything the slow mind is thinking. It speaks in chat only "
+                "when something verifies — verdicts go to Trellis, not here.\n\n"
+                f"*Updated {datetime.now(self._tz).strftime('%a %-d %b, %H:%M')}*\n\n"
             )
             path.write_text(header + body, encoding="utf-8")
         except Exception:
