@@ -747,13 +747,25 @@ class Watcher:
                 ("Dismissed (will never come back)",
                  [p for p in patterns if p["status"] == "dismissed"]),
             ]
+            def stamp(row: dict) -> str:
+                """Every item carries its dates — so she can tell at a glance
+                what's new, what just verified, and when she ruled."""
+                bits = []
+                if row.get("proposed_at"):
+                    bits.append(f"proposed {row['proposed_at'].astimezone(self._tz).strftime('%-d %b')}")
+                if row.get("verified_at"):
+                    bits.append(f"verified {row['verified_at'].astimezone(self._tz).strftime('%-d %b')}")
+                if row.get("resolved_at"):
+                    bits.append(f"your verdict {row['resolved_at'].astimezone(self._tz).strftime('%-d %b')}")
+                return f" *({', '.join(bits)})*" if bits else ""
+
             lines: list[str] = []
             for title, group in sections:
                 if not group:
                     continue
                 lines.append(f"## {title}\n")
                 for p in group:
-                    lines.append(f"- {p['hypothesis']}")
+                    lines.append(f"- {p['hypothesis']}{stamp(p)}")
                     if p.get("evidence"):
                         lines.append(f"  - evidence: {p['evidence']}")
                     if not p.get("test_spec") and p["status"] == "proposed":
