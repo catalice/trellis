@@ -396,7 +396,7 @@ def verify(frame: dict[date, dict], test_spec: dict,
         r = _pearson(pairs)
         stats = {"n": n, "r": round(r, 3), "lag_days": lag}
         direction = "rises with" if r > 0 else "falls as"
-        evidence = f"{a_h} {direction} {b_h}{f' {lag} day(s) later' if lag else ''} (r={r:.2f}, {n} days)"
+        evidence = f"{a_h} {direction} {b_h}{f" {lag} day{'s' if lag != 1 else ''} later" if lag else ''} (r={r:.2f}, {n} days)"
         return abs(r) >= _MIN_CORRELATION_R, evidence, stats
 
     if ttype == "condition_compare":
