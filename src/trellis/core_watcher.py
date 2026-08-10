@@ -420,10 +420,13 @@ You are the Watcher — the slow mind of a personal second brain. Below is
 everything this person's Trellis has recorded, and the hypotheses you already
 track.
 
-Propose at most {max_new} NEW hypotheses about patterns in the data — anything
-the data itself suggests, in any territory, crossing any boundary. Ground each
-one in what you actually saw. Fewer is better; zero is a fine answer. Never
-duplicate or rephrase an existing hypothesis. You notice; you never assign.
+You run once a week; this garden will come back to you. Propose at most
+{max_new} NEW hypotheses about patterns in the data — anything the data itself
+suggests, in any territory, crossing any boundary. Ground each one in what you
+actually saw. Fewer is better; zero is a fine answer — a pattern worth
+watching will still be there next week. Never duplicate or rephrase a tracked
+hypothesis, and never re-propose anything she dismissed, however reworded.
+You notice; you never assign.
 
 Return ONLY valid JSON:
 {{"hypotheses": [{{"hypothesis": "<one plain sentence>",
@@ -456,8 +459,10 @@ class WatcherDiscovery:
         self._client = client
         self._model = model
 
-    def propose(self, garden_summary: str, existing: list[str]) -> list[tuple[str, dict | None]]:
+    def propose(self, garden_summary: str, existing: list[str],
+                dismissed: list[str] | None = None):
         existing_text = "\n".join(f"- {h}" for h in existing) or "(none yet)"
+        dismissed_text = "\n".join(f"- {h}" for h in (dismissed or [])) or "(none)"
         try:
             response = self._client.messages.create(
                 model=self._model,
@@ -466,7 +471,8 @@ class WatcherDiscovery:
                 messages=[{
                     "role": "user",
                     "content": f"THE GARDEN:\n{garden_summary}\n\n"
-                               f"HYPOTHESES ALREADY TRACKED:\n{existing_text}",
+                               f"HYPOTHESES ALREADY TRACKED:\n{existing_text}\n\n"
+                               f"DISMISSED BY HER (never re-propose, even reworded):\n{dismissed_text}",
                 }],
             )
             raw = "".join(b.text for b in response.content
@@ -597,7 +603,7 @@ class Watcher:
         dismissed = [p["hypothesis"] for p in self._repo.all_for(user_id)
                      if p["status"] == "dismissed"]
         summary = self._garden_summary(user_id, frame)
-        for hypothesis, test, wanted in self._discovery.propose(summary, existing + dismissed):
+        for hypothesis, test, wanted in self._discovery.propose(summary, existing, dismissed):
             # a dismissed pattern is never resurrected, even reworded — the
             # prompt forbids duplicates and this is the deterministic backstop
             if any(hypothesis.lower() == h.lower() for h in existing + dismissed):
