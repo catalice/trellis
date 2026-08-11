@@ -654,14 +654,15 @@ class ObsidianVault:
             first = date.fromisoformat(str(week[0].get("date", "")))
         except ValueError:
             return
-        iso_year, iso_week, _ = first.isocalendar()
+        # Named by DATE, not ISO week number — "2026-08-10 week" means something
+        # to a human; "2026-W33" means nothing (her words, 12 Aug).
         lines = [
-            f"# Week {iso_week}, {iso_year}\n",
+            f"# Week of {first.strftime('%-d %B %Y')}\n",
             f"_Updated {now.strftime('%d %b %Y, %H:%M')}_\n",
         ]
         session_lines, _matched = self._session_lines(week, runs_by_date, acts_by_date)
         lines.extend(session_lines)
-        path = self._vault / _TRAINING_WEEKS_DIR / f"{iso_year:04d}-W{iso_week:02d}.md"
+        path = self._vault / _TRAINING_WEEKS_DIR / f"{first.isoformat()} week.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
