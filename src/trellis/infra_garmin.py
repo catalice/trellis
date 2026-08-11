@@ -341,6 +341,29 @@ class GarminDirectService:
         except Exception as exc:
             raise RuntimeError(f"Failed to schedule workout {workout_id}: {exc}") from exc
 
+    def list_workouts(self, user_id: UUID, *, limit: int = 30) -> list[dict]:
+        try:
+            client = self._connect(user_id)
+            result = client.get_workouts(0, limit)
+            return result if isinstance(result, list) else []
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Failed to list Garmin workouts: {exc}") from exc
+
+    def delete_workout(self, user_id: UUID, workout_id: str) -> None:
+        """garminconnect 0.2.40 has no delete — call the workout-service
+        endpoint directly through the authenticated garth session."""
+        try:
+            client = self._connect(user_id)
+            client.garth.connectapi(
+                f"/workout-service/workout/{workout_id}", method="DELETE",
+            )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Failed to delete workout {workout_id}: {exc}") from exc
+
 class _DirectConnectionRepo(Protocol):
     def get_session_dump(self, user_id: UUID) -> str | None: ...
 

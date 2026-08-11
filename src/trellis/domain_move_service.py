@@ -25,9 +25,11 @@ class GoalReader(Protocol):
 
 
 class GarminWorkoutPort(Protocol):
-    """Push a structured workout to the watch (see infra_garmin.GarminDirectService)."""
+    """Watch workouts: push, schedule, list, delete (infra_garmin.GarminDirectService)."""
     def push_workout(self, user_id: UUID, workout_json: Any) -> str: ...
     def schedule_workout(self, user_id: UUID, workout_id: str, on_date: date) -> None: ...
+    def list_workouts(self, user_id: UUID, *, limit: int = 30) -> list[dict]: ...
+    def delete_workout(self, user_id: UUID, workout_id: str) -> None: ...
 
 
 class GarminActivityPort(Protocol):
@@ -90,15 +92,36 @@ class MoveService:
         plan: dict | None = None,
         baseline: str | None = None,
         goal_id: UUID | None = None,
+        replace_week: bool = False,
     ) -> TrainingPlan:
-        """Upsert the coach's plan. Any field left None keeps its stored value, so
-        the coach can update just the week, just the baseline, etc."""
+        """Upsert the coach's plan — MERGING, never destroying (12 Aug: an
+        arc-note save wiped six days of stored week; the tool obeyed. Never
+        again — in code, not in a prompt). arc replaces arc only when sent;
+        incoming week days replace SAME-DATED days, all other stored days
+        survive. replace_week=True is the only way to drop days (the Sunday
+        full re-author)."""
         existing = self._repo.get(user_id)
+        stored = dict(existing.plan) if existing and existing.plan else {}
+        merged = dict(stored)
+        if plan:
+            if plan.get("arc"):
+                merged["arc"] = plan["arc"]
+            incoming = plan.get("week")
+            if isinstance(incoming, list):
+                incoming = [s for s in incoming if isinstance(s, dict) and s.get("date")]
+                if replace_week:
+                    merged["week"] = sorted(incoming, key=lambda x: str(x["date"]))
+                else:
+                    by_date = {str(x["date"]): x for x in stored.get("week", [])
+                               if isinstance(x, dict) and x.get("date")}
+                    for sess in incoming:
+                        by_date[str(sess["date"])] = sess
+                    merged["week"] = [by_date[d] for d in sorted(by_date)]
         saved = self._repo.upsert(TrainingPlan(
             user_id=user_id,
             goal_id=goal_id if goal_id is not None else (existing.goal_id if existing else None),
             baseline=baseline if baseline is not None else (existing.baseline if existing else None),
-            plan=plan if plan is not None else (existing.plan if existing else {}),
+            plan=merged,
             updated_at=datetime.now(timezone.utc),
         ))
         self._project_plan(user_id)
@@ -142,6 +165,17 @@ class MoveService:
         if self._garmin_push is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
         workout = build_garmin_workout(spec)               # raises WorkoutSpecError
+        # A push REPLACES: same-named workouts are deleted first, so corrections
+        # update the watch instead of stacking duplicates (the 4-copies mess,
+        # 11 Aug). Best-effort — a failed cleanup never blocks the push.
+        name = str(workout.get("workoutName") or "")
+        if name:
+            try:
+                for w in self._garmin_push.list_workouts(user_id, limit=30):
+                    if w.get("workoutName") == name and w.get("workoutId"):
+                        self._garmin_push.delete_workout(user_id, str(w["workoutId"]))
+            except Exception:
+                _log.warning("push replace: could not clean same-named workouts", exc_info=True)
         workout_id = self._garmin_push.push_workout(user_id, workout)
         self._garmin_push.schedule_workout(user_id, workout_id, on_date)
         return str(workout.get("workoutName") or "workout")
@@ -259,6 +293,16 @@ class MoveService:
         except Exception:
             _log.warning("review_run: detail fetch/parse failed", exc_info=True)
         return {"overall": overall, "splits": splits}
+
+    def watch_workouts(self, user_id: UUID, *, limit: int = 15) -> list[dict]:
+        """What's actually in her Garmin workout library (newest first) — so
+        claims about the watch are checkable, never guessed."""
+        if self._garmin_push is None:
+            raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
+        return [
+            {"id": str(w.get("workoutId") or ""), "name": str(w.get("workoutName") or "")}
+            for w in self._garmin_push.list_workouts(user_id, limit=limit)
+        ]
 
     # -- calendar (Python owns real dates — the coach never does date math) ----
 

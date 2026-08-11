@@ -330,3 +330,124 @@ class TestAnnotateRun(unittest.TestCase):
         svc = self._service([run])
         updated = svc.annotate_run(run.user_id, dt.date(2026, 8, 5), "Social run")
         self.assertEqual(updated.note, "Barcelona Running — social run")
+
+
+class TestPlanSaveMerges(unittest.TestCase):
+    """12 Aug: an arc-note save wiped six days of stored week — the tool obeyed
+    a wholesale replace. Saves now MERGE; only replace_week can drop days."""
+
+    class _Repo:
+        def __init__(self):
+            self.stored = None
+
+        def get(self, user_id):
+            return self.stored
+
+        def upsert(self, record):
+            self.stored = record
+            return record
+
+        def add_run(self, run): return run
+        def recent_runs(self, user_id, *, limit): return []
+        def update_run_note(self, user_id, run_id, note): return False
+
+    def _service(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_move_service import MoveService
+
+        class _Goals:
+            def list_training_goals(self, uid): return []
+
+        repo = self._Repo()
+        return MoveService(repo, _Goals(), ZoneInfo("Europe/Madrid")), repo
+
+    def _seed_week(self, svc, uid):
+        week = [{"date": f"2026-08-{d:02d}", "type": "easy", "detail": f"day {d}"}
+                for d in range(10, 17)]
+        svc.save_plan(uid, plan={"arc": "the arc", "week": week}, replace_week=True)
+
+    def test_arc_only_save_keeps_the_week(self):
+        from uuid import uuid4
+        svc, repo = self._service()
+        uid = uuid4()
+        self._seed_week(svc, uid)
+        svc.save_plan(uid, plan={"arc": "the arc — with a strength note"})
+        self.assertEqual(len(repo.stored.plan["week"]), 7)
+        self.assertIn("strength note", repo.stored.plan["arc"])
+
+    def test_one_day_merges_others_survive(self):
+        from uuid import uuid4
+        svc, repo = self._service()
+        uid = uuid4()
+        self._seed_week(svc, uid)
+        svc.save_plan(uid, plan={"week": [
+            {"date": "2026-08-12", "type": "easy", "detail": "UPDATED"}]})
+        week = repo.stored.plan["week"]
+        self.assertEqual(len(week), 7)
+        updated = [s for s in week if s["date"] == "2026-08-12"][0]
+        self.assertEqual(updated["detail"], "UPDATED")
+
+    def test_replace_week_is_the_only_way_to_shrink(self):
+        from uuid import uuid4
+        svc, repo = self._service()
+        uid = uuid4()
+        self._seed_week(svc, uid)
+        svc.save_plan(uid, plan={"week": [
+            {"date": "2026-08-18", "type": "rest", "detail": "only day"}]},
+            replace_week=True)
+        self.assertEqual(len(repo.stored.plan["week"]), 1)
+
+
+class TestPushReplaces(unittest.TestCase):
+    """11 Aug: three Sunday re-pushes stacked four duplicates on one day.
+    A push now deletes same-named workouts first."""
+
+    class _Port:
+        def __init__(self, existing):
+            self.existing = existing
+            self.deleted = []
+            self.pushed = []
+            self.scheduled = []
+
+        def list_workouts(self, user_id, *, limit=30):
+            return self.existing
+
+        def delete_workout(self, user_id, workout_id):
+            self.deleted.append(workout_id)
+
+        def push_workout(self, user_id, workout_json):
+            self.pushed.append(workout_json.get("workoutName"))
+            return "new-id"
+
+        def schedule_workout(self, user_id, workout_id, on_date):
+            self.scheduled.append((workout_id, on_date))
+
+    def test_same_named_workouts_deleted_before_push(self):
+        import datetime as dt
+        from uuid import uuid4
+        from zoneinfo import ZoneInfo
+        from trellis.domain_move_service import MoveService
+
+        class _Goals:
+            def list_training_goals(self, uid): return []
+
+        class _Repo:
+            def get(self, uid): return None
+            def upsert(self, r): return r
+            def recent_runs(self, uid, *, limit): return []
+            def add_run(self, r): return r
+            def update_run_note(self, uid, rid, note): return False
+
+        port = self._Port(existing=[
+            {"workoutId": "111", "workoutName": "Run-Walk-Run 4:1"},
+            {"workoutId": "222", "workoutName": "Run-Walk-Run 4:1"},
+            {"workoutId": "333", "workoutName": "Something Else"},
+        ])
+        svc = MoveService(_Repo(), _Goals(), ZoneInfo("Europe/Madrid"), garmin_push=port)
+        svc.push_workout_to_watch(
+            uuid4(),
+            {"name": "Run-Walk-Run 4:1", "steps": [{"kind": "run", "duration": "40min"}]},
+            dt.date(2026, 8, 12),
+        )
+        self.assertEqual(port.deleted, ["111", "222"])
+        self.assertEqual(port.pushed, ["Run-Walk-Run 4:1"])

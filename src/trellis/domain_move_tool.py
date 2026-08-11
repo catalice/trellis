@@ -35,13 +35,15 @@ TRAINING_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["plan", "week", "today", "baseline", "history", "run_detail"],
+                "enum": ["plan", "week", "today", "baseline", "history", "run_detail", "watch"],
                 "description": (
                     "plan: the arc + the stored week. "
                     "week: this week's REAL dates (weekday->date) plus any stored sessions. "
                     "today: today's stored session. "
                     "baseline: the stored fitness baseline. "
                     "history: recent completed runs — read before reviewing a week or planning the next. "
+                    "watch: the workouts actually in her Garmin library right now — CHECK this "
+                    "before claiming anything is or isn't on the watch. "
                     "run_detail: one recent workout from Garmin — ANY activity type (0 = most recent, "
                     "even if it's strength, not a run). Runs get a per-split/lap breakdown (pace + HR "
                     "per rep) so you can see how the intervals/pacing actually went; other workouts "
@@ -63,8 +65,10 @@ SAVE_TRAINING_PLAN_TOOL: dict = {
     "name": "save_training_plan",
     "description": (
         "Persist the plan you've designed or adjusted. Author it from the REAL dates you "
-        "were given (never invent dates). Call whenever you create or change the arc or the "
-        "week, so it survives to next time."
+        "were given (never invent dates). Saves MERGE: days you send replace the same-dated "
+        "stored days; days you don't mention are KEPT — updating the arc or one session can "
+        "never destroy the rest of the week. Set replace_week=true ONLY when re-authoring "
+        "the entire week (the Sunday review). The result reports what's now stored — read it."
     ),
     "input_schema": {
         "type": "object",
@@ -73,13 +77,20 @@ SAVE_TRAINING_PLAN_TOOL: dict = {
                 "type": "object",
                 "description": (
                     'The plan doc: {"arc": "<phases, weeks to goal, where they are now>", '
-                    '"week": [{"date": "YYYY-MM-DD", "type": "easy|long|intervals|tempo|recovery|rest", '
-                    '"detail": "what to do"}, ...]} using this week\'s real dates.'
+                    '"week": [{"date": "YYYY-MM-DD", '
+                    '"type": "easy|long|intervals|tempo|recovery|strength|rest", '
+                    '"detail": "what to do"}, ...]} using this week\'s real dates. '
+                    'Strength days are type "strength", never "rest".'
                 ),
             },
             "baseline": {
                 "type": "string",
                 "description": "Optional: a short fitness baseline summary to store/update.",
+            },
+            "replace_week": {
+                "type": "boolean",
+                "default": False,
+                "description": "True ONLY for a full week re-author (Sunday review) — the sole way stored days can be dropped.",
             },
         },
         "required": ["plan"],
@@ -89,10 +100,11 @@ SAVE_TRAINING_PLAN_TOOL: dict = {
 PUSH_TO_WATCH_TOOL: dict = {
     "name": "push_to_watch",
     "description": (
-        "Push a STRUCTURED workout to the user's Garmin watch and schedule it on a real date, "
-        "so they just open Garmin and press start (no translating the plan into action). Author "
-        "the session as a spec; supports warmup/cooldown, intervals/sprints, tempo, long runs, "
-        "recovery, and repeat blocks, with pace or HR targets."
+        "Push a STRUCTURED workout to the user's Garmin watch and schedule it on a real date. "
+        "Push only AFTER they've agreed ('shall I put these on your watch?' -> yes) — their "
+        "watch is theirs. A push REPLACES any same-named workout, so corrections update "
+        "rather than stack. Author the session as a spec; supports warmup/cooldown, "
+        "intervals/sprints, tempo, long runs, recovery, and repeat blocks, with pace or HR targets."
     ),
     "input_schema": {
         "type": "object",
@@ -203,6 +215,20 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, move_
             lines.append(f"  {r.ran_on.isoformat()}{dist}: {r.note}")
         return "\n".join(lines)
 
+    if what == "watch":
+        try:
+            workouts = move_service.watch_workouts(user_id)
+        except RuntimeError as exc:
+            return str(exc)
+        except Exception:
+            _log.warning("watch list failed", exc_info=True)
+            return "Couldn't reach Garmin just now — try again in a moment."
+        if not workouts:
+            return "No workouts in her Garmin library."
+        lines = ["On her Garmin (workout library, newest first):"]
+        lines.extend(f"  {w['name']}" for w in workouts)
+        return "\n".join(lines)
+
     if what == "run_detail":
         which = input_dict.get("which")
         try:
@@ -220,7 +246,7 @@ def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, move_
             return "No recent workout found to review. Sync Garmin first, or check the number."
         return _fmt_run_detail(detail)
 
-    return "Unknown request. Use what: plan, week, today, baseline, history, or run_detail."
+    return "Unknown request. Use what: plan, week, today, baseline, history, run_detail, or watch."
 
 
 def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
@@ -234,15 +260,20 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
         return "The plan needs to be a JSON object with 'arc' and 'week'."
     baseline = input_dict.get("baseline")
     baseline = str(baseline) if baseline is not None else None
+    replace_week = bool(input_dict.get("replace_week", False))
     try:
         goals = move_service.training_goals(user_id)
         goal_id = goals[0].id if goals else None
-        move_service.save_plan(user_id, plan=plan, baseline=baseline, goal_id=goal_id)
+        saved = move_service.save_plan(user_id, plan=plan, baseline=baseline,
+                                       goal_id=goal_id, replace_week=replace_week)
     except Exception:
         _log.warning("save_training_plan failed", exc_info=True)
         return "Couldn't save the plan just now — try again in a moment."
-    n = len([s for s in plan.get("week", []) if isinstance(s, dict)])
-    return f"Saved the plan ({n} day(s) this week)."
+    week = [s for s in saved.plan.get("week", []) if isinstance(s, dict) and s.get("date")]
+    sent = len([s for s in plan.get("week", []) if isinstance(s, dict)])
+    span = f" ({week[0]['date']} to {week[-1]['date']})" if week else ""
+    mode = "Replaced the stored week" if replace_week else f"Merged {sent} day(s) in"
+    return f"{mode}. Stored week now holds {len(week)} session(s){span}."
 
 
 def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:

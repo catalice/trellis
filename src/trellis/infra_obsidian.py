@@ -125,6 +125,7 @@ class ObsidianVault:
         effort_repo,
         state_repo=None,
         move_repo=None,
+        health_repo=None,   # activities read — lets strength sessions tick off
     ) -> None:
         self._vault = vault
         self._tz = tz
@@ -133,6 +134,7 @@ class ObsidianVault:
         self._efforts = effort_repo
         self._states = state_repo
         self._move = move_repo
+        self._health = health_repo
 
     # --- Daily notes (journal) ---------------------------------------------
 
@@ -548,6 +550,7 @@ class ObsidianVault:
             runs = self._move.recent_runs(user_id, limit=12)
             runs_by_date = {r.ran_on.isoformat(): r for r in runs}
             now = datetime.now(self._tz)
+            acts_by_date = self._activity_types_by_date(user_id, now)
 
             parts = [
                 "# Training Plan\n",
@@ -563,9 +566,11 @@ class ObsidianVault:
                 parts.append(f"## Baseline\n{plan.baseline}\n")
 
             week = plan_doc.get("week") or []
-            session_lines, matched_dates = self._session_lines(week, runs_by_date)
+            session_lines, matched_dates = self._session_lines(week, runs_by_date, acts_by_date)
             if session_lines:
-                parts.append("\n".join(["## This Week\n", *session_lines]) + "\n")
+                dated = [str(s.get("date")) for s in week if isinstance(s, dict) and s.get("date")]
+                span = f" ({dated[0]} to {dated[-1]})" if dated else ""
+                parts.append("\n".join([f"## This Week{span}\n", *session_lines]) + "\n")
 
             extra_runs = [r for r in runs if r.ran_on.isoformat() not in matched_dates]
             if extra_runs:
@@ -583,13 +588,36 @@ class ObsidianVault:
                 return
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("\n".join(parts), encoding="utf-8")
-            self._write_training_week(week, runs_by_date, now)
+            self._write_training_week(week, runs_by_date, acts_by_date, now)
         except Exception:
             _log.warning("obsidian: Training plan write failed", exc_info=True)
 
-    def _session_lines(self, week: list, runs_by_date: dict) -> "tuple[list[str], set[str]]":
-        """Checkbox lines for a week's sessions, runs ticked off by date —
-        shared by the main page and the week archive so they can never drift."""
+    def _activity_types_by_date(self, user_id: UUID, now: datetime) -> dict:
+        """date-iso -> [activity types] from synced Garmin — how non-run
+        sessions (strength) get ticked off."""
+        if self._health is None:
+            return {}
+        try:
+            out: dict = {}
+            since = (now - timedelta(days=14)).date()
+            for a in self._health.activities_since(user_id, since=since):
+                epoch = getattr(a, "start_time_epoch_seconds", None)
+                if not epoch:
+                    continue
+                d = datetime.fromtimestamp(int(epoch), tz=timezone.utc).astimezone(self._tz).date().isoformat()
+                out.setdefault(d, []).append((a.activity_type or "").lower())
+            return out
+        except Exception:
+            _log.warning("obsidian: activity types load failed", exc_info=True)
+            return {}
+
+    def _session_lines(self, week: list, runs_by_date: dict,
+                       acts_by_date: dict | None = None) -> "tuple[list[str], set[str]]":
+        """Checkbox lines for a week's sessions — runs ticked by the run log,
+        strength sessions ticked by a strength activity on the day (they were
+        structurally untickable before 12 Aug: only runs could match). Shared
+        by the main page and the week archive so they can never drift."""
+        acts_by_date = acts_by_date or {}
         lines: list[str] = []
         matched: set[str] = set()
         for sess in week:
@@ -605,11 +633,18 @@ class ObsidianVault:
                 matched.add(s_date)
                 dist = f" — {run.distance_km}km done" if run.distance_km else " — done"
                 lines.append(f"- [x] {day_name} — {s_type}: {s_detail}{dist}")
-            else:
-                lines.append(f"- [ ] {day_name} — {s_type}: {s_detail}")
+                continue
+            is_strength = "strength" in f"{s_type} {s_detail}".lower()
+            if is_strength and any(
+                "strength" in t or "training" in t for t in acts_by_date.get(s_date, [])
+            ):
+                lines.append(f"- [x] {day_name} — {s_type}: {s_detail} — done")
+                continue
+            lines.append(f"- [ ] {day_name} — {s_type}: {s_detail}")
         return lines, matched
 
-    def _write_training_week(self, week: list, runs_by_date: dict, now: datetime) -> None:
+    def _write_training_week(self, week: list, runs_by_date: dict,
+                             acts_by_date: dict, now: datetime) -> None:
         """Archive the plan's week to Weeks/<YYYY-Www>.md. Rewritten while it's
         the live week; once the plan moves on, the file is simply left behind —
         a frozen record of planned vs run."""
@@ -624,7 +659,7 @@ class ObsidianVault:
             f"# Week {iso_week}, {iso_year}\n",
             f"_Updated {now.strftime('%d %b %Y, %H:%M')}_\n",
         ]
-        session_lines, _matched = self._session_lines(week, runs_by_date)
+        session_lines, _matched = self._session_lines(week, runs_by_date, acts_by_date)
         lines.extend(session_lines)
         path = self._vault / _TRAINING_WEEKS_DIR / f"{iso_year:04d}-W{iso_week:02d}.md"
         path.parent.mkdir(parents=True, exist_ok=True)

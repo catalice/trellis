@@ -176,12 +176,14 @@ def main() -> None:
     state_repo = PostgresStateRepository(database)
 
     move_repo = PostgresMoveRepository(database)
+    health_reader = PostgresHealthRepository(database)
 
     vault = ObsidianVault(
         settings.obsidian_vault, settings.timezone,
         task_repo, reminder_repo, effort_repo,
         state_repo=state_repo,
         move_repo=move_repo,
+        health_repo=health_reader,
     )
 
     capture_service = CaptureService(capture_repo, projection=vault, memory=memory)
@@ -200,11 +202,6 @@ def main() -> None:
     # secret key (to decrypt the stored session) and, for reads/sync, a health-worker
     # URL. Absent -> the coach still plans; the Garmin tools just say "connect first".
     #
-    # Recent health/readiness (sleep, HRV, body battery) — synced by the health worker;
-    # the coach reads the latest to factor into planning. Always available as a reader;
-    # returns None per-user when there's no synced health yet.
-    health_reader = PostgresHealthRepository(database)
-
     # --- Sense domain (Mind / wellbeing tracking + reads Garmin health) ---
     sense_service = SenseService(
         state_repo, settings.timezone, projection=vault, health_reader=health_reader,
