@@ -418,8 +418,10 @@ class TestVaultTrainingPlan:
         assert "- [x] Sun 02 Aug — easy: 28min 3:1 run-walk — 3.26km done" in page
         assert "- [ ] Tue 04 Aug — long: 40min easy" in page
         assert "Drill workout" in page  # unmatched run listed under Recent Runs
-        week_file = tmp_path / "Calendar" / "Training" / "Weeks" / "2026-W31.md"
-        assert "- [x] Sun 02 Aug" in week_file.read_text()  # archived, ticked
+        week_file = tmp_path / "Calendar" / "Training" / "Weeks" / "2026-08-02 week.md"
+        text = week_file.read_text()
+        assert "# Week of 2 August 2026" in text
+        assert "- [x] Sun 02 Aug" in text  # archived, ticked
 
     def test_no_plan_no_crash(self, tmp_path):
         vault = ObsidianVault(tmp_path, TZ, None, None, None,
