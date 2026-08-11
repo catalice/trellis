@@ -624,6 +624,11 @@ class Watcher:
             if not p["test_spec"]:
                 continue
             verified, evidence, stats = verify(frame, p["test_spec"], theme_counter=counter)
+            if stats.get("error"):
+                # The test COULDN'T RUN (missing index, unknown verb) — that is
+                # not a result. Never overwrite real evidence or demote on it.
+                _log.warning("watcher: test could not run for %s: %s", p["id"], evidence)
+                continue
             self._repo.set_verification(p["id"], verified=verified,
                                         evidence=evidence, stats=stats)
 
