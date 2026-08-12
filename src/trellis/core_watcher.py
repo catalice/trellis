@@ -209,6 +209,18 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
         if bucket["mood"]:
             row(d)["mood"] = sum(bucket["mood"]) / len(bucket["mood"])
 
+    # Her WORDS reach the garden too (her call, 12 Aug): "anxious" can only
+    # cluster into a pattern if discovery can read it. Truncated hard — a few
+    # short snippets per day; rambles are brain_dump's job, not the frame's.
+    for s_ in states:
+        note = (getattr(s_, "note", "") or "").strip()
+        if not note:
+            continue
+        d = s_.felt_at.astimezone(tz).date()
+        notes = row(d).setdefault("notes", [])
+        if len(notes) < 3:
+            notes.append(note[:80])
+
     period_starts: list[date] = []
     for e in events:
         d = e.occurred_at.astimezone(tz).date()

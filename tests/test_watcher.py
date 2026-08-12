@@ -138,6 +138,22 @@ class TestDailyFrame(unittest.TestCase):
         self.assertEqual(row["phase"], "menstruation")
 
 
+class TestNotesInFrame(unittest.TestCase):
+    def test_her_words_land_truncated_and_capped(self):
+        uid = uuid4()
+        noon = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        states = [SimpleNamespace(felt_at=noon, energy=2, mood=2,
+                                  note="feeling really anxious about " + "x" * 100)]
+        states += [SimpleNamespace(felt_at=noon, energy=None, mood=None,
+                                   note=f"note {i}") for i in range(5)]
+        frame = build_daily_frame(uid, states=states, events=[], health_rows=[],
+                                  runs=[], tz=TZ, today=date(2026, 6, 4))
+        notes = frame[date(2026, 6, 3)]["notes"]
+        self.assertEqual(len(notes), 3)          # capped
+        self.assertLessEqual(len(notes[0]), 80)  # truncated
+        self.assertIn("anxious", notes[0])
+
+
 class TestDiscoveryParsing(unittest.TestCase):
     def test_parses_hypotheses_with_and_without_tests(self):
         raw = """```json

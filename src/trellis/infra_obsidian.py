@@ -316,10 +316,11 @@ class ObsidianVault:
             states = self._states.list_states_since(user_id, since=since)
             events = self._states.list_events_since(user_id, since=since)
             period_start = self._states.last_period_start(user_id)
+            garmin_by_day = self._garmin_sleep_range(user_id, since.date())
 
             parts = [_TRACKING_HEADER]
             parts.append(f"_Updated {now.strftime('%a %d %b, %H:%M')}_\n")
-            day_parts = self._render_tracking_days(states, events, period_start)
+            day_parts = self._render_tracking_days(states, events, period_start, garmin_by_day)
             if day_parts:
                 parts.extend(day_parts)
             else:
@@ -365,15 +366,26 @@ class ObsidianVault:
             if not states and not events:
                 return
             period_start = self._states.last_period_start(user_id)
+            garmin_by_day = self._garmin_sleep_range(user_id, month_start.date())
             parts = [f"# Tracking — {month_start.strftime('%B %Y')}\n"]
-            parts.extend(self._render_tracking_days(states, events, period_start))
+            parts.extend(self._render_tracking_days(states, events, period_start, garmin_by_day))
             path = self._vault / _TRACKING_HISTORY_DIR / f"{year:04d}-{month:02d}.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("\n".join(parts), encoding="utf-8")
         except Exception:
             _log.warning("obsidian: Tracking month write failed", exc_info=True)
 
-    def _render_tracking_days(self, states, events, period_start) -> list[str]:
+    def _garmin_sleep_range(self, user_id: UUID, since: date) -> dict:
+        if self._health is None:
+            return {}
+        try:
+            return {r.observed_on: r for r in
+                    self._health.daily_health_since(user_id, since=since)}
+        except Exception:
+            return {}
+
+    def _render_tracking_days(self, states, events, period_start,
+                              garmin_by_day: dict | None = None) -> list[str]:
         """Day-by-day tracking sections (newest first) — shared by Recent.md and
         the monthly History files so the two views can never drift."""
         by_day_states: dict = {}
@@ -418,7 +430,17 @@ class ObsidianVault:
 
             if meds:
                 parts.append(f"**Meds:** {', '.join(meds)}")
-            if sleeps:
+            g = (garmin_by_day or {}).get(day)
+            g_bits = []
+            if g is not None and g.sleep_duration_minutes is not None:
+                g_bits.append(f"{round(g.sleep_duration_minutes / 60, 1)}h")
+                if g.sleep_score is not None:
+                    g_bits.append(f"score {g.sleep_score}")
+            if g_bits and sleeps:
+                parts.append(f"**Sleep:** {' '.join(g_bits)} (Garmin) · her report: {', '.join(sleeps)}")
+            elif g_bits:
+                parts.append(f"**Sleep:** {' '.join(g_bits)} (Garmin)")
+            elif sleeps:
                 parts.append(f"**Sleep:** {', '.join(sleeps)}")
             if cycle_day is not None or cycle_notes:
                 cyc = ([f"day {cycle_day}"] if cycle_day is not None else []) + cycle_notes
@@ -471,10 +493,17 @@ class ObsidianVault:
                 props["mood"] = _range_or_value(moods)
             if states:
                 props["entries"] = len(states)
-            sleeps = [e.value for e in events
-                      if e.event_type == TrackingEventType.SLEEP and e.value is not None]
-            if sleeps:
-                props["sleep_hours"] = round(float(sleeps[-1]), 1)
+            # Sleep: Garmin is the source of truth when synced (her call, 12 Aug
+            # — hours, score, and the stage splits); her own report is the
+            # fallback for watchless nights.
+            garmin_sleep = self._garmin_sleep_for(user_id, day)
+            if garmin_sleep:
+                props.update(garmin_sleep)
+            else:
+                sleeps = [e.value for e in events
+                          if e.event_type == TrackingEventType.SLEEP and e.value is not None]
+                if sleeps:
+                    props["sleep_hours"] = round(float(sleeps[-1]), 1)
             meds = [e.detail for e in events
                     if e.event_type == TrackingEventType.MEDS and e.detail]
             if meds:
@@ -494,7 +523,41 @@ class ObsidianVault:
     # The frontmatter keys Trellis owns. Everything else in a note's frontmatter
     # is the USER'S (added in Obsidian) and must survive a rewrite — the
     # append-only promise covers their metadata, not just their body text.
-    _MANAGED_FRONTMATTER_KEYS = ("energy", "mood", "entries", "sleep_hours", "meds", "cycle_day")
+    _MANAGED_FRONTMATTER_KEYS = (
+        "energy", "mood", "entries", "sleep_hours", "sleep_score",
+        "sleep_deep_h", "sleep_rem_h", "sleep_light_h", "sleep_awake_h",
+        "meds", "cycle_day",
+    )
+
+    def _garmin_sleep_for(self, user_id: UUID, day: date) -> dict:
+        """Garmin's sleep for one day as frontmatter props: hours, score, and
+        the REM/deep/light/awake splits (stages live in the raw payload).
+        Empty dict when nothing synced — caller falls back to self-report."""
+        if self._health is None:
+            return {}
+        try:
+            rows = [r for r in self._health.daily_health_since(user_id, since=day)
+                    if r.observed_on == day]
+        except Exception:
+            _log.warning("obsidian: garmin sleep load failed", exc_info=True)
+            return {}
+        if not rows:
+            return {}
+        r = rows[0]
+        props: dict = {}
+        if r.sleep_duration_minutes is not None:
+            props["sleep_hours"] = round(r.sleep_duration_minutes / 60, 1)
+        if r.sleep_score is not None:
+            props["sleep_score"] = r.sleep_score
+        raw = r.raw or {}
+        for raw_key, prop in (("sleep_deep_minutes", "sleep_deep_h"),
+                              ("sleep_rem_minutes", "sleep_rem_h"),
+                              ("sleep_light_minutes", "sleep_light_h"),
+                              ("sleep_awake_minutes", "sleep_awake_h")):
+            val = raw.get(raw_key)
+            if isinstance(val, (int, float)):
+                props[prop] = round(val / 60, 1)
+        return props
 
     def _upsert_frontmatter(self, path: Path, props: dict) -> None:
         user_lines: list[str] = []
