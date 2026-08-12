@@ -21,6 +21,7 @@ from trellis.domain_move_repo import PostgresMoveRepository
 from trellis.domain_sense_repo import PostgresStateRepository
 from trellis.infra_obsidian import ObsidianVault
 from trellis.infra_postgres import PostgresDatabase
+from trellis.infra_tracking import PostgresHealthRepository
 
 
 def main() -> int:
@@ -32,6 +33,7 @@ def main() -> int:
         None, None, None,
         state_repo=states_repo,
         move_repo=PostgresMoveRepository(database),
+        health_repo=PostgresHealthRepository(database),
     )
 
     epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
