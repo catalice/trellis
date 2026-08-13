@@ -261,6 +261,15 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
     baseline = input_dict.get("baseline")
     baseline = str(baseline) if baseline is not None else None
     replace_week = bool(input_dict.get("replace_week", False))
+    # Baseline is a wholesale text replace — echo what it overwrote so a bad
+    # rewrite is visible in the result, not silently gone.
+    old_baseline = None
+    if baseline is not None:
+        try:
+            prev = move_service.get_plan(user_id)
+            old_baseline = prev.baseline if prev else None
+        except Exception:
+            old_baseline = None
     try:
         goals = move_service.training_goals(user_id)
         goal_id = goals[0].id if goals else None
@@ -273,7 +282,10 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
     sent = len([s for s in plan.get("week", []) if isinstance(s, dict)])
     span = f" ({week[0]['date']} to {week[-1]['date']})" if week else ""
     mode = "Replaced the stored week" if replace_week else f"Merged {sent} day(s) in"
-    return f"{mode}. Stored week now holds {len(week)} session(s){span}."
+    result = f"{mode}. Stored week now holds {len(week)} session(s){span}."
+    if baseline is not None and old_baseline and old_baseline != baseline:
+        result += f'\nBaseline replaced — the old one said: "{old_baseline}"'
+    return result
 
 
 def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:

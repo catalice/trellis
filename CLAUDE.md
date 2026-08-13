@@ -255,18 +255,18 @@ Two patterns, chosen by risk profile:
 | Pattern | When to use | Why |
 |---|---|---|
 | **Dispatch read** `{house}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
-| **Specific named write** `save_training_plan`, `complete_task` | All writes | High-stakes. Explicit names prevent confusion. |
+| **Specific named write** `save_training_plan`, `update_task` | All writes | High-stakes. Explicit names prevent confusion. |
 
-**All tools are always available** — routing never gates them. The current 23:
+**All tools are always available** — routing never gates them. The current 22:
 
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`, `pattern_response`
-- **Focus:** `focus_get`, `create_task`, `complete_task`, `update_task`, `set_reminder`, `cancel_reminder`, `add_goal`, `update_goal`, `save_to_effort`, `cleanup_session`, `delete_entry`, `web_search`
+- **Focus:** `focus_get`, `create_task`, `update_task`, `set_reminder`, `cancel_reminder`, `add_goal`, `update_goal`, `save_to_effort`, `cleanup_session`, `delete_entry`, `web_search`
 - **Sense:** `log_state` (the ONE tool — reads are context, not tools)
 - **Move:** `training_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_run`
 
 (Onboarding mode additionally wires `save_identity`.)
 
-**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 23 (update_run added 9 Aug — her account of a run lands on its record; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 22 (update_run added 9 Aug — her account of a run lands on its record; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 

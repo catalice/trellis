@@ -122,6 +122,51 @@ def _current_context_loader(svc: CurrentContextService):
 
 # --- Main -----------------------------------------------------------------
 
+def build_vault(database: PostgresDatabase, settings: Settings) -> ObsidianVault:
+    """The ONE way to construct the vault, fully wired. Hand-built vaults with
+    None repos shipped pages with silent holes twice — every consumer (main and
+    scripts alike) goes through here."""
+    return ObsidianVault(
+        settings.obsidian_vault, settings.timezone,
+        PostgresTaskRepository(database),
+        PostgresReminderRepository(database),
+        PostgresEffortRepository(database),
+        state_repo=PostgresStateRepository(database),
+        move_repo=PostgresMoveRepository(database),
+        health_repo=PostgresHealthRepository(database),
+    )
+
+
+def build_watcher(
+    database: PostgresDatabase,
+    settings: Settings,
+    anthropic_client: Anthropic,
+    *,
+    vault: ObsidianVault | None = None,
+    memory: MemoryIndex | None = None,
+    history: PostgresConversationHistory | None = None,
+) -> Watcher:
+    """The ONE way to construct the Watcher, fully wired. A missing dep here
+    doesn't error — it reads as a failed verification (10 Aug), so partial
+    hand-wiring is banned. Pass shared instances to reuse them; omitted deps
+    are built fresh (repos are stateless wrappers, duplicates are harmless)."""
+    return Watcher(
+        PostgresWatcherRepository(database),
+        WatcherDiscovery(anthropic_client, settings.anthropic_model),
+        state_repo=PostgresStateRepository(database),
+        health_repo=PostgresHealthRepository(database),
+        run_repo=PostgresMoveRepository(database),
+        tz=settings.timezone,
+        vault=vault if vault is not None else build_vault(database, settings),
+        task_repo=PostgresTaskRepository(database),
+        capture_repo=PostgresCaptureRepository(database),
+        effort_repo=PostgresEffortRepository(database),
+        memory=memory if memory is not None else MemoryIndex(database, LocalEmbedder()),
+        history=history if history is not None
+        else PostgresConversationHistory(database, settings.timezone),
+    )
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -178,13 +223,7 @@ def main() -> None:
     move_repo = PostgresMoveRepository(database)
     health_reader = PostgresHealthRepository(database)
 
-    vault = ObsidianVault(
-        settings.obsidian_vault, settings.timezone,
-        task_repo, reminder_repo, effort_repo,
-        state_repo=state_repo,
-        move_repo=move_repo,
-        health_repo=health_reader,
-    )
+    vault = build_vault(database, settings)
 
     capture_service = CaptureService(capture_repo, projection=vault, memory=memory)
     effort_service = EffortService(effort_repo, projection=vault, memory=memory)
@@ -277,19 +316,9 @@ def main() -> None:
 
     # --- The Watcher (the big brain's slow mind) ---
     # Discovery is the ONLY source of hypotheses — nothing is planted here.
-    watcher = Watcher(
-        PostgresWatcherRepository(database),
-        WatcherDiscovery(anthropic_client, settings.anthropic_model),
-        state_repo=state_repo,
-        health_repo=health_reader,
-        run_repo=move_repo,
-        tz=settings.timezone,
-        vault=vault,
-        task_repo=task_repo,
-        capture_repo=capture_repo,
-        effort_repo=effort_repo,
-        memory=memory,
-        history=history,
+    watcher = build_watcher(
+        database, settings, anthropic_client,
+        vault=vault, memory=memory, history=history,
     )
 
     # Always-available tools — offered every turn regardless of the routed domain.

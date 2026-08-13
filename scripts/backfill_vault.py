@@ -17,24 +17,16 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, "src")
 from trellis.core_config import Settings
-from trellis.domain_move_repo import PostgresMoveRepository
+from trellis.core_main import build_vault
 from trellis.domain_sense_repo import PostgresStateRepository
-from trellis.infra_obsidian import ObsidianVault
 from trellis.infra_postgres import PostgresDatabase
-from trellis.infra_tracking import PostgresHealthRepository
 
 
 def main() -> int:
     settings = Settings.from_env()
     database = PostgresDatabase(settings.database_url)
     states_repo = PostgresStateRepository(database)
-    vault = ObsidianVault(
-        settings.obsidian_vault, settings.timezone,
-        None, None, None,
-        state_repo=states_repo,
-        move_repo=PostgresMoveRepository(database),
-        health_repo=PostgresHealthRepository(database),
-    )
+    vault = build_vault(database, settings)
 
     epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
     total_days = 0

@@ -788,3 +788,53 @@ class TestSaveToEffort:
         )
         assert task_repo.tasks[seed.id].status == TaskStatus.DROPPED
         assert task_svc.list_seeds(UID) == []
+
+
+class TestAuditConsolidation:
+    """12 Aug audit: complete_task folded into update_task status='done'
+    (item 5) and duplicate warnings on set_reminder/create_task (items 3-4)."""
+
+    def test_update_task_status_done_completes(self):
+        from trellis.domain_focus_tool import handle_update_task
+        repo = FakeTaskRepo()
+        svc = TaskService(repo, TZ)
+        task = svc.create(UID, "Buy wine", now=NOW)
+        reply = handle_update_task(
+            UID, {"task_id": str(task.id), "status": "done"}, NOW, task_service=svc,
+        )
+        assert reply == "Done: Buy wine"
+        assert repo.get(task.id).status == TaskStatus.DONE
+
+    def test_update_task_done_plus_field_applies_both(self):
+        from trellis.domain_focus_tool import handle_update_task
+        repo = FakeTaskRepo()
+        svc = TaskService(repo, TZ)
+        task = svc.create(UID, "Buy wine", now=NOW)
+        reply = handle_update_task(
+            UID, {"task_id": str(task.id), "status": "done", "title": "Buy cava"},
+            NOW, task_service=svc,
+        )
+        assert "Done" in reply
+        assert repo.get(task.id).status == TaskStatus.DONE
+        assert repo.get(task.id).title == "Buy cava"
+
+    def test_set_reminder_warns_on_same_label(self):
+        from trellis.domain_focus_tool import handle_set_reminder
+        svc = ReminderService(FakeReminderRepo(), TZ)
+        svc.set(UID, "Daily check-in", NOW + timedelta(days=1), now=NOW)
+        reply = handle_set_reminder(
+            UID, {"label": "daily check-in", "remind_at": "2026-08-20T09:00"},
+            NOW, reminder_service=svc, tz=TZ,
+        )
+        assert "Reminder set" in reply
+        assert "already existed" in reply
+
+    def test_create_task_warns_on_same_title(self):
+        from trellis.domain_focus_tool import handle_create_task
+        svc = TaskService(FakeTaskRepo(), TZ)
+        svc.create(UID, "Email venue", now=NOW)
+        reply = handle_create_task(
+            UID, {"title": "email venue"}, NOW, task_service=svc, tz=TZ,
+        )
+        assert "Task created" in reply
+        assert "already existed" in reply

@@ -111,26 +111,14 @@ CREATE_TASK_TOOL: dict = {
     },
 }
 
-COMPLETE_TASK_TOOL: dict = {
-    "name": "complete_task",
-    "description": "Mark a task as done.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "task_id": {"type": "string", "description": "UUID of the task."}
-        },
-        "required": ["task_id"],
-    },
-}
-
 UPDATE_TASK_TOOL: dict = {
     "name": "update_task",
     "description": (
         "Update a task or seed: title, priority, energy, kind, due date, "
-        "description, or status. Delete/remove → status='dropped' (gone from "
-        "every view, never again). Shelve for later → status='parked' (visible "
-        "in its own section). Reclassify todo↔seed with kind. "
-        "Only send fields that change."
+        "description, or status. Done → status='done'. Delete/remove → "
+        "status='dropped' (gone from every view, never again). Shelve for "
+        "later → status='parked' (visible in its own section). Reclassify "
+        "todo↔seed with kind. Only send fields that change."
     ),
     "input_schema": {
         "type": "object",
@@ -141,8 +129,8 @@ UPDATE_TASK_TOOL: dict = {
             "energy": {"type": "string", "enum": ["low", "medium", "high"]},
             "kind": {"type": "string", "enum": ["todo", "seed"]},
             "status": {
-                "type": "string", "enum": ["open", "dropped", "parked"],
-                "description": "dropped = never again, invisible. parked = not now, shelved but visible. open = back on the list.",
+                "type": "string", "enum": ["open", "done", "dropped", "parked"],
+                "description": "done = completed. dropped = never again, invisible. parked = not now, shelved but visible. open = back on the list.",
             },
             "due": {
                 "type": "string",
@@ -272,8 +260,8 @@ DELETE_ENTRY_TOOL: dict = {
 CLEANUP_SESSION_TOOL: dict = {
     "name": "cleanup_session",
     "description": (
-        "Manage the periodic cleanup — reviewing unassigned captures and organising them. "
-        "action='inbox': return unassigned captures ready for review. "
+        "Manage the periodic cleanup — organising reviewed captures. "
+        "(To LIST unassigned captures, use focus_get what='inbox'.) "
         "action='suggest_efforts': get AI suggestions for recurring themes worth naming as Efforts. "
         "action='assign': assign a capture to an effort or archive it."
     ),
@@ -282,7 +270,7 @@ CLEANUP_SESSION_TOOL: dict = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["inbox", "suggest_efforts", "assign"],
+                "enum": ["suggest_efforts", "assign"],
             },
             "capture_id": {
                 "type": "string",
@@ -472,28 +460,21 @@ def handle_create_task(
         now=now,
     )
     due = f" — due {_fmt_datetime(task.due_at, tz)}" if task.due_at else ""
-    return f"Task created: {task.title}{due} [{task.id}]"
-
-
-def handle_complete_task(
-    user_id: UUID,
-    input_dict: dict,
-    now: datetime,
-    *,
-    task_service,
-) -> str:
-    task_id_str = str(input_dict.get("task_id", "")).strip()
-    if not task_id_str:
-        return "task_id is required."
+    result = f"Task created: {task.title}{due} [{task.id}]"
     try:
-        task_id = UUID(task_id_str)
-    except ValueError:
-        return f"Invalid task_id: {task_id_str!r}"
-    try:
-        task = task_service.complete(user_id, task_id, now=now)
-        return f"Done: {task.title}"
-    except TaskNotFoundError:
-        return f"Task not found: {task_id_str}"
+        dup = next(
+            (t for t in task_service.list_open(user_id)
+             if t.id != task.id and t.title.strip().lower() == title.lower()),
+            None,
+        )
+        if dup is not None:
+            result += (
+                f"\nHeads up: an open task with this title already existed [{dup.id}]. "
+                "If that makes this a duplicate, ask them which to drop."
+            )
+    except Exception:
+        pass
+    return result
 
 
 def handle_update_task(
@@ -510,6 +491,15 @@ def handle_update_task(
         task_id = UUID(task_id_str)
     except ValueError:
         return f"Invalid task_id: {task_id_str!r}"
+
+    # status='done' routes through complete(): it owns completed_at, the task
+    # event, and the vault refresh — a plain status write would skip all three.
+    completed = None
+    if input_dict.get("status") == "done":
+        try:
+            completed = task_service.complete(user_id, task_id, now=now)
+        except TaskNotFoundError:
+            return f"Task not found: {task_id_str}"
 
     kwargs: dict[str, Any] = {}
     if "title" in input_dict:
@@ -528,6 +518,7 @@ def handle_update_task(
         from trellis.domain_focus_models import TaskStatus
         if input_dict["status"] in ("open", "dropped", "parked"):
             kwargs["status"] = TaskStatus(input_dict["status"])
+
     if "kind" in input_dict:
         from trellis.domain_focus_models import TaskKind
         try:
@@ -539,11 +530,16 @@ def handle_update_task(
     if "description" in input_dict:
         kwargs["description"] = input_dict["description"]
 
+    if completed is not None and not kwargs:
+        return f"Done: {completed.title}"
+
     try:
         task = task_service.update(user_id, task_id, **kwargs, now=now)
-        return f"Updated: {task.title}"
     except TaskNotFoundError:
         return f"Task not found: {task_id_str}"
+    if completed is not None:
+        return f"Done + updated: {task.title}"
+    return f"Updated: {task.title}"
 
 
 def handle_set_reminder(
@@ -577,9 +573,28 @@ def handle_set_reminder(
     recurrence = input_dict.get("recurrence")
     if recurrence not in ("daily", "weekly", "monthly", "yearly"):
         recurrence = None
+    # Duplicate guard: warn, never block — a same-label reminder is usually a
+    # re-ask that already exists, and silent duplicates fire twice.
+    dup = None
+    try:
+        dup = next(
+            (r for r in reminder_service.all_scheduled(user_id)
+             if r.label.strip().lower() == label.lower()),
+            None,
+        )
+    except Exception:
+        dup = None
     reminder = reminder_service.set(user_id, label, remind_at, task_id=task_id, recurrence=recurrence, now=now)
     repeats = f", repeats {reminder.recurrence}" if reminder.recurrence else ""
-    return f"Reminder set: {reminder.label} @ {_fmt_datetime(reminder.remind_at, tz)}{repeats} [{reminder.id}]"
+    result = f"Reminder set: {reminder.label} @ {_fmt_datetime(reminder.remind_at, tz)}{repeats} [{reminder.id}]"
+    if dup is not None:
+        dup_repeats = f", repeats {dup.recurrence}" if dup.recurrence else ""
+        result += (
+            f"\nHeads up: a scheduled reminder with this label already existed — "
+            f"@ {_fmt_datetime(dup.remind_at, tz)}{dup_repeats} [{dup.id}]. "
+            "If that makes this a duplicate, ask them which to cancel."
+        )
+    return result
 
 
 def handle_cancel_reminder(
@@ -629,7 +644,21 @@ def handle_add_goal(
         notes=input_dict.get("notes"),
         now=now,
     )
-    return f"Goal added: {goal.summary()} [{goal.id}]"
+    result = f"Goal added: {goal.summary()} [{goal.id}]"
+    try:
+        dup = next(
+            (g for g in goal_service.list_active(user_id)
+             if g.id != goal.id and g.title.strip().lower() == title.lower()),
+            None,
+        )
+        if dup is not None:
+            result += (
+                f"\nHeads up: an active goal with this title already existed [{dup.id}]. "
+                "If that makes this a duplicate, ask them which to drop."
+            )
+    except Exception:
+        pass
+    return result
 
 
 def handle_update_goal(
@@ -665,11 +694,26 @@ def handle_update_goal(
         except ValueError:
             return f"Unknown status: {input_dict['status']!r}."
 
+    # Notes are a wholesale text replace — echo what got overwritten so a bad
+    # rewrite is visible in the result, not silently gone.
+    old_notes = None
+    if "notes" in kwargs:
+        try:
+            old_notes = next(
+                (g.notes for g in goal_service.list_active(user_id) if g.id == goal_id),
+                None,
+            )
+        except Exception:
+            old_notes = None
+
     try:
         goal = goal_service.update(user_id, goal_id, **kwargs, now=now)
-        return f"Goal updated: {goal.summary()}"
     except GoalNotFoundError:
         return f"Goal not found: {goal_id_str}"
+    result = f"Goal updated: {goal.summary()}"
+    if old_notes and kwargs.get("notes") != old_notes:
+        result += f'\nNotes replaced — they used to say: "{old_notes}"'
+    return result
 
 
 def handle_delete_entry(
@@ -853,15 +897,8 @@ def handle_cleanup_session(
     action = str(input_dict.get("action", "")).strip()
 
     if action == "inbox":
-        captures = cleanup_service.inbox(user_id)
-        if not captures:
-            return "Inbox is clear — no unassigned captures to review."
-        lines = [f"Inbox: {len(captures)} unassigned capture(s)\n"]
-        for c in captures:
-            date_str = c.created_at.strftime("%d %b")
-            summary = c.summary or c.raw[:80]
-            lines.append(f"[{c.id}] {date_str}\n  {summary}\n")
-        return "\n".join(lines)
+        # Folded into focus_get 12 Aug — one read home for the inbox.
+        return "The inbox listing lives in focus_get (what='inbox') — call that instead."
 
     if action == "suggest_efforts":
         suggestions = cleanup_service.suggest_efforts(user_id)
@@ -893,7 +930,7 @@ def handle_cleanup_session(
             capture_service.archive(capture_id)
             return "Capture archived."
 
-    return f"Unknown action: {action!r}. Use: inbox, suggest_efforts, assign."
+    return f"Unknown action: {action!r}. Use: suggest_efforts, assign."
 
 
 # ---------------------------------------------------------------------------
@@ -1065,10 +1102,6 @@ def focus_tools(
         (
             CREATE_TASK_TOOL,
             lambda uid, inp, now: handle_create_task(uid, inp, now, task_service=task_service, tz=tz),
-        ),
-        (
-            COMPLETE_TASK_TOOL,
-            lambda uid, inp, now: handle_complete_task(uid, inp, now, task_service=task_service),
         ),
         (
             UPDATE_TASK_TOOL,

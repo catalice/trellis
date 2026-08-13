@@ -248,8 +248,10 @@ def _fmt_health(health: "dict | None") -> "str | None":
         if synced:
             bits.append(
                 f"TODAY, synced {synced} — sleep/HRV are fixed at wake, but "
-                "body battery and steps move all day: they're as-of the sync, "
-                "not now. Later in the day, sync_garmin before quoting them"
+                "body battery and steps move all day, and Garmin only holds "
+                "what the watch last uploaded: they're as-of the last watch "
+                "sync, never 'now'. If one looks odd or old, say so — "
+                "sync_garmin refreshes from Garmin but can't make the watch upload"
             )
         else:
             bits.append("TODAY")
@@ -275,7 +277,11 @@ def _fmt_health(health: "dict | None") -> "str | None":
             h += f" ({health['hrv_status']})"
         bits.append(h)
     if health.get("body_battery_high") is not None:
-        bits.append(f"body battery {health['body_battery_high']}")
+        # "was … as of" is deliberate: the wire between watch and Garmin can lag
+        # invisibly, so the number must never be phrasable as the current level.
+        bits.append(
+            f"body battery was {health['body_battery_high']} as of last watch sync"
+        )
     if health.get("resting_hr") is not None:
         bits.append(f"RHR {health['resting_hr']}")
     if health.get("avg_stress") is not None:
