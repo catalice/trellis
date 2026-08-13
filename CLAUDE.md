@@ -193,7 +193,7 @@ Health and wellbeing tracking — the monitoring house (Mind).
 The running coach — a lean module (Claude + tools; coaching happens in the turn).
 
 **What it owns:**
-- Weekly training plans and sessions (`save_training_plan`, `training_get`)
+- Weekly training plans and sessions (`save_training_plan`, `move_get`)
 - Garmin activities: push workouts to watch, read recent runs, on-demand sync
 - Coaching judgment: what kind of week, how much load — Claude's, never hardcoded
 
@@ -262,7 +262,7 @@ Two patterns, chosen by risk profile:
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`, `pattern_response`
 - **Focus:** `focus_get`, `create_task`, `update_task`, `set_reminder`, `cancel_reminder`, `add_goal`, `update_goal`, `save_to_effort`, `cleanup_session`, `delete_entry`, `web_search`
 - **Sense:** `log_state` (the ONE tool — reads are context, not tools)
-- **Move:** `training_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_run`
+- **Move:** `move_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_run`
 
 (Onboarding mode additionally wires `save_identity`.)
 

@@ -27,8 +27,8 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 # Tool schemas
 # ---------------------------------------------------------------------------
 
-TRAINING_GET_TOOL: dict = {
-    "name": "training_get",
+MOVE_GET_TOOL: dict = {
+    "name": "move_get",
     "description": "Read the running plan (or a recent workout's detail — any activity type) before telling the user what's on. Use this so you speak from what's actually stored, not memory.",
     "input_schema": {
         "type": "object",
@@ -141,7 +141,7 @@ UPDATE_RUN_TOOL: dict = {
         "properties": {
             "date": {
                 "type": "string",
-                "description": "The run's date, YYYY-MM-DD (from training_get history if unsure).",
+                "description": "The run's date, YYYY-MM-DD (from move_get history if unsure).",
             },
             "note": {
                 "type": "string",
@@ -167,7 +167,7 @@ SYNC_GARMIN_TOOL: dict = {
 # Handlers
 # ---------------------------------------------------------------------------
 
-def handle_training_get(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+def handle_move_get(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
     what = str(input_dict.get("what", ""))
 
     if what == "today":
@@ -322,14 +322,14 @@ def handle_update_run(user_id: UUID, input_dict: dict, now: datetime, *, move_se
     try:
         on_date = date.fromisoformat(raw_date)
     except ValueError:
-        return f"Invalid date {raw_date!r} — use YYYY-MM-DD (check training_get history)."
+        return f"Invalid date {raw_date!r} — use YYYY-MM-DD (check move_get history)."
     try:
         run = move_service.annotate_run(user_id, on_date, note)
     except Exception:
         _log.warning("update_run failed", exc_info=True)
         return "Couldn't update that run just now — try again in a moment."
     if run is None:
-        return f"No run logged on {raw_date}. Check training_get history for the right date."
+        return f"No run logged on {raw_date}. Check move_get history for the right date."
     return f"Run on {raw_date} updated: {run.note}"
 
 
@@ -513,8 +513,8 @@ MOVE_ROOMS: list[str] = [
 
 def move_tools(move_service) -> list[tuple[dict, Any]]:
     return [
-        (TRAINING_GET_TOOL,
-         lambda uid, inp, now: handle_training_get(uid, inp, now, move_service=move_service)),
+        (MOVE_GET_TOOL,
+         lambda uid, inp, now: handle_move_get(uid, inp, now, move_service=move_service)),
         (SAVE_TRAINING_PLAN_TOOL,
          lambda uid, inp, now: handle_save_training_plan(uid, inp, now, move_service=move_service)),
         (PUSH_TO_WATCH_TOOL,
