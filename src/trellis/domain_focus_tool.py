@@ -860,16 +860,22 @@ SAVE_TO_EFFORT_TOOL: dict = {
 WEB_SEARCH_TOOL: dict = {
     "name": "web_search",
     "description": (
-        "Search the web for current information. Use it to research a seed "
-        "(\"look into that drum machine seed\" → search, bring back real options "
-        "and links), answer a factual question, or find something concrete like "
-        "local classes or prices. Read-only — it fetches, it can't act. Present "
-        "results as a short digest with the links, not a wall of text."
+        "Search the outside world. source='web' (default): general search — "
+        "research a seed, answer a factual question, find classes or prices. "
+        "source='news': current events. source='pubmed': peer-reviewed papers "
+        "with REAL citations (title, journal, date, PubMed link) — use it for "
+        "medical/science claims, and save keepers to a Learn map as "
+        "kind='source'. Read-only — it fetches, it can't act. Present results "
+        "as a short digest with the links, not a wall of text."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "What to search for. Be specific."},
+            "query": {"type": "string", "description": "What to search for. Be specific. For pubmed, use topic terms (\"lisdexamfetamine menstrual cycle\"), not sentences."},
+            "source": {
+                "type": "string", "enum": ["web", "news", "pubmed"],
+                "description": "Where to look. Default web.",
+            },
         },
         "required": ["query"],
     },
@@ -1002,7 +1008,10 @@ def handle_web_search(
     query = str(input_dict.get("query", "")).strip()
     if not query:
         return "query is required."
-    result = web_search.search(query)
+    source = str(input_dict.get("source", "web"))
+    if source not in ("web", "news", "pubmed"):
+        source = "web"
+    result = web_search.search(query, source=source)
     if result is None:
         return "Search came back empty or the search service is unavailable — try rephrasing, or again in a moment."
     lines = []

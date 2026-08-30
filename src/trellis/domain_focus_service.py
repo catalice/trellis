@@ -134,6 +134,7 @@ class BrainDumpService:
         timezone: tzinfo,
         projection: VaultProjection | None = None,
         memory: Memory | None = None,
+        hints_provider=None,   # (user_id) -> str | None: efforts/threads for routing
     ) -> None:
         self._captures = capture_repo
         self._tasks = task_repo
@@ -141,11 +142,18 @@ class BrainDumpService:
         self._tz = timezone
         self._projection = projection
         self._memory = memory
+        self._hints = hints_provider
 
     def process(self, user_id: UUID, raw: str, now: datetime) -> ProcessedDump:
         local = now.astimezone(self._tz)
         date_line = local.strftime("%A %d %B %Y, %H:%M") + f" ({self._tz})"
-        result = self._claude.synthesise(raw, date_line)
+        hints = None
+        if self._hints is not None:
+            try:
+                hints = self._hints(user_id)
+            except Exception:
+                _log.warning("brain dump hints failed", exc_info=True)
+        result = self._claude.synthesise(raw, date_line, hints=hints)
 
         capture = self._captures.save(Capture(
             id=uuid4(),

@@ -97,12 +97,21 @@ class BrainDumpClaude:
         self._client = client
         self._model = model
 
-    def synthesise(self, raw_text: str, current_date_line: str) -> BrainDumpResult | None:
+    def synthesise(
+        self, raw_text: str, current_date_line: str, hints: str | None = None,
+    ) -> BrainDumpResult | None:
         try:
+            system = f"{_SYNTHESIS_SYSTEM}\n\nCurrent date and time: {current_date_line}"
+            if hints:
+                system += (
+                    "\n\nTheir landscape (for routing, never invention): " + hints +
+                    "\nWhen a dump clearly belongs to one of these, name it in "
+                    "project_hints instead of inventing a new home."
+                )
             response = self._client.messages.create(
                 model=self._model,
                 max_tokens=16000,
-                system=f"{_SYNTHESIS_SYSTEM}\n\nCurrent date and time: {current_date_line}",
+                system=system,
                 messages=[{"role": "user", "content": raw_text}],
             )
             raw = response.content[0].text.strip()

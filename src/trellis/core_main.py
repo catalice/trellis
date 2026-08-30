@@ -237,9 +237,29 @@ def main() -> None:
     task_service = TaskService(task_repo, settings.timezone, projection=vault, memory=memory)
     reminder_service = ReminderService(reminder_repo, settings.timezone, projection=vault)
     goal_service = GoalService(goal_repo)
+    learn_service = LearnService(
+        PostgresLearnRepository(database), settings.timezone, projection=vault,
+    )
+
+    def _dump_hints(uid) -> str | None:
+        bits = []
+        try:
+            efforts = [e.title for e in effort_service.list_all(uid)]
+            if efforts:
+                bits.append("efforts: " + ", ".join(efforts[:10]))
+        except Exception:
+            pass
+        try:
+            threads = [th.title for th in learn_service.list_threads(uid)]
+            if threads:
+                bits.append("learning threads: " + ", ".join(threads[:10]))
+        except Exception:
+            pass
+        return "; ".join(bits) or None
+
     brain_dump_service = BrainDumpService(
         capture_repo, task_repo, brain_dump_claude, settings.timezone,
-        projection=vault, memory=memory,
+        projection=vault, memory=memory, hints_provider=_dump_hints,
     )
 
     # --- Move domain (reads goals from the second brain; stores its own plan) ---
@@ -310,9 +330,6 @@ def main() -> None:
         rooms=SENSE_ROOMS,
     )
 
-    learn_service = LearnService(
-        PostgresLearnRepository(database), settings.timezone, projection=vault,
-    )
     registry.add_domain(
         "learn",
         learn_context_loader(learn_service),

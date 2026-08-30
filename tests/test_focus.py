@@ -204,7 +204,7 @@ class FakeClaude:
     def __init__(self, result: BrainDumpResult | None):
         self.result = result
 
-    def synthesise(self, raw_text, current_date_line):
+    def synthesise(self, raw_text, current_date_line, hints=None):
         return self.result
 
 
@@ -696,7 +696,7 @@ class TestWebSearch:
 
     def test_tool_present_when_provider(self):
         class FakeSearch:
-            def search(self, q, *, max_results=5): return None
+            def search(self, q, *, max_results=5, **kw): return None
         names = [s["name"] for s, _ in self._tools(FakeSearch())]
         assert "web_search" in names
 
@@ -704,7 +704,7 @@ class TestWebSearch:
         from trellis.domain_focus_tool import handle_web_search
         from trellis.infra_search import SearchResponse, SearchResult
         class FakeSearch:
-            def search(self, q, *, max_results=5):
+            def search(self, q, *, max_results=5, **kw):
                 return SearchResponse(
                     query=q, answer="Short answer.",
                     results=(SearchResult("Title A", "https://a.com", "snippet a"),),
@@ -716,7 +716,7 @@ class TestWebSearch:
     def test_handler_empty(self):
         from trellis.domain_focus_tool import handle_web_search
         class FakeSearch:
-            def search(self, q, *, max_results=5): return None
+            def search(self, q, *, max_results=5, **kw): return None
         reply = handle_web_search(UID, {"query": "x"}, NOW, web_search=FakeSearch())
         assert "empty" in reply or "unavailable" in reply
 
