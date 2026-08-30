@@ -135,26 +135,35 @@ class MoveService:
     def recent_runs(self, user_id: UUID, *, limit: int = 12) -> list[RunLog]:
         return self._repo.recent_runs(user_id, limit=limit)
 
-    def annotate_run(self, user_id: UUID, on_date: date, annotation: str) -> RunLog | None:
-        """Attach the user's account of a run to its stored record ("that was a
-        social run") — APPENDED to the imported note, never replacing it, so the
-        Garmin name and their words both survive. Returns the updated run, or
-        None if no run is logged on that date."""
-        runs = [r for r in self._repo.recent_runs(user_id, limit=200) if r.ran_on == on_date]
-        if not runs:
+    def recent_workouts(self, user_id: UUID, *, limit: int = 12) -> list[RunLog]:
+        """Every sport, not just runs — the whole-body logbook."""
+        return self._repo.recent_workouts(user_id, limit=limit)
+
+    def annotate_workout(
+        self, user_id: UUID, on_date: date, annotation: str,
+    ) -> RunLog | None:
+        """Attach the user's account of a workout — any sport — to its activity
+        row (user_note, the column sync can't touch). APPENDS to their earlier
+        words, never replaces. If several activities share the date, prefers the
+        single run, else the latest. Returns the updated view, or None if
+        nothing is recorded that day."""
+        day = [w for w in self._repo.recent_workouts(user_id, limit=200)
+               if w.ran_on == on_date]
+        if not day:
             return None
-        run = runs[0]
+        runs = [w for w in day if "run" in (w.activity_type or "").lower()]
+        workout = runs[0] if len(runs) == 1 else day[0]
         clean = annotation.strip()
         if not clean:
-            return run
-        if clean.lower() in (run.note or "").lower():
-            return run
-        note = f"{run.note} — {clean}" if run.note else clean
-        if not self._repo.update_run_note(user_id, run.id, note):
+            return workout
+        if clean.lower() in (workout.note or "").lower():
+            return workout
+        words = f"{workout.user_note} — {clean}" if workout.user_note else clean
+        if not self._repo.set_user_note(user_id, workout.garmin_activity_id, words):
             return None
         self._project_plan(user_id)
         from dataclasses import replace as _replace
-        return _replace(run, note=note)
+        return _replace(workout, user_note=words, note=f"{workout.note} — {clean}")
 
     # -- push a structured workout to the watch (the executive-function win) ----
 
@@ -180,92 +189,23 @@ class MoveService:
         self._garmin_push.schedule_workout(user_id, workout_id, on_date)
         return str(workout.get("workoutName") or "workout")
 
-    def import_recent_runs(self, user_id: UUID, *, now: datetime, limit: int = 20) -> list[RunLog]:
-        """Pull recent RUNNING activities from Garmin and log any new ones. Recent +
-        small (not bulk history — that's the CSV). Dedupes by Garmin activity id
-        (legacy rows without one fall back to date+~distance). Raises RuntimeError
-        if Garmin isn't wired/connected."""
-        if self._garmin_read is None:
-            raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
-        activities = self._garmin_read.recent_activities(user_id, limit=limit)
-        known = self._repo.recent_runs(user_id, limit=200)
-        # Dedupe on the run's real identity (Garmin activity id). Rows imported
-        # before the id existed have None — the (date, ~distance) heuristic
-        # remains ONLY as the legacy fallback for those.
-        existing_ids = {r.garmin_activity_id for r in known if r.garmin_activity_id}
-        legacy_keys = {
-            (r.ran_on, round(r.distance_km, 1) if r.distance_km is not None else None)
-            for r in known if not r.garmin_activity_id
-        }
-        logged: list[RunLog] = []
-        for act in activities:
-            # The run LOG is runs-only by definition (it feeds baseline/planning);
-            # the reader itself is unfiltered so review_run can see everything.
-            if "run" not in (getattr(act, "activity_type", "") or "").lower():
-                continue
-            ran_on = _activity_date(act, self._tz)
-            if ran_on is None:
-                continue
-            activity_id = str(getattr(act, "activity_id", "") or "") or None
-            if activity_id and activity_id in existing_ids:
-                continue
-            dist_km = round(act.distance_meters / 1000, 2) if getattr(act, "distance_meters", None) else None
-            key = (ran_on, round(dist_km, 1) if dist_km is not None else None)
-            if key in legacy_keys:
-                continue
-            if activity_id:
-                existing_ids.add(activity_id)
-            else:
-                legacy_keys.add(key)
-            note = (getattr(act, "name", None) or "run").strip()
-            if getattr(act, "average_heart_rate", None):
-                note += f" (avg HR {act.average_heart_rate})"
-            logged.append(self._repo.add_run(RunLog(
-                id=uuid4(), user_id=user_id, ran_on=ran_on,
-                note=note, distance_km=dist_km,
-                garmin_activity_id=activity_id, created_at=now,
-            )))
-        if logged:
-            self._project_plan(user_id)   # new runs tick off planned sessions
-        return logged
-
     def sync_garmin(self, user_id: UUID, *, now: datetime, days: int = 3) -> dict:
-        """Refresh this user's Garmin data: recent runs into the training log AND
-        recent daily health/activities/details into the health store. One shared
-        path for the on-demand tool and the daily background job. Best-effort per
-        part; raises RuntimeError only if the user isn't connected at all."""
-        if self._garmin_read is None and self._garmin_sync is None:
+        """Refresh this user's Garmin data: daily health + activities + details
+        into the one store (the logbook reads activities directly — there is no
+        separate import step since migration 017). One shared path for the
+        on-demand tool and the daily background job. Raises RuntimeError only
+        if the user isn't connected."""
+        if self._garmin_sync is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
-        result: dict[str, Any] = {"new_runs": 0, "health_records": None, "health_through": None}
-        connection_errors = 0
-        attempts = 0
-
-        if self._garmin_sync is not None:
-            attempts += 1
-            try:
-                summary = self._garmin_sync.sync_recent(user_id, days=days)
-                result["health_records"] = getattr(summary, "daily_health_records", None)
-                end = getattr(summary, "end_date", None)
-                result["health_through"] = end.isoformat() if end is not None else None
-            except RuntimeError:
-                connection_errors += 1
-            except Exception:
-                _log.warning("sync_garmin: health sync failed", exc_info=True)
-
-        if self._garmin_read is not None:
-            attempts += 1
-            try:
-                new = self.import_recent_runs(user_id, now=now, limit=20)
-                result["new_runs"] = len(new)
-            except RuntimeError:
-                connection_errors += 1
-            except Exception:
-                _log.warning("sync_garmin: run import failed", exc_info=True)
-
-        # If every part we tried failed because the user isn't connected, surface it.
-        if attempts and connection_errors == attempts:
-            raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
-        return result
+        summary = self._garmin_sync.sync_recent(user_id, days=days)
+        end = getattr(summary, "end_date", None)
+        # New activities tick off planned sessions in the vault.
+        self._project_plan(user_id)
+        return {
+            "activities": getattr(summary, "activity_records", None),
+            "health_records": getattr(summary, "daily_health_records", None),
+            "health_through": end.isoformat() if end is not None else None,
+        }
 
     def review_run(self, user_id: UUID, *, which: int = 0) -> dict | None:
         """Full detail for one recent activity of ANY type (which=0 is the most

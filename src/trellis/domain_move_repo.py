@@ -1,7 +1,13 @@
 """
-Training storage — one row per user. Protocol at top, Postgres below. The plan is
-a JSON doc Claude authors in conversation; Python only persists it. Typed data,
-never strings.
+Training storage — the plan (one row per user) and the logbook view over
+garmin_activities. The plan is a JSON doc Claude authors in conversation;
+Python only persists it. Typed data, never strings.
+
+The logbook (since migration 017): the watch's record IS the record —
+garmin_activities rows — with the user's words in user_note beside it.
+Sync upserts never name user_note, so their words are structurally safe.
+This repo composes RunLog views from those rows; there is no separate
+runs table to drift out of step.
 """
 from __future__ import annotations
 
@@ -19,23 +25,23 @@ _log = logging.getLogger(__name__)
 class TrainingRepository(Protocol):
     def get(self, user_id: UUID) -> TrainingPlan | None: ...
     def upsert(self, record: TrainingPlan) -> TrainingPlan: ...
-    def add_run(self, run: RunLog) -> RunLog: ...
-    def update_run_note(self, user_id: UUID, run_id, note: str) -> bool:
-        with self._db.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE training_runs SET note = %s WHERE id = %s AND user_id = %s",
-                    (note, run_id, user_id),
-                )
-                return cur.rowcount > 0
-
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]: ...
-    def update_run_note(self, user_id: UUID, run_id: UUID, note: str) -> bool: ...
+    def recent_workouts(self, user_id: UUID, *, limit: int) -> list[RunLog]: ...
+    def set_user_note(self, user_id: UUID, activity_id: str, note: str) -> bool: ...
+
+
+_ACTIVITY_COLS = (
+    "SELECT id, user_id, activity_id, name, activity_type, "
+    "start_time_epoch_seconds, distance_meters, average_heart_rate, "
+    "duration_milliseconds, user_note, updated_at FROM garmin_activities"
+)
 
 
 class PostgresMoveRepository:
-    def __init__(self, database: Any) -> None:
+    def __init__(self, database: Any, tz: Any = None) -> None:
+        from zoneinfo import ZoneInfo
         self._db = database
+        self._tz = tz or ZoneInfo("UTC")
 
     def get(self, user_id: UUID) -> TrainingPlan | None:
         with self._db.connect() as conn:
@@ -61,44 +67,34 @@ class PostgresMoveRepository:
                 )
         return record
 
-    def add_run(self, run: RunLog) -> RunLog:
-        with self._db.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO training_runs
-                        (id, user_id, ran_on, note, distance_km, garmin_activity_id, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        run.id, run.user_id, run.ran_on, run.note,
-                        run.distance_km, run.garmin_activity_id, run.created_at,
-                    ),
-                )
-        return run
-
-    def update_run_note(self, user_id: UUID, run_id, note: str) -> bool:
-        with self._db.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE training_runs SET note = %s WHERE id = %s AND user_id = %s",
-                    (note, run_id, user_id),
-                )
-                return cur.rowcount > 0
-
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]:
+        """Runs only — feeds baseline math, plan ticks, and run reviews."""
+        return self._recent(user_id, limit=limit, runs_only=True)
+
+    def recent_workouts(self, user_id: UUID, *, limit: int) -> list[RunLog]:
+        """Every sport the watch recorded — the whole-body logbook."""
+        return self._recent(user_id, limit=limit, runs_only=False)
+
+    def _recent(self, user_id: UUID, *, limit: int, runs_only: bool) -> list[RunLog]:
+        type_filter = " AND activity_type ILIKE '%%run%%'" if runs_only else ""
         with self._db.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    """
-                    SELECT * FROM training_runs
-                    WHERE user_id = %s
-                    ORDER BY ran_on DESC, created_at DESC
-                    LIMIT %s
-                    """,
+                    f"{_ACTIVITY_COLS} WHERE user_id = %s AND start_time_epoch_seconds IS NOT NULL{type_filter}"
+                    " ORDER BY start_time_epoch_seconds DESC NULLS LAST LIMIT %s",
                     (user_id, limit),
                 )
-                return [_run_row(r) for r in cur.fetchall()]
+                return [_run_row(r, self._tz) for r in cur.fetchall()]
+
+    def set_user_note(self, user_id: UUID, activity_id: str, note: str) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE garmin_activities SET user_note = %s, updated_at = NOW()"
+                    " WHERE user_id = %s AND activity_id = %s",
+                    (note, user_id, activity_id),
+                )
+                return cur.rowcount > 0
 
 
 def _row(row: dict) -> TrainingPlan:
@@ -111,13 +107,28 @@ def _row(row: dict) -> TrainingPlan:
     )
 
 
-def _run_row(row: dict) -> RunLog:
+def _run_row(row: dict, tz) -> RunLog:
+    """A logbook view over an activity row: note = the Garmin name plus the
+    user's words, exactly the shape every consumer has always read. Dates are
+    the USER's local date — a 00:30 run belongs to that day, not UTC's."""
+    from datetime import datetime
+
+    epoch = row.get("start_time_epoch_seconds")
+    ran_on = datetime.fromtimestamp(epoch, tz=tz).date() if epoch else None
+    note = (row.get("name") or "").strip()
+    if row.get("average_heart_rate"):
+        note += f" (avg HR {row['average_heart_rate']})"
+    if row.get("user_note"):
+        note = f"{note} — {row['user_note']}" if note else row["user_note"]
+    meters = row.get("distance_meters")
     return RunLog(
         id=row["id"],
-        user_id=row["user_id"],
-        ran_on=row["ran_on"],
-        note=row["note"],
-        distance_km=float(row["distance_km"]) if row.get("distance_km") is not None else None,
-        garmin_activity_id=row.get("garmin_activity_id"),
-        created_at=row["created_at"],
+        user_id=row.get("user_id"),
+        ran_on=ran_on,
+        note=note,
+        distance_km=round(meters / 1000, 2) if meters else None,
+        garmin_activity_id=row.get("activity_id"),
+        created_at=row.get("updated_at"),
+        activity_type=row.get("activity_type"),
+        user_note=row.get("user_note"),
     )

@@ -41,7 +41,7 @@ MOVE_GET_TOOL: dict = {
                     "week: this week's REAL dates (weekday->date) plus any stored sessions. "
                     "today: today's stored session. "
                     "baseline: the stored fitness baseline. "
-                    "history: recent completed runs — read before reviewing a week or planning the next. "
+                    "history: recent workouts, EVERY sport (runs, strength, HIIT, walks) — read before reviewing a week or planning the next. "
                     "watch: the workouts actually in their Garmin library right now — CHECK this "
                     "before claiming anything is or isn't on the watch. "
                     "run_detail: one recent workout from Garmin — ANY activity type (0 = most recent, "
@@ -127,21 +127,22 @@ PUSH_TO_WATCH_TOOL: dict = {
     },
 }
 
-UPDATE_RUN_TOOL: dict = {
-    "name": "update_run",
+UPDATE_WORKOUT_TOOL: dict = {
+    "name": "update_workout",
     "description": (
-        "Attach the user's account of a run to its stored record — 'that was a "
-        "social run', 'felt awful, cut it short', 'followed the plan'. Call it "
-        "whenever they tell you about a run (in a review or in passing), so "
-        "future reviews read the truth, not just the Garmin name. Appends to "
-        "the imported note; never erases it."
+        "Attach the user's account of a workout — any sport: run, strength, "
+        "HIIT, walk — to its recorded activity: 'that was a social run', "
+        "'trainer destroyed my legs', 'bailed early, knee'. Call it whenever "
+        "they tell you about a session (in a review or in passing), so future "
+        "reviews read the truth, not just the Garmin name. Appends to their "
+        "earlier words; never erases them."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "date": {
                 "type": "string",
-                "description": "The run's date, YYYY-MM-DD (from move_get history if unsure).",
+                "description": "The workout's date, YYYY-MM-DD (from move_get history if unsure).",
             },
             "note": {
                 "type": "string",
@@ -155,7 +156,7 @@ UPDATE_RUN_TOOL: dict = {
 SYNC_GARMIN_TOOL: dict = {
     "name": "sync_garmin",
     "description": (
-        "Refresh the user's Garmin data now: pull recent runs into the log and update recent "
+        "Refresh the user's Garmin data now: activities (every sport) and recent "
         "health/readiness (sleep, HRV, body battery). This also runs automatically once a day — "
         "use it when they want their latest data reflected right away ('sync my Garmin')."
     ),
@@ -206,13 +207,15 @@ def handle_move_get(user_id: UUID, input_dict: dict, now: datetime, *, move_serv
         return f"Baseline: {plan.baseline}"
 
     if what == "history":
-        runs = move_service.recent_runs(user_id)
-        if not runs:
-            return "No runs logged yet — sync_garmin pulls recent runs from their watch."
-        lines = ["Recent runs (most recent first):"]
-        for r in runs:
-            dist = f" — {r.distance_km}km" if r.distance_km is not None else ""
-            lines.append(f"  {r.ran_on.isoformat()}{dist}: {r.note}")
+        workouts = move_service.recent_workouts(user_id)
+        if not workouts:
+            return "Nothing recorded yet — sync_garmin pulls recent activities from their watch."
+        lines = ["Recent workouts, every sport (most recent first):"]
+        for w in workouts:
+            kind = (w.activity_type or "").replace("_", " ")
+            kind_bit = f" [{kind}]" if kind and "run" not in kind else ""
+            dist = f" — {w.distance_km}km" if w.distance_km is not None else ""
+            lines.append(f"  {w.ran_on.isoformat()}{kind_bit}{dist}: {w.note}")
         return "\n".join(lines)
 
     if what == "watch":
@@ -314,23 +317,23 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
     return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
 
 
-def handle_update_run(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+def handle_update_workout(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
     raw_date = str(input_dict.get("date", "")).strip()
     note = str(input_dict.get("note", "")).strip()
     if not note:
-        return "note is required — their account of the run."
+        return "note is required — their account of the workout."
     try:
         on_date = date.fromisoformat(raw_date)
     except ValueError:
         return f"Invalid date {raw_date!r} — use YYYY-MM-DD (check move_get history)."
     try:
-        run = move_service.annotate_run(user_id, on_date, note)
+        workout = move_service.annotate_workout(user_id, on_date, note)
     except Exception:
-        _log.warning("update_run failed", exc_info=True)
-        return "Couldn't update that run just now — try again in a moment."
-    if run is None:
-        return f"No run logged on {raw_date}. Check move_get history for the right date."
-    return f"Run on {raw_date} updated: {run.note}"
+        _log.warning("update_workout failed", exc_info=True)
+        return "Couldn't update that workout just now — try again in a moment."
+    if workout is None:
+        return f"Nothing recorded on {raw_date}. Check move_get history for the right date."
+    return f"Workout on {raw_date} updated: {workout.note}"
 
 
 def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
@@ -342,12 +345,13 @@ def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, move_s
         _log.warning("sync_garmin failed", exc_info=True)
         return "Couldn't reach Garmin just now — try again in a moment."
     bits = []
-    new_runs = result.get("new_runs") or 0
-    bits.append(f"{new_runs} new run(s)" if new_runs else "no new runs")
+    acts = result.get("activities")
+    if acts is not None:
+        bits.append(f"{acts} activit{'y' if acts == 1 else 'ies'} refreshed")
     if result.get("health_through"):
         days = result.get("health_records")
         bits.append(f"health up to {result['health_through']}" + (f" ({days} day(s))" if days else ""))
-    return "Synced Garmin — " + ", ".join(bits) + "."
+    return "Synced Garmin — " + (", ".join(bits) if bits else "done") + "."
 
 
 
@@ -521,8 +525,8 @@ def move_tools(move_service) -> list[tuple[dict, Any]]:
          lambda uid, inp, now: handle_push_to_watch(uid, inp, now, move_service=move_service)),
         (SYNC_GARMIN_TOOL,
          lambda uid, inp, now: handle_sync_garmin(uid, inp, now, move_service=move_service)),
-        (UPDATE_RUN_TOOL,
-         lambda uid, inp, now: handle_update_run(uid, inp, now, move_service=move_service)),
+        (UPDATE_WORKOUT_TOOL,
+         lambda uid, inp, now: handle_update_workout(uid, inp, now, move_service=move_service)),
     ]
 
 

@@ -22,12 +22,15 @@ class TrainingPlan:
 
 @dataclass(frozen=True)
 class RunLog:
-    """A completed run the coach records — so it plans the next from the last.
-    Lean: the date, what happened in plain words, and optional distance/feel."""
+    """A logbook view over a recorded activity (since migration 017 these are
+    garmin_activities rows — the watch's record IS the record). note composes
+    the Garmin name with the user's words; user_note is their words alone."""
     id: UUID
     user_id: UUID
     ran_on: date
-    note: str                     # "easy 5k, felt strong" — the coach's/user's words
+    note: str                     # "Long Run (avg HR 152) — felt strong"
     distance_km: float | None = None
-    garmin_activity_id: str | None = None   # the run's real identity, for dedupe
+    garmin_activity_id: str | None = None   # the activity's real identity
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    activity_type: str | None = None        # running / strength_training / hiit / ...
+    user_note: str | None = None            # the user's layer, sync can't touch it

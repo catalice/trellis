@@ -223,8 +223,15 @@ The running coach — a lean module (Claude + tools; coaching happens in the tur
 
 **What it owns:**
 - Weekly training plans and sessions (`save_training_plan`, `move_get`)
-- Garmin activities: push workouts to watch, read recent runs, on-demand sync
+- Garmin activities: push workouts to watch, read recent workouts, on-demand sync
 - Coaching judgment: what kind of week, how much load — Claude's, never hardcoded
+
+**The logbook (migration 017):** the watch's record IS the record. There is no
+separate runs table — `garmin_activities` holds every sport, and the user's words
+live in its `user_note` column (`update_workout` appends there). Sync's upsert
+never names that column, so a resync structurally cannot touch their words. Runs
+are a filtered view (`recent_runs`) for baseline math; reviews read every sport
+(`recent_workouts`).
 
 **What it reads cross-cutting (never owns):**
 - Goals — from Focus's goals table, filtered by goal_type
@@ -291,11 +298,11 @@ Two patterns, chosen by risk profile:
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`, `pattern_response`
 - **Focus:** `focus_get`, `create_task`, `update_task`, `set_reminder`, `cancel_reminder`, `add_goal`, `update_goal`, `save_to_effort`, `cleanup_session`, `delete_entry`, `web_search`
 - **Sense:** `log_state` (the ONE tool — reads are context, not tools)
-- **Move:** `move_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_run`
+- **Move:** `move_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_workout`
 
 (Onboarding mode additionally wires `save_identity`.)
 
-**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 22 (update_run added 9 Aug — her account of a run lands on its record; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 22 (update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 

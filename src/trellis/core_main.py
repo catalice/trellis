@@ -132,7 +132,7 @@ def build_vault(database: PostgresDatabase, settings: Settings) -> ObsidianVault
         PostgresReminderRepository(database),
         PostgresEffortRepository(database),
         state_repo=PostgresStateRepository(database),
-        move_repo=PostgresMoveRepository(database),
+        move_repo=PostgresMoveRepository(database, settings.timezone),
         health_repo=PostgresHealthRepository(database),
     )
 
@@ -155,7 +155,7 @@ def build_watcher(
         WatcherDiscovery(anthropic_client, settings.anthropic_model),
         state_repo=PostgresStateRepository(database),
         health_repo=PostgresHealthRepository(database),
-        run_repo=PostgresMoveRepository(database),
+        run_repo=PostgresMoveRepository(database, settings.timezone),
         tz=settings.timezone,
         vault=vault if vault is not None else build_vault(database, settings),
         task_repo=PostgresTaskRepository(database),
@@ -220,7 +220,7 @@ def main() -> None:
     goal_repo = PostgresGoalRepository(database)
     state_repo = PostgresStateRepository(database)
 
-    move_repo = PostgresMoveRepository(database)
+    move_repo = PostgresMoveRepository(database, settings.timezone)
     health_reader = PostgresHealthRepository(database)
 
     vault = build_vault(database, settings)

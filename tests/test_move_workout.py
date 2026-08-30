@@ -198,15 +198,13 @@ class TestActivityVisibility(unittest.TestCase):
         self.assertIsNone(detail["overall"]["distance_km"])
         self.assertEqual(detail["overall"]["avg_hr"], 116)
 
-    def test_run_log_import_skips_non_runs(self):
-        svc = self._service([
-            self._act("strength_training", "Strength", 1785492678),
-            self._act("running", "Morning Running", 1785446606, distance=3255.0),
-        ])
-        from datetime import datetime, timezone as tzu
-        logged = svc.import_recent_runs(uuid.uuid4(), now=datetime.now(tzu.utc))
-        self.assertEqual(len(logged), 1)
-        self.assertIn("Morning Running", logged[0].note)
+    def test_sync_upsert_never_touches_user_note(self):
+        # THE logbook invariant (migration 017): the user's words live in
+        # user_note and sync's upsert must never name that column.
+        import inspect
+        from trellis.infra_tracking import PostgresHealthRepository
+        sql = inspect.getsource(PostgresHealthRepository.upsert_activity)
+        self.assertNotIn("user_note", sql)
 
 
 class TestSplitExtraction(unittest.TestCase):
@@ -274,62 +272,88 @@ class TestSplitExtraction(unittest.TestCase):
         self.assertNotIn("#1", text)
 
 
-class TestAnnotateRun(unittest.TestCase):
-    """Audit item 28: 'I did a social run just now' had nowhere to land — the
-    run log was Garmin-import-only, so reviews read the generic Garmin name."""
+class TestAnnotateWorkout(unittest.TestCase):
+    """Audit item 28 + logbook restructure: their account of ANY workout lands
+    in user_note on the activity row — the column sync can't touch."""
 
     class _Repo:
-        def __init__(self, runs):
-            self._runs = {r.id: r for r in runs}
+        def __init__(self, workouts):
+            self._w = {w.garmin_activity_id: w for w in workouts}
+
+        def recent_workouts(self, user_id, *, limit):
+            return list(self._w.values())
 
         def recent_runs(self, user_id, *, limit):
-            return list(self._runs.values())
+            return [w for w in self._w.values()
+                    if "run" in (w.activity_type or "").lower()]
 
-        def update_run_note(self, user_id, run_id, note):
+        def set_user_note(self, user_id, activity_id, note):
             from dataclasses import replace
-            if run_id in self._runs:
-                self._runs[run_id] = replace(self._runs[run_id], note=note)
+            if activity_id in self._w:
+                w = self._w[activity_id]
+                base = w.note.split(" — ")[0]
+                self._w[activity_id] = replace(
+                    w, user_note=note, note=f"{base} — {note}")
                 return True
             return False
 
         def get(self, user_id): return None
         def upsert(self, record): return record
-        def add_run(self, run): return run
 
-    def _service(self, runs):
+    @staticmethod
+    def _workout(day, name, kind="running", user_note=None, aid="a1"):
+        from uuid import uuid4
+        from trellis.domain_move_models import RunLog
+        note = f"{name} — {user_note}" if user_note else name
+        return RunLog(id=uuid4(), user_id=uuid4(), ran_on=day, note=note,
+                      distance_km=6.41, garmin_activity_id=aid,
+                      activity_type=kind, user_note=user_note)
+
+    def _service(self, workouts):
         from zoneinfo import ZoneInfo
         from trellis.domain_move_service import MoveService
 
         class _Goals:
             def list_training_goals(self, uid): return []
 
-        return MoveService(self._Repo(runs), _Goals(), ZoneInfo("Europe/Madrid"))
+        return MoveService(self._Repo(workouts), _Goals(), ZoneInfo("Europe/Madrid"))
 
-    def test_annotation_appends_to_imported_note(self):
+    def test_annotation_lands_in_user_note(self):
         import datetime as dt
-        from uuid import uuid4
-        from trellis.domain_move_models import RunLog
-        run = RunLog(id=uuid4(), user_id=uuid4(), ran_on=dt.date(2026, 8, 5),
-                     note="Morning Running", distance_km=6.41)
-        svc = self._service([run])
-        updated = svc.annotate_run(run.user_id, dt.date(2026, 8, 5), "social run")
+        w = self._workout(dt.date(2026, 8, 5), "Morning Running")
+        svc = self._service([w])
+        updated = svc.annotate_workout(w.user_id, dt.date(2026, 8, 5), "social run")
+        self.assertEqual(updated.user_note, "social run")
         self.assertEqual(updated.note, "Morning Running — social run")
 
-    def test_no_run_that_date_returns_none(self):
+    def test_any_sport_annotatable(self):
+        import datetime as dt
+        w = self._workout(dt.date(2026, 8, 5), "Strength", kind="strength_training")
+        svc = self._service([w])
+        updated = svc.annotate_workout(w.user_id, dt.date(2026, 8, 5), "trainer destroyed my legs")
+        self.assertEqual(updated.user_note, "trainer destroyed my legs")
+
+    def test_two_activities_prefers_the_run(self):
+        import datetime as dt
+        d = dt.date(2026, 8, 5)
+        strength = self._workout(d, "Strength", kind="strength_training", aid="s1")
+        run = self._workout(d, "Morning Running", aid="r1")
+        svc = self._service([strength, run])
+        updated = svc.annotate_workout(run.user_id, d, "social run")
+        self.assertEqual(updated.garmin_activity_id, "r1")
+
+    def test_no_workout_that_date_returns_none(self):
         import datetime as dt
         from uuid import uuid4
         svc = self._service([])
-        self.assertIsNone(svc.annotate_run(uuid4(), dt.date(2026, 8, 5), "social run"))
+        self.assertIsNone(svc.annotate_workout(uuid4(), dt.date(2026, 8, 5), "social run"))
 
     def test_duplicate_annotation_is_a_noop(self):
         import datetime as dt
-        from uuid import uuid4
-        from trellis.domain_move_models import RunLog
-        run = RunLog(id=uuid4(), user_id=uuid4(), ran_on=dt.date(2026, 8, 5),
-                     note="Morning Running — social run", distance_km=6.41)
-        svc = self._service([run])
-        updated = svc.annotate_run(run.user_id, dt.date(2026, 8, 5), "Social run")
-        self.assertEqual(updated.note, "Morning Running — social run")
+        w = self._workout(dt.date(2026, 8, 5), "Morning Running", user_note="social run")
+        svc = self._service([w])
+        updated = svc.annotate_workout(w.user_id, dt.date(2026, 8, 5), "Social run")
+        self.assertEqual(updated.user_note, "social run")
 
 
 class TestPlanSaveMerges(unittest.TestCase):
