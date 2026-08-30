@@ -325,6 +325,15 @@ Two patterns, chosen by risk profile:
 
 (Onboarding mode additionally wires `save_identity`.)
 
+**The fold ladder (decision recorded 30 Aug 2026, her call):** per-entity tools →
+per-house verbs (`focus_add`, `learn_add` — where we are) → one global `add`/`get`/
+`update`. The last rung is NOT taken yet, deliberately: a global verb unions every
+house's fields in one schema, and we fold only on evidence. **Trigger: after ~2
+weeks of live dispatch-write use with no wrong-field/wrong-entity errors in the
+logs, propose the global fold.** If the middle rung misbehaves instead, fix or
+regress it first. Candidate riding the same review: `update_current_context` +
+`save_preferences` → one meta pair.
+
 **The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 18 (Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
