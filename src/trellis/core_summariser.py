@@ -37,7 +37,7 @@ Be concise. 150 words max. Plain text, no headers.\
 
 def make_summariser(
     groq_client,
-    model: str = "llama-3.3-70b-versatile",
+    model: str = "openai/gpt-oss-20b",
 ) -> Callable:
     def summarise(user_id: UUID, domain: str, history) -> None:
         try:

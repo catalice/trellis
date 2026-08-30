@@ -332,6 +332,18 @@ def _extract_splits(detail: Any) -> list[dict]:
     never as a lap-by-lap timeline (audit item 26: run-walk workouts have an
     empty lap array, and the aggregates dressed up as laps read as nonsense)."""
     rows = _split_rows(detail)
+    # A STRUCTURED workout (INTERVAL_* segments present) is described by those
+    # segments ALONE: warmup, work, recovery, cooldown. Garmin's run-walk
+    # auto-detection interleaves dozens of RWD_* micro-segments around them,
+    # and feeding that noise to the model made it miscount her intervals
+    # (30 Aug: "7 rounds" for a 5-interval session). Counting is Python's job.
+    structured = [
+        r for r in rows
+        if isinstance(r, dict)
+        and str(r.get("type") or r.get("splitType") or "").upper().startswith("INTERVAL")
+    ]
+    if structured:
+        rows = structured
     out: list[dict] = []
     for i, row in enumerate(rows[:_MAX_SPLITS], start=1):
         if not isinstance(row, dict):

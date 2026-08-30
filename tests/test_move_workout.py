@@ -483,3 +483,45 @@ class TestPushReplaces(unittest.TestCase):
         )
         self.assertEqual(port.deleted, ["111", "222"])
         self.assertEqual(port.pushed, ["Run-Walk-Run 4:1"])
+
+
+class TestStructuredSplitFilter(unittest.TestCase):
+    """30 Aug: a 5-interval VO2max read as '~7 rounds' because Garmin's
+    run-walk auto-detection buried the 12 real INTERVAL_* segments in 65
+    RWD_* micro-segments. Structured workouts are described by their
+    structure alone; counting is Python's job."""
+
+    class _Detail:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    def test_interval_segments_win_over_rwd_noise(self):
+        from trellis.domain_move_service import _extract_splits
+        noise = [{"type": t, "distance": 50.0, "duration": 30.0}
+                 for t in ["RWD_RUN", "RWD_WALK", "RWD_STAND"] * 10]
+        structure = (
+            [{"type": "INTERVAL_WARMUP", "distance": 1000.0, "duration": 600.0}]
+            + [{"type": "INTERVAL_ACTIVE", "distance": 600.0, "duration": 180.0,
+                "averageHR": 175.0},
+               {"type": "INTERVAL_RECOVERY", "distance": 200.0, "duration": 120.0}] * 5
+            + [{"type": "INTERVAL_COOLDOWN", "distance": 800.0, "duration": 480.0}]
+        )
+        detail = self._Detail(
+            splits=[], split_summaries={},
+            typed_splits={"splits": noise[:15] + structure + noise[15:]},
+        )
+        rows = _extract_splits(detail)
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(sum(1 for r in rows if r["type"] == "work"), 5)
+
+    def test_rwd_only_sessions_unaffected(self):
+        from trellis.domain_move_service import _extract_splits
+        detail = self._Detail(
+            splits=[], split_summaries={},
+            typed_splits={"splits": [
+                {"type": "RWD_RUN", "distance": 640.0, "duration": 252.0},
+                {"type": "RWD_WALK", "distance": 90.0, "duration": 61.0},
+            ]},
+        )
+        rows = _extract_splits(detail)
+        self.assertEqual(len(rows), 2)
