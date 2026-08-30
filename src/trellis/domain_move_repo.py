@@ -121,7 +121,8 @@ def _run_row(row: dict, tz) -> RunLog:
         note += f" (avg HR {row['average_heart_rate']})"
     if row.get("user_note"):
         note = f"{note} — {row['user_note']}" if note else row["user_note"]
-    meters = row.get("distance_meters")
+    # numeric columns arrive as Decimal — cast before any float math downstream
+    meters = float(row["distance_meters"]) if row.get("distance_meters") else None
     return RunLog(
         id=row["id"],
         user_id=row.get("user_id"),
@@ -134,7 +135,7 @@ def _run_row(row: dict, tz) -> RunLog:
         user_note=row.get("user_note"),
         name=row.get("name"),
         duration_min=(
-            round(row["duration_milliseconds"] / 60000, 1)
+            round(float(row["duration_milliseconds"]) / 60000, 1)
             if row.get("duration_milliseconds") else None
         ),
         avg_hr=row.get("average_heart_rate"),
