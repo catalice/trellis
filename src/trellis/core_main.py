@@ -27,7 +27,7 @@ from trellis.core_watcher import (
 from trellis.infra_embeddings import LocalEmbedder
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_obsidian import ObsidianVault
-from trellis.infra_search import TavilySearch
+from trellis.infra_search import SearchGateway
 from trellis.infra_postgres import PostgresDatabase
 from trellis.core_profile import (
     CurrentContextService,
@@ -192,7 +192,9 @@ def main() -> None:
     brain_dump_claude = BrainDumpClaude(anthropic_client, settings.anthropic_model)
 
     # Web search — read-only window on the outside world. None if no key configured.
-    web_search = TavilySearch(settings.tavily_api_key) if settings.tavily_api_key else None
+    # Always constructed: pubmed/scholar/trials need no key, so even a bare
+    # install can cite real papers on day one.
+    web_search = SearchGateway(settings.tavily_api_key, settings.guardian_api_key)
 
     # Embeddings — semantic memory, LOCAL (fastembed/bge-small). No key, no
     # network, no rate limits — always constructed. The model loads lazily on

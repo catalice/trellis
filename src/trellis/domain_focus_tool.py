@@ -862,10 +862,12 @@ WEB_SEARCH_TOOL: dict = {
     "description": (
         "Search the outside world. source='web' (default): general search — "
         "research a seed, answer a factual question, find classes or prices. "
-        "source='news': current events. source='pubmed': peer-reviewed papers "
-        "with REAL citations (title, journal, date, PubMed link) — use it for "
-        "medical/science claims, and save keepers to a Learn map as "
-        "kind='source'. Read-only — it fetches, it can't act. Present results "
+        "source='news': current events (the Guardian first when configured, "
+        "then web news). source='pubmed': peer-reviewed medicine (NCBI). "
+        "source='scholar': scholarly work across every field (OpenAlex). "
+        "source='trials': registered clinical trials (ClinicalTrials.gov). "
+        "All citation sources return REAL papers — title, venue, date, link — "
+        "save keepers to a Learn map as kind='source'. Read-only — it fetches, it can't act. Present results "
         "as a short digest with the links, not a wall of text."
     ),
     "input_schema": {
@@ -873,7 +875,7 @@ WEB_SEARCH_TOOL: dict = {
         "properties": {
             "query": {"type": "string", "description": "What to search for. Be specific. For pubmed, use topic terms (\"lisdexamfetamine menstrual cycle\"), not sentences."},
             "source": {
-                "type": "string", "enum": ["web", "news", "pubmed"],
+                "type": "string", "enum": ["web", "news", "pubmed", "scholar", "trials"],
                 "description": "Where to look. Default web.",
             },
         },
@@ -1009,7 +1011,7 @@ def handle_web_search(
     if not query:
         return "query is required."
     source = str(input_dict.get("source", "web"))
-    if source not in ("web", "news", "pubmed"):
+    if source not in ("web", "news", "pubmed", "scholar", "trials"):
         source = "web"
     result = web_search.search(query, source=source)
     if result is None:

@@ -40,13 +40,38 @@ class WebSearch(Protocol):
     def search(self, query: str, *, max_results: int = 5, source: str = "web") -> SearchResponse | None: ...
 
 
-class TavilySearch:
-    def __init__(self, api_key: str) -> None:
+class SearchGateway:
+    """One door to the outside world, many sources behind it: web + news
+    (Tavily, plus the Guardian when a key is configured), pubmed (NCBI),
+    scholar (OpenAlex), trials (ClinicalTrials.gov). The keyless sources work
+    even with no Tavily key — a fresh install can cite papers on day one."""
+
+    def __init__(self, api_key: str, guardian_key: str = "") -> None:
         self._api_key = api_key
+        self._guardian_key = guardian_key
 
     def search(self, query: str, *, max_results: int = 5, source: str = "web") -> SearchResponse | None:
         if source == "pubmed":
             return pubmed_search(query, max_results=max_results)
+        if source == "scholar":
+            return openalex_search(query, max_results=max_results)
+        if source == "trials":
+            return clinical_trials_search(query, max_results=max_results)
+        if source == "news" and self._guardian_key:
+            guardian = guardian_search(query, self._guardian_key, max_results=max_results)
+            if guardian and len(guardian.results) >= max_results:
+                return guardian
+            tavily = self._tavily(query, max_results=max_results, source="news")
+            if guardian and tavily:
+                seen = {r.url for r in guardian.results}
+                merged = guardian.results + tuple(
+                    r for r in tavily.results if r.url not in seen)
+                return SearchResponse(query=query, answer=tavily.answer,
+                                      results=merged[:max_results * 2])
+            return guardian or tavily
+        return self._tavily(query, max_results=max_results, source=source)
+
+    def _tavily(self, query: str, *, max_results: int, source: str) -> SearchResponse | None:
         if not self._api_key:
             return None
         try:
@@ -138,3 +163,93 @@ def pubmed_search(query: str, *, max_results: int = 5) -> SearchResponse | None:
     if not results:
         return None
     return SearchResponse(query=query, answer=None, results=tuple(results))
+
+
+def guardian_search(query: str, api_key: str, *, max_results: int = 5) -> SearchResponse | None:
+    """The Guardian Open Platform — quality journalism, structured, citable."""
+    try:
+        resp = httpx.get(
+            "https://content.guardianapis.com/search",
+            params={"q": query[:300], "api-key": api_key,
+                    "page-size": max(1, min(10, max_results)),
+                    "show-fields": "trailText"},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        items = (resp.json().get("response") or {}).get("results") or []
+    except Exception:
+        _log.warning("guardian_search failed for %r", query[:60], exc_info=True)
+        return None
+    results = tuple(
+        SearchResult(
+            title=str(i.get("webTitle", "")).strip(),
+            url=str(i.get("webUrl", "")).strip(),
+            snippet=" · ".join(b for b in (
+                i.get("sectionName"),
+                str(i.get("webPublicationDate", ""))[:10],
+                str((i.get("fields") or {}).get("trailText", "")).strip()[:160],
+            ) if b),
+        )
+        for i in items if i.get("webUrl")
+    )
+    return SearchResponse(query=query, answer=None, results=results) if results else None
+
+
+def openalex_search(query: str, *, max_results: int = 5) -> SearchResponse | None:
+    """OpenAlex — scholarly works across every field, free, keyless."""
+    try:
+        resp = httpx.get(
+            "https://api.openalex.org/works",
+            params={"search": query[:300], "per-page": max(1, min(10, max_results))},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        works = resp.json().get("results") or []
+    except Exception:
+        _log.warning("openalex_search failed for %r", query[:60], exc_info=True)
+        return None
+    results = []
+    for w in works:
+        title = str(w.get("display_name") or "").strip()
+        if not title:
+            continue
+        url = w.get("doi") or w.get("id") or ""
+        venue = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
+        authors = ", ".join(
+            (a.get("author") or {}).get("display_name", "")
+            for a in (w.get("authorships") or [])[:3]
+        ).strip(", ")
+        bits = [b for b in (venue, str(w.get("publication_year") or ""), authors) if b]
+        results.append(SearchResult(title=title, url=str(url), snippet=" · ".join(bits)))
+    return SearchResponse(query=query, answer=None, results=tuple(results)) if results else None
+
+
+def clinical_trials_search(query: str, *, max_results: int = 5) -> SearchResponse | None:
+    """ClinicalTrials.gov v2 — registered trials, free, keyless."""
+    try:
+        resp = httpx.get(
+            "https://clinicaltrials.gov/api/v2/studies",
+            params={"query.term": query[:300], "pageSize": max(1, min(10, max_results))},
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        studies = resp.json().get("studies") or []
+    except Exception:
+        _log.warning("clinical_trials_search failed for %r", query[:60], exc_info=True)
+        return None
+    results = []
+    for s in studies:
+        proto = s.get("protocolSection") or {}
+        ident = proto.get("identificationModule") or {}
+        nct = ident.get("nctId")
+        title = str(ident.get("briefTitle") or "").strip()
+        if not (nct and title):
+            continue
+        status = (proto.get("statusModule") or {}).get("overallStatus", "")
+        conditions = ", ".join((proto.get("conditionsModule") or {}).get("conditions") or [])
+        results.append(SearchResult(
+            title=title,
+            url=f"https://clinicaltrials.gov/study/{nct}",
+            snippet=" · ".join(b for b in (status, conditions[:120]) if b),
+        ))
+    return SearchResponse(query=query, answer=None, results=tuple(results)) if results else None
