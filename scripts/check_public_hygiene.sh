@@ -12,7 +12,9 @@
 # No denylist file -> warn and pass (a fork without one shouldn't be blocked).
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# git rev-parse, not BASH_SOURCE: as a pre-push hook this script runs via a
+# symlink from .git/hooks/, so its own path resolves inside .git/.
+REPO_DIR="$(git rev-parse --show-toplevel)"
 DENYLIST="$REPO_DIR/.hygiene-denylist"
 
 if [[ ! -f "$DENYLIST" ]]; then
