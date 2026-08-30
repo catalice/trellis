@@ -1,0 +1,166 @@
+"""
+Always-available tools — passed to the assembler regardless of domain routing.
+
+Tools Claude always has access to:
+  - update_current_context: record what's going on right now
+  - save_preferences: save standing preferences — global (every turn) or per-domain
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from uuid import UUID
+
+from trellis.core_profile import CurrentContextService
+
+_log = logging.getLogger(__name__)
+
+
+# --- update_current_context -------------------------------------------------
+
+UPDATE_CONTEXT_TOOL = {
+    "name": "update_current_context",
+    "description": (
+        "Update current context — what's going on in the user's life right now "
+        "that Trellis should know about. Use any combination of fields."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "context": {
+                "type": "string",
+                "description": "General notes about what's going on right now.",
+            },
+            "physical_notes": {
+                "type": "string",
+                "description": "Physical state — injuries, illness, energy, body feels.",
+            },
+            "cognitive_notes": {
+                "type": "string",
+                "description": "Cognitive/exec state — stress, focus, life load, overwhelm.",
+            },
+        },
+        "required": [],
+    },
+}
+
+
+def handle_update_current_context(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    context_service: CurrentContextService,
+) -> str:
+    context_text = str(input_dict.get("context", "")).strip() or None
+    physical_notes = str(input_dict.get("physical_notes", "")).strip() or None
+    cognitive_notes = str(input_dict.get("cognitive_notes", "")).strip() or None
+
+    if not any([context_text, physical_notes, cognitive_notes]):
+        return "Nothing to update."
+    try:
+        context_service.update(
+            user_id,
+            misc_notes=context_text,
+            physical_notes=physical_notes,
+            cognitive_notes=cognitive_notes,
+            today=now.date(),
+        )
+        return "Got it."
+    except Exception:
+        _log.exception("update_current_context failed for user %s", user_id)
+        return "Couldn't save that — try again in a moment."
+
+
+# --- save_preferences -------------------------------------------------------
+
+SAVE_PREFERENCES_TOOL = {
+    "name": "save_preferences",
+    "description": (
+        "Save the user's standing preferences. Call when they express how they want "
+        "Trellis to behave. Use domain='global' for anything that applies everywhere — "
+        "formatting, tone, how to speak to them ('no tables', 'keep replies short'); "
+        "global preferences load on every turn. Use a specific domain only for "
+        "preferences about that area ('I prefer shorter sessions' -> move); those "
+        "load when the domain is active. Preferences ACCUMULATE: a new one is added "
+        "to what's already saved — send just the new preference, not a rewrite of "
+        "the old ones. Set replace=true ONLY when deliberately rewriting the whole "
+        "set (correcting or consolidating)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "domain": {
+                "type": "string",
+                "enum": ["global", "focus", "sense", "move"],
+                "description": (
+                    "'global' for preferences that apply to every reply; otherwise "
+                    "the domain they're about. When in doubt, use 'global'."
+                ),
+            },
+            "content": {
+                "type": "string",
+                "description": (
+                    "The user's preferences in plain text. Write in second person "
+                    "as a reminder to future Trellis — e.g. 'You never use tables; "
+                    "they don't render in Telegram.'"
+                ),
+            },
+            "replace": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "True ONLY to rewrite this domain's ENTIRE preference set "
+                    "(content must then include everything that should survive). "
+                    "Default false: content is appended to the existing preferences."
+                ),
+            },
+        },
+        "required": ["domain", "content"],
+    },
+}
+
+
+def handle_save_preferences(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    preferences_repository,
+) -> str:
+    domain = input_dict.get("domain", "").strip()
+    content = input_dict.get("content", "").strip()
+    replace = bool(input_dict.get("replace", False))
+    if not domain or not content:
+        return "Domain and content are required."
+    try:
+        preferences_repository.set(user_id, domain, content, replace=replace)
+        verb = "rewritten" if replace else "added"
+        return f"Preferences {verb} for {domain}."
+    except Exception:
+        _log.exception("save_preferences failed for user %s", user_id)
+        return "Couldn't save preferences — try again in a moment."
+
+
+# --- Registration ------------------------------------------------------------
+
+def meta_tools(
+    context_service: CurrentContextService,
+    preferences_repository,
+) -> list[tuple[dict, callable]]:
+    return [
+        (
+            UPDATE_CONTEXT_TOOL,
+            lambda uid, inp, now: handle_update_current_context(
+                uid, inp, now, context_service=context_service,
+            ),
+        ),
+        (
+            SAVE_PREFERENCES_TOOL,
+            lambda uid, inp, now: handle_save_preferences(
+                uid, inp, now, preferences_repository=preferences_repository,
+            ),
+        ),
+    ]

@@ -1,0 +1,328 @@
+"""The Watcher — verification engine, frame building, discovery parsing,
+verdict handling. Pure Python, no DB, no API calls.
+
+The core contract under test: silent below evidence (thin data verifies
+nothing), deterministic verification (same frame, same verdict), her verdict
+outranks the stats, dismissed never resurrects.
+"""
+from __future__ import annotations
+
+import unittest
+from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from trellis.core_watcher import (
+    _parse_hypotheses,
+    build_daily_frame,
+    handle_pattern_response,
+    verify,
+)
+
+TZ = ZoneInfo("Europe/Madrid")
+D0 = date(2026, 6, 1)
+
+
+def _frame(days: int, fill) -> dict:
+    """Build a synthetic frame: fill(i) -> row dict for day i."""
+    return {D0 + timedelta(days=i): fill(i) for i in range(days)}
+
+
+class TestConditionCompare(unittest.TestCase):
+    def test_verifies_a_real_luteal_effect(self):
+        # 10 luteal days at mood 2, 10 other days at mood 4 — a real effect.
+        frame = _frame(20, lambda i: {"mood": 2.0 if i < 10 else 4.0,
+                                      "phase": "luteal" if i < 10 else "follicular"})
+        verified, evidence, stats = verify(frame, {
+            "type": "condition_compare", "metric": "mood", "condition": "phase:luteal",
+        })
+        self.assertTrue(verified)
+        self.assertEqual(stats["n_with"], 10)
+        self.assertIn("mood averages 2.0", evidence)
+
+    def test_silent_below_evidence(self):
+        # Only 3 luteal days — below the per-side minimum. Effect huge, still no.
+        frame = _frame(20, lambda i: {"mood": 1.0 if i < 3 else 5.0,
+                                      "phase": "luteal" if i < 3 else "follicular"})
+        verified, evidence, _ = verify(frame, {
+            "type": "condition_compare", "metric": "mood", "condition": "phase:luteal",
+        })
+        self.assertFalse(verified)
+        self.assertIn("keep gathering", evidence)
+
+    def test_small_effect_does_not_verify(self):
+        frame = _frame(20, lambda i: {"mood": 3.2 if i < 10 else 3.4,
+                                      "phase": "luteal" if i < 10 else "follicular"})
+        verified, _, _ = verify(frame, {
+            "type": "condition_compare", "metric": "mood", "condition": "phase:luteal",
+        })
+        self.assertFalse(verified)
+
+    def test_ran_yesterday_condition(self):
+        # Energy 4 the day after every run, 2 otherwise.
+        frame = _frame(24, lambda i: {"energy": 4.0 if i % 2 else 2.0,
+                                      "ran": i % 2 == 0})
+        verified, _, stats = verify(frame, {
+            "type": "condition_compare", "metric": "energy", "condition": "ran_yesterday",
+        })
+        self.assertTrue(verified)
+        self.assertGreater(stats["mean_with"], stats["mean_without"])
+
+    def test_unknown_test_type_reports_itself(self):
+        verified, evidence, stats = verify({}, {"type": "seasonal_fourier"})
+        self.assertFalse(verified)
+        self.assertIn("can't verify", evidence)
+        self.assertEqual(stats.get("error"), "unknown_test")
+
+
+class TestCorrelation(unittest.TestCase):
+    def test_verifies_strong_correlation(self):
+        frame = _frame(15, lambda i: {"sleep_hours": 5 + (i % 4),
+                                      "energy": 1 + (i % 4)})
+        verified, evidence, stats = verify(frame, {
+            "type": "correlation", "series_a": "sleep_hours", "series_b": "energy",
+        })
+        self.assertTrue(verified)
+        self.assertGreaterEqual(stats["r"], 0.99)
+
+    def test_lagged_correlation_shifts_the_pair(self):
+        # sleep on day i predicts energy on day i+1, and ONLY lagged pairs align.
+        frame = {}
+        for i in range(15):
+            frame[D0 + timedelta(days=i)] = {
+                "sleep_hours": 5 + (i % 3),
+                "energy": 1 + ((i - 1) % 3),
+            }
+        verified, _, stats = verify(frame, {
+            "type": "correlation", "series_a": "sleep_hours", "series_b": "energy",
+            "lag_days": 1,
+        })
+        self.assertTrue(verified)
+        self.assertGreaterEqual(stats["r"], 0.99)
+
+    def test_too_few_pairs_stays_silent(self):
+        frame = _frame(5, lambda i: {"sleep_hours": 7, "energy": 3})
+        verified, evidence, _ = verify(frame, {
+            "type": "correlation", "series_a": "sleep_hours", "series_b": "energy",
+        })
+        self.assertFalse(verified)
+        self.assertIn("keep gathering", evidence)
+
+
+class TestDailyFrame(unittest.TestCase):
+    def test_frame_assembles_all_sources(self):
+        uid = uuid4()
+        noon = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        states = [SimpleNamespace(felt_at=noon, energy=4, mood=3)]
+        events = [
+            SimpleNamespace(occurred_at=noon, event_type="sleep", value=7.5),
+            SimpleNamespace(occurred_at=noon - timedelta(days=2),
+                            event_type="period_start", value=None),
+        ]
+        health = [SimpleNamespace(observed_on=date(2026, 6, 3), sleep_score=82,
+                                  sleep_duration_minutes=None, hrv_last_night=55.0,
+                                  body_battery_end=71, body_battery_maximum=90,
+                                  resting_heart_rate=54, average_stress=30)]
+        runs = [SimpleNamespace(ran_on=date(2026, 6, 3))]
+        frame = build_daily_frame(uid, states=states, events=events,
+                                  health_rows=health, runs=runs, tz=TZ,
+                                  today=date(2026, 6, 4))
+        row = frame[date(2026, 6, 3)]
+        self.assertEqual(row["energy"], 4)
+        self.assertEqual(row["sleep_hours"], 7.5)
+        self.assertEqual(row["sleep_score"], 82)
+        self.assertEqual(row["hrv"], 55.0)
+        self.assertTrue(row["ran"])
+        self.assertEqual(row["cycle_day"], 3)
+        self.assertEqual(row["phase"], "menstruation")
+
+
+class TestNotesInFrame(unittest.TestCase):
+    def test_her_words_land_truncated_and_capped(self):
+        uid = uuid4()
+        noon = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        states = [SimpleNamespace(felt_at=noon, energy=2, mood=2,
+                                  note="feeling really anxious about " + "x" * 100)]
+        states += [SimpleNamespace(felt_at=noon, energy=None, mood=None,
+                                   note=f"note {i}") for i in range(5)]
+        frame = build_daily_frame(uid, states=states, events=[], health_rows=[],
+                                  runs=[], tz=TZ, today=date(2026, 6, 4))
+        notes = frame[date(2026, 6, 3)]["notes"]
+        self.assertEqual(len(notes), 3)          # capped
+        self.assertLessEqual(len(notes[0]), 80)  # truncated
+        self.assertIn("anxious", notes[0])
+
+
+class TestDiscoveryParsing(unittest.TestCase):
+    def test_parses_hypotheses_with_and_without_tests(self):
+        raw = """```json
+        {"hypotheses": [
+          {"hypothesis": "Mood dips in the luteal phase",
+           "test": {"type": "condition_compare", "metric": "mood", "condition": "phase:luteal"}},
+          {"hypothesis": "Rough months follow short cycles", "test": null}
+        ]}
+        ```"""
+        parsed = _parse_hypotheses(raw)
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0][1]["metric"], "mood")
+        self.assertIsNone(parsed[1][1])
+
+    def test_wanted_test_survives_only_without_a_test(self):
+        raw = """{"hypotheses": [
+          {"hypothesis": "Rough months follow short cycles", "test": null,
+           "wanted_test": "compare each cycle's length against luteal mood dip depth"},
+          {"hypothesis": "Mood dips in luteal", 
+           "test": {"type": "condition_compare", "metric": "mood", "condition": "phase:luteal"},
+           "wanted_test": "should be ignored — a real test exists"}
+        ]}"""
+        parsed = _parse_hypotheses(raw)
+        self.assertEqual(parsed[0][2], "compare each cycle's length against luteal mood dip depth")
+        self.assertIsNone(parsed[1][2])
+
+    def test_garbage_yields_nothing(self):
+        self.assertEqual(_parse_hypotheses("not json"), [])
+
+
+class TestPatternResponse(unittest.TestCase):
+    class _FakeWatcher:
+        def __init__(self):
+            self.calls = []
+
+        def respond(self, user_id, pattern_id, verdict, note):
+            self.calls.append((pattern_id, verdict, note))
+            return {"hypothesis": "Mood dips in the luteal phase"}
+
+    def test_dismissed_promises_never_again(self):
+        w = self._FakeWatcher()
+        reply = handle_pattern_response(
+            uuid4(), {"pattern_id": str(uuid4()), "verdict": "dismissed"},
+            datetime.now(timezone.utc), watcher=w,
+        )
+        self.assertIn("never come up again", reply)
+        self.assertEqual(w.calls[0][1], "dismissed")
+
+    def test_bad_verdict_rejected(self):
+        reply = handle_pattern_response(
+            uuid4(), {"pattern_id": str(uuid4()), "verdict": "maybe"},
+            datetime.now(timezone.utc), watcher=self._FakeWatcher(),
+        )
+        self.assertIn("must be", reply)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestThemeRecurrence(unittest.TestCase):
+    def test_returning_theme_verifies(self):
+        verified, evidence, stats = verify({}, {
+            "type": "theme_recurrence", "theme": "making music",
+        }, theme_counter=lambda phrase, window: (7, ["drum machines seed",
+                                                     "PO-33 research",
+                                                     "Making Music effort"]))
+        self.assertTrue(verified)
+        self.assertIn("7 times", evidence)
+        self.assertEqual(stats["count"], 7)
+
+    def test_sparse_theme_keeps_gathering(self):
+        verified, evidence, _ = verify({}, {
+            "type": "theme_recurrence", "theme": "pottery",
+        }, theme_counter=lambda phrase, window: (2, ["ceramics seed"]))
+        self.assertFalse(verified)
+        self.assertIn("keep gathering", evidence)
+
+    def test_no_index_reports_itself(self):
+        verified, evidence, _ = verify({}, {
+            "type": "theme_recurrence", "theme": "anything",
+        })
+        self.assertFalse(verified)
+        self.assertIn("can't count", evidence)
+
+
+class TestWiderFrame(unittest.TestCase):
+    def test_run_metrics_and_task_completions_land(self):
+        uid = uuid4()
+        d = date(2026, 6, 3)
+        runs = [SimpleNamespace(ran_on=d, distance_km=6.4)]
+        activities = [SimpleNamespace(
+            start_time_epoch_seconds=int(datetime(2026, 6, 3, 17, 0,
+                                                  tzinfo=timezone.utc).timestamp()),
+            activity_type="running", average_heart_rate=168)]
+        task_events = [SimpleNamespace(event_type="completed",
+                                       occurred_at=datetime(2026, 6, 3, 9, 0,
+                                                            tzinfo=timezone.utc))]
+        frame = build_daily_frame(uid, states=[], events=[], health_rows=[],
+                                  runs=runs, activities=activities,
+                                  task_events=task_events, tz=TZ,
+                                  today=date(2026, 6, 4))
+        row = frame[d]
+        self.assertEqual(row["ran_km"], 6.4)
+        self.assertEqual(row["run_avg_hr"], 168)
+        self.assertEqual(row["tasks_done"], 1)
+
+
+class TestPatternResponseByWords(unittest.TestCase):
+    class _Repo:
+        def __init__(self, patterns):
+            self._p = patterns
+
+        def find_by_words(self, user_id, words):
+            return [p for p in self._p if words.lower() in p["hypothesis"].lower()]
+
+    class _Watcher:
+        def __init__(self, repo):
+            self._repo = repo
+            self.resolved = []
+
+        def respond(self, user_id, pattern_id, verdict, note):
+            self.resolved.append((pattern_id, verdict))
+            return {"hypothesis": "match"}
+
+    def test_matches_single_pattern_by_phrase(self):
+        pid = uuid4()
+        w = self._Watcher(self._Repo([{"id": pid, "hypothesis": "Days with meds logged tend to have higher mood"}]))
+        reply = handle_pattern_response(
+            uuid4(), {"pattern": "meds", "verdict": "dismissed"},
+            datetime.now(timezone.utc), watcher=w)
+        self.assertIn("never come up again", reply)
+        self.assertEqual(w.resolved[0][0], pid)
+
+    def test_ambiguous_phrase_asks_which(self):
+        w = self._Watcher(self._Repo([
+            {"id": uuid4(), "hypothesis": "Stress higher during menstruation"},
+            {"id": uuid4(), "hypothesis": "Stress lower after runs"},
+        ]))
+        reply = handle_pattern_response(
+            uuid4(), {"pattern": "stress", "verdict": "dismissed"},
+            datetime.now(timezone.utc), watcher=w)
+        self.assertIn("which one", reply)
+        self.assertEqual(w.resolved, [])
+
+
+class TestTrend(unittest.TestCase):
+    def test_falling_rhr_verifies(self):
+        frame = _frame(30, lambda i: {"resting_hr": 53 - (i // 4)})
+        verified, evidence, stats = verify(frame, {
+            "type": "trend", "metric": "resting_hr", "direction": "down"})
+        self.assertTrue(verified)
+        self.assertIn("falling", evidence)
+        self.assertLess(stats["mean_late"], stats["mean_early"])
+
+    def test_wrong_direction_fails_honestly(self):
+        frame = _frame(30, lambda i: {"resting_hr": 45 + (i // 4)})
+        verified, evidence, _ = verify(frame, {
+            "type": "trend", "metric": "resting_hr", "direction": "down"})
+        self.assertFalse(verified)
+        self.assertIn("opposite", evidence)
+
+    def test_flat_metric_stays_silent(self):
+        frame = _frame(30, lambda i: {"resting_hr": 50 + (i % 2)})
+        verified, _, _ = verify(frame, {"type": "trend", "metric": "resting_hr"})
+        self.assertFalse(verified)
+
+    def test_too_few_days_keeps_gathering(self):
+        frame = _frame(8, lambda i: {"resting_hr": 53 - i})
+        verified, evidence, _ = verify(frame, {"type": "trend", "metric": "resting_hr"})
+        self.assertFalse(verified)
+        self.assertIn("keep gathering", evidence)
