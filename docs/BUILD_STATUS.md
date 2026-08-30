@@ -75,8 +75,9 @@ Builds, in order:
    correlate any kind by name.
 5. Global tool fold — at trigger (~2 weeks of clean dispatch-write logs); the
    context/preferences meta pair rides the same review.
-6. From-scratch setup test — fresh install + onboarding walked end to end, so
-   "anyone sets up Trellis and it builds itself for them" is verified, not assumed.
+6. From-scratch setup test — follow SETUP.md LITERALLY on a clean environment
+   (the doc is the test script; every divergence fixes the doc or the code),
+   ending with onboarding building a Trellis for whoever showed up.
 
 Small, awaiting a yes: Watcher in-chat evidence labeled as historical examples
 (the hallucinated-effort fix); wordiness pass over the older prompts; NYT news
