@@ -27,6 +27,8 @@ class StateLog:
     mood: int | None                      # 1-5, derived from the note
     felt_at: datetime                     # when the state was felt (may be retro)
     logged_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    extra: dict | None = None             # any other tracked kinds this entry carries
+                                          # ({"anxiety": 2}) — data, never schema
 
 
 @dataclass(frozen=True)

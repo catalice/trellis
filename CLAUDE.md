@@ -226,6 +226,11 @@ Health and wellbeing tracking — the monitoring house (Mind).
 
 **What it owns:**
 - Self-reported state: mood, energy, meds, sleep, period/cycle (`log_state`)
+- **The ONE tracking log** (migration 020, her design): a row = when + their words +
+  a FACTS map. A new trackable kind (anxiety, cramps, restless_legs...) is a new key
+  — data, never schema. The old state/event shapes are repo-composed VIEWS over the
+  log (the logbook pattern); tracked kinds ride Sense context so the model reuses
+  names instead of minting synonyms. The Watcher can correlate any kind by name.
 - Garmin health data: sleep score, HRV, body battery, resting heart rate — Sense OWNS this; Move borrows it
 - The wellbeing snapshot: raw signals with loud staleness marking — there is NO computed readiness score or band; Claude reads the numbers and judges
 

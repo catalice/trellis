@@ -93,6 +93,17 @@ LOG_STATE_TOOL: dict = {
                 "type": "string", "enum": ["started", "ended"],
                 "description": "If they say their period started or ended.",
             },
+            "extra": {
+                "type": "object",
+                "description": (
+                    "Any OTHER tracked dimensions their words carry, as "
+                    "kind: value pairs — e.g. {\"anxiety\": 2} (1-5 from their "
+                    "words), {\"restless_legs\": true}, {\"cramps\": true}. "
+                    "REUSE the kind names listed in your context before minting "
+                    "a new one (snake_case). A new kind costs nothing — track "
+                    "what they actually talk about."
+                ),
+            },
             "period_date": {
                 "type": "string",
                 "description": (
@@ -129,12 +140,14 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
             except ValueError:
                 felt_at = None
 
+        extra = input_dict.get("extra")
         log = sense_service.log_state(
             user_id, note,
             energy=int(energy) if energy is not None else None,
             mood=int(mood) if mood is not None else None,
             now=now,
             felt_at=felt_at,
+            extra=extra if isinstance(extra, dict) else None,
         )
         scores = ", ".join(
             s for s in (
@@ -299,6 +312,15 @@ def sense_context_loader(sense_service) -> ContextLoader:
     latest readiness — so the room reflects from what's stored, no read tool needed."""
     def loader(user_id: UUID, now: datetime) -> str | None:
         parts: list[str] = [SENSE_GUIDANCE]
+        try:
+            kinds = sense_service.tracked_kinds(user_id)
+            if kinds:
+                parts.append(
+                    "[Tracked kinds — reuse these names in log_state extra, "
+                    "don't mint synonyms]: " + ", ".join(kinds)
+                )
+        except Exception:
+            _log.warning("tracked kinds failed", exc_info=True)
         try:
             tracking = _fmt_tracking(
                 sense_service.recent_states(user_id, days=7, now=now),

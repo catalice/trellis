@@ -63,6 +63,7 @@ class SenseService:
         mood: int | None,
         now: datetime,
         felt_at: datetime | None = None,
+        extra: dict | None = None,
     ) -> StateLog:
         log = self._repo.save_state(StateLog(
             id=uuid4(),
@@ -72,6 +73,8 @@ class SenseService:
             mood=_clamp_score(mood),
             felt_at=felt_at or now,
             logged_at=now,
+            extra={str(k): v for k, v in (extra or {}).items()
+                   if str(k).strip()} or None,
         ))
         if self._projection:
             self._projection.state_logged(log)
@@ -98,6 +101,9 @@ class SenseService:
         if self._projection:
             self._projection.tracking_changed(user_id)
         return event
+
+    def tracked_kinds(self, user_id: UUID) -> list[str]:
+        return self._repo.tracked_kinds(user_id)
 
     def today(self, user_id: UUID, now: datetime) -> list[StateLog]:
         start = now.astimezone(self._tz).replace(hour=0, minute=0, second=0, microsecond=0)
