@@ -61,6 +61,19 @@ Corollaries:
 
 ---
 
+## Source in truth — nothing asserted without one
+
+The user's law (30 Aug 2026): **everything Trellis asserts must trace to a
+source** — their data (tracking rows, activity records, stored plans), their
+words (captures, notes, annotations), or a citation fetched live and saved.
+Never model recall dressed as fact. This is why retrieve-before-assert exists
+(read the stored thing before describing it), why the Watcher verifies in
+Python before speaking, and why any future knowledge feature (Learn) must
+fetch and store its citations — a reference that can't be followed back to
+its source doesn't get kept.
+
+---
+
 ## Routing — how a message reaches a house
 
 Routing is SEMANTIC (meaning, not keywords) and shapes CONTEXT ONLY. Tools are always available regardless of routing — Claude decides what to call from tool descriptions. This is non-negotiable: gating tools by routing caused the model to deny real capabilities.
