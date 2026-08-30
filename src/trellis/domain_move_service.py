@@ -60,6 +60,7 @@ class MoveService:
         garmin_push: GarminWorkoutPort | None = None,
         garmin_read: GarminActivityPort | None = None,
         garmin_sync: GarminSyncPort | None = None,
+        health_repo=None,  # stored activity details (fetch-through cache)
         projection=None,   # vault view with .plan_changed(user_id); best-effort
     ) -> None:
         self._repo = repo
@@ -68,6 +69,7 @@ class MoveService:
         self._garmin_push = garmin_push
         self._garmin_read = garmin_read
         self._garmin_sync = garmin_sync
+        self._health = health_repo
         self._projection = projection
 
     def _project_plan(self, user_id: UUID) -> None:
@@ -210,26 +212,47 @@ class MoveService:
     def review_run(self, user_id: UUID, *, which: int = 0) -> dict | None:
         """Full detail for one recent activity of ANY type (which=0 is the most
         recent — runs, strength, whatever the watch recorded): the overall summary
-        + for runs a per-split breakdown (pace + HR per lap/rep). None if no
-        activities. Raises RuntimeError if Garmin isn't wired/connected."""
-        if self._garmin_read is None:
-            raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
-        activities = self._garmin_read.recent_activities(user_id, limit=max(which + 1, 1))
-        if not activities or which >= len(activities):
+        + for runs a per-split breakdown (pace + HR per lap/rep). Fetch-through:
+        the list and any stored detail come from the DB; a missing detail is
+        fetched from Garmin ONCE, stored, then read — one truth path, cached
+        forever after. None if nothing is recorded."""
+        workouts = self._repo.recent_workouts(user_id, limit=max(which + 1, 1))
+        if not workouts or which >= len(workouts):
             return None
-        act = activities[which]
+        act = workouts[which]
         overall: dict[str, Any] = {
-            "name": getattr(act, "name", None) or "workout",
-            "date": (d.isoformat() if (d := _activity_date(act, self._tz)) else None),
-            "distance_km": round(act.distance_meters / 1000, 2) if getattr(act, "distance_meters", None) else None,
-            "duration_min": round(act.duration_milliseconds / 60000, 1) if getattr(act, "duration_milliseconds", None) else None,
-            "avg_hr": getattr(act, "average_heart_rate", None),
-            "max_hr": getattr(act, "maximum_heart_rate", None),
+            "name": act.name or "workout",
+            "date": act.ran_on.isoformat() if act.ran_on else None,
+            "distance_km": act.distance_km,
+            "duration_min": act.duration_min,
+            "avg_hr": act.avg_hr,
+            "max_hr": act.max_hr,
+            "their_words": act.user_note,
         }
         splits: list[dict] = []
         try:
-            detail = self._garmin_read.activity_detail(user_id, act.activity_id)
-            splits = _extract_splits(detail)
+            detail = None
+            stored = (
+                self._health.get_activity_detail(user_id, act.garmin_activity_id)
+                if self._health is not None and act.garmin_activity_id else None
+            )
+            if stored is not None:
+                from trellis.infra_garmin import GarminActivityDetail
+                detail = GarminActivityDetail(
+                    activity_id=act.garmin_activity_id, raw=stored,
+                )
+            elif self._garmin_read is not None and act.garmin_activity_id:
+                detail = self._garmin_read.activity_detail(user_id, act.garmin_activity_id)
+                if self._health is not None and getattr(detail, "raw", None):
+                    try:
+                        self._health.upsert_activity_detail(
+                            user_id=user_id, activity_id=act.garmin_activity_id,
+                            raw_data=detail.raw, sync_run_id=None,
+                        )
+                    except Exception:
+                        _log.warning("review_run: detail store failed", exc_info=True)
+            if detail is not None:
+                splits = _extract_splits(detail)
         except Exception:
             _log.warning("review_run: detail fetch/parse failed", exc_info=True)
         return {"overall": overall, "splits": splits}

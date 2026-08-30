@@ -92,48 +92,6 @@ high = requires full focus.
 Only if there is real substance — not every message needs hints. Empty array is fine.\
 """
 
-_EFFORT_SUGGESTION_SYSTEM = """\
-You are reviewing a set of recent brain dumps and captures to find recurring themes \
-worth naming as an Effort — an ongoing area of work or exploration the user keeps \
-returning to without yet having given it a home.
-
-Return ONLY valid JSON:
-{
-  "suggestions": [
-    {
-      "title": "...",
-      "rationale": "...",
-      "intensity": "active" | "simmering" | "dormant"
-    }
-  ]
-}
-
-Rules:
-- Only suggest if a theme appears meaningfully across multiple captures.
-- Title should be short and evocative, not clinical.
-- Rationale: one sentence on why this feels like an Effort rather than a passing thought.
-- Intensity: active = clearly working on this now. simmering = keeps coming up but \
-not urgent. dormant = interesting but not active. Default to simmering when unsure.
-- Empty suggestions array is fine if nothing stands out.\
-"""
-
-
-# ---------------------------------------------------------------------------
-# Synthesis result dataclass
-# (returned by suggest_efforts — not in models since it's Claude-layer only)
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class EffortSuggestion:
-    title: str
-    rationale: str
-    intensity: str
-
-
-# ---------------------------------------------------------------------------
-# Client
-# ---------------------------------------------------------------------------
-
 class BrainDumpClaude:
     def __init__(self, client: Anthropic, model: str) -> None:
         self._client = client
@@ -152,24 +110,6 @@ class BrainDumpClaude:
         except Exception:
             _log.warning("BrainDumpClaude.synthesise failed", exc_info=True)
             return None
-
-    def suggest_efforts(self, capture_summaries: list[str]) -> list[EffortSuggestion]:
-        if not capture_summaries:
-            return []
-        combined = "\n".join(f"- {s}" for s in capture_summaries)
-        try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=16000,
-                system=_EFFORT_SUGGESTION_SYSTEM,
-                messages=[{"role": "user", "content": f"Recent captures:\n{combined}"}],
-            )
-            raw = response.content[0].text.strip()
-            return _parse_effort_suggestions(raw)
-        except Exception:
-            _log.warning("BrainDumpClaude.suggest_efforts failed", exc_info=True)
-            return []
-
 
 # ---------------------------------------------------------------------------
 # Parsers
@@ -240,23 +180,3 @@ def _parse_synthesis(raw: str) -> BrainDumpResult | None:
     )
 
 
-def _parse_effort_suggestions(raw: str) -> list[EffortSuggestion]:
-    try:
-        data = json.loads(_strip_json_fences(raw))
-    except json.JSONDecodeError:
-        _log.warning("BrainDumpClaude: effort suggestions response was not valid JSON")
-        return []
-
-    results = []
-    for s in data.get("suggestions", []):
-        if not isinstance(s, dict) or not s.get("title"):
-            continue
-        intensity = s.get("intensity", "simmering")
-        if intensity not in ("active", "simmering", "dormant"):
-            intensity = "simmering"
-        results.append(EffortSuggestion(
-            title=str(s["title"]).strip(),
-            rationale=str(s.get("rationale", "")).strip(),
-            intensity=intensity,
-        ))
-    return results

@@ -33,6 +33,7 @@ class TrainingRepository(Protocol):
 _ACTIVITY_COLS = (
     "SELECT id, user_id, activity_id, name, activity_type, "
     "start_time_epoch_seconds, distance_meters, average_heart_rate, "
+    "maximum_heart_rate, "
     "duration_milliseconds, user_note, updated_at FROM garmin_activities"
 )
 
@@ -131,4 +132,11 @@ def _run_row(row: dict, tz) -> RunLog:
         created_at=row.get("updated_at"),
         activity_type=row.get("activity_type"),
         user_note=row.get("user_note"),
+        name=row.get("name"),
+        duration_min=(
+            round(row["duration_milliseconds"] / 60000, 1)
+            if row.get("duration_milliseconds") else None
+        ),
+        avg_hr=row.get("average_heart_rate"),
+        max_hr=row.get("maximum_heart_rate"),
     )

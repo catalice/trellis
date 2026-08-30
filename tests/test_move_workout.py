@@ -159,24 +159,32 @@ class TestActivityVisibility(unittest.TestCase):
         from zoneinfo import ZoneInfo
         from trellis.domain_move_service import MoveService
 
-        class FakeReader:
-            def recent_activities(self, user_id, *, limit):
-                return activities[:limit]
-            def activity_detail(self, user_id, activity_id):
-                raise RuntimeError("no detail in test")
+        from datetime import datetime, timezone as tzu
+        from uuid import uuid4
+        from trellis.domain_move_models import RunLog
+
+        def view(act):
+            return RunLog(
+                id=uuid4(), user_id=uuid4(),
+                ran_on=datetime.fromtimestamp(
+                    act.start_time_epoch_seconds, tz=tzu.utc).date(),
+                note=act.name, name=act.name,
+                distance_km=(round(act.distance_meters / 1000, 2)
+                             if act.distance_meters else None),
+                garmin_activity_id=act.activity_id,
+                activity_type=act.activity_type,
+                duration_min=round(act.duration_milliseconds / 60000, 1),
+                avg_hr=act.average_heart_rate, max_hr=act.maximum_heart_rate,
+            )
 
         class FakeRepo:
-            added = []
+            def recent_workouts(self, user_id, *, limit):
+                return [view(a) for a in activities[:limit]]
             def recent_runs(self, user_id, limit=200):
                 return []
-            def add_run(self, run):
-                self.added.append(run)
-                return run
 
         self.repo = FakeRepo()
-        self.repo.added = []
-        return MoveService(self.repo, goals=None, tz=ZoneInfo("Europe/Madrid"),
-                           garmin_read=FakeReader())
+        return MoveService(self.repo, goals=None, tz=ZoneInfo("Europe/Madrid"))
 
     @staticmethod
     def _act(activity_type, name, epoch, distance=None, hr=None):

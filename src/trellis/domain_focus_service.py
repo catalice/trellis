@@ -38,7 +38,6 @@ class CaptureRepository(Protocol):
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Capture]: ...
     def list_unassigned(self, user_id: UUID, *, since: date) -> list[Capture]: ...
     def assign_to_effort(self, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
-    def archive(self, capture_id: UUID) -> None: ...
     def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
 
 
@@ -79,7 +78,6 @@ class GoalRepository(Protocol):
 
 class BrainDumpClaude(Protocol):
     def synthesise(self, raw_text: str, current_date_line: str) -> BrainDumpResult | None: ...
-    def suggest_efforts(self, capture_summaries: list[str]) -> list: ...
 
 
 class VaultProjection(Protocol):
@@ -217,13 +215,6 @@ class CaptureService:
         if self._projection:
             self._projection.capture_assigned(capture)
         return capture
-
-    def archive(self, capture_id: UUID) -> None:
-        self._repo.archive(capture_id)
-        # Archived captures leave the inbox — drop them from recall too so it
-        # never surfaces something the user has consciously filed away.
-        if self._memory is not None:
-            self._memory.forget("capture", capture_id)
 
     def delete(self, user_id: UUID, capture_id: UUID) -> bool:
         """Erase a mis-capture (test, mistake) — tasks extracted from it are
@@ -590,33 +581,6 @@ class GoalService:
         if status is not None:
             kwargs["status"] = status
         return self._repo.update(goal_id, **kwargs)
-
-
-# ---------------------------------------------------------------------------
-# CleanupService — weekly review: surfaces unassigned captures, suggests efforts
-# ---------------------------------------------------------------------------
-
-class CleanupService:
-    def __init__(
-        self,
-        capture_repo: CaptureRepository,
-        effort_repo: EffortRepository,
-        claude: BrainDumpClaude,
-    ) -> None:
-        self._captures = capture_repo
-        self._efforts = effort_repo
-        self._claude = claude
-
-    def inbox(self, user_id: UUID, *, days: int = 30) -> list[Capture]:
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).date()
-        return self._captures.list_unassigned(user_id, since=since)
-
-    def suggest_efforts(self, user_id: UUID, *, days: int = 30) -> list:
-        captures = self.inbox(user_id, days=days)
-        summaries = [c.summary for c in captures if c.summary]
-        if not summaries:
-            return []
-        return self._claude.suggest_efforts(summaries)
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 class HealthProvider(StrEnum):
     GARMIN = "garmin"
-    SELF_REPORT = "self_report"
 
 
 class HealthSyncKind(StrEnum):
@@ -225,6 +224,7 @@ class HealthRepository(Protocol):
                 return [self._activity(r) for r in cursor.fetchall()]
 
     def upsert_activity_detail(self, *, user_id: UUID, activity_id: str, raw_data: dict[str, Any], sync_run_id: UUID | None) -> None: ...
+    def get_activity_detail(self, user_id: UUID, activity_id: str) -> dict | None: ...
     def start_sync(self, run: HealthSyncRun) -> HealthSyncRun: ...
     def finish_sync(self, run: HealthSyncRun) -> HealthSyncRun: ...
 
@@ -389,6 +389,26 @@ class PostgresHealthRepository:
                                                    tzinfo=timezone.utc).timestamp())),
                 )
                 return [self._activity(r) for r in cursor.fetchall()]
+
+    def get_activity_detail(self, user_id: UUID, activity_id: str) -> dict | None:
+        """Stored split sections for one activity, or None if never fetched.
+        Keys mirror Garmin's raw shape so GarminActivityDetail can wrap them."""
+        with self.database.connect() as connection:
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    "SELECT splits, split_summaries, typed_splits, exercise_sets"
+                    " FROM garmin_activity_details WHERE user_id = %s AND activity_id = %s",
+                    (user_id, activity_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                return {
+                    "splits": row.get("splits") or [],
+                    "splitSummaries": row.get("split_summaries") or {},
+                    "typedSplits": row.get("typed_splits") or {},
+                    "exerciseSets": row.get("exercise_sets") or {},
+                }
 
     def upsert_activity_detail(
         self, *, user_id: UUID, activity_id: str,

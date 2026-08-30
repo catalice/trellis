@@ -257,35 +257,6 @@ DELETE_ENTRY_TOOL: dict = {
     },
 }
 
-CLEANUP_SESSION_TOOL: dict = {
-    "name": "cleanup_session",
-    "description": (
-        "Manage the periodic cleanup — organising reviewed captures. "
-        "(To LIST unassigned captures, use focus_get what='inbox'.) "
-        "action='suggest_efforts': get AI suggestions for recurring themes worth naming as Efforts. "
-        "action='assign': assign a capture to an effort or archive it."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["suggest_efforts", "assign"],
-            },
-            "capture_id": {
-                "type": "string",
-                "description": "Required for action='assign'.",
-            },
-            "effort_id": {
-                "type": "string",
-                "description": "For action='assign': effort to assign to. Omit to archive instead.",
-            },
-        },
-        "required": ["action"],
-    },
-}
-
-
 # ---------------------------------------------------------------------------
 # Handlers — (user_id, input_dict, now, *, services) -> str
 # ---------------------------------------------------------------------------
@@ -401,7 +372,7 @@ def handle_focus_get(
     if what == "efforts":
         efforts = effort_service.list_all(user_id)
         if not efforts:
-            return "No efforts yet. These emerge from cleanup sessions."
+            return "No efforts yet. They grow from saved research and graduated seeds."
         lines = []
         for e in efforts:
             lines.append(f"  [{e.id}] {e.title} ({e.intensity.value})")
@@ -750,7 +721,8 @@ SAVE_TO_EFFORT_TOOL: dict = {
         "conversation, instead of offering to 'save to a seed'. Finds the effort "
         "by name or creates it if new — so a seed graduating into real exploration "
         "gets a home. If this came from a seed, pass graduated_seed_id to retire "
-        "the seed (it's an effort now)."
+        "the seed (it's an effort now). To file an EXISTING inbox capture into an "
+        "effort, pass capture_id instead of content."
     ),
     "input_schema": {
         "type": "object",
@@ -767,8 +739,12 @@ SAVE_TO_EFFORT_TOOL: dict = {
                 "type": "string",
                 "description": "UUID of the seed this grew from, if any — it gets retired.",
             },
+            "capture_id": {
+                "type": "string",
+                "description": "UUID of an existing capture (from focus_get inbox) to file into this effort — instead of content.",
+            },
         },
-        "required": ["effort_title", "content"],
+        "required": ["effort_title"],
     },
 }
 
@@ -823,9 +799,18 @@ def handle_save_to_effort(
 ) -> str:
     title = str(input_dict.get("effort_title", "")).strip()
     content = str(input_dict.get("content", "")).strip()
-    if not title or not content:
-        return "effort_title and content are both required."
+    capture_id_str = str(input_dict.get("capture_id", "")).strip()
+    if not title:
+        return "effort_title is required."
+    if not content and not capture_id_str:
+        return "Pass content (new material) or capture_id (an existing capture to file)."
     effort = effort_service.find_or_create(user_id, title, now)
+    if capture_id_str:
+        try:
+            capture_service.assign(UUID(capture_id_str), effort.id)
+        except ValueError:
+            return f"Invalid capture_id: {capture_id_str!r}"
+        return f"Filed that capture into '{effort.title}'. It's on your {effort.title} page."
     capture_service.save_research(user_id, content, effort_id=effort.id, now=now)
 
     retired = ""
@@ -884,53 +869,6 @@ def handle_recall(
         pct = round(m.similarity * 100)
         lines.append(f"  [{m.entity_id}] ({m.kind}, ~{pct}%) {label}")
     return "\n".join(lines)
-
-
-def handle_cleanup_session(
-    user_id: UUID,
-    input_dict: dict,
-    now: datetime,
-    *,
-    capture_service,
-    cleanup_service,
-) -> str:
-    action = str(input_dict.get("action", "")).strip()
-
-    if action == "inbox":
-        # Folded into focus_get 12 Aug — one read home for the inbox.
-        return "The inbox listing lives in focus_get (what='inbox') — call that instead."
-
-    if action == "suggest_efforts":
-        suggestions = cleanup_service.suggest_efforts(user_id)
-        if not suggestions:
-            return "No recurring themes spotted yet — keep capturing and check back later."
-        lines = ["Effort suggestions:"]
-        for s in suggestions:
-            lines.append(f"\n  {s.title} ({s.intensity})\n  {s.rationale}")
-        return "\n".join(lines)
-
-    if action == "assign":
-        capture_id_str = str(input_dict.get("capture_id", "")).strip()
-        if not capture_id_str:
-            return "capture_id is required for action='assign'."
-        try:
-            capture_id = UUID(capture_id_str)
-        except ValueError:
-            return f"Invalid capture_id: {capture_id_str!r}"
-
-        effort_id_str = input_dict.get("effort_id")
-        if effort_id_str:
-            try:
-                effort_id = UUID(str(effort_id_str))
-                capture_service.assign(capture_id, effort_id)
-                return "Capture assigned to effort."
-            except ValueError:
-                return f"Invalid effort_id: {effort_id_str!r}"
-        else:
-            capture_service.archive(capture_id)
-            return "Capture archived."
-
-    return f"Unknown action: {action!r}. Use: suggest_efforts, assign."
 
 
 # ---------------------------------------------------------------------------
@@ -1078,7 +1016,6 @@ def focus_tools(
     capture_service,
     effort_service,
     reminder_service,
-    cleanup_service,
     sense_service,
     web_search,
     tz,
@@ -1128,14 +1065,6 @@ def focus_tools(
             lambda uid, inp, now: handle_delete_entry(
                 uid, inp, now, sense_service=sense_service,
                 task_service=task_service, capture_service=capture_service,
-            ),
-        ),
-        (
-            CLEANUP_SESSION_TOOL,
-            lambda uid, inp, now: handle_cleanup_session(
-                uid, inp, now,
-                capture_service=capture_service,
-                cleanup_service=cleanup_service,
             ),
         ),
         (

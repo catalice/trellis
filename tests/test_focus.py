@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from trellis.domain_focus_claude import (
-    _parse_effort_suggestions,
     _parse_synthesis,
     _strip_json_fences,
 )
@@ -34,7 +33,6 @@ from trellis.domain_focus_models import (
 )
 from trellis.domain_focus_service import (
     BrainDumpService,
-    CleanupService,
     GoalNotFoundError,
     GoalService,
     ReminderService,
@@ -209,9 +207,6 @@ class FakeClaude:
     def synthesise(self, raw_text, current_date_line):
         return self.result
 
-    def suggest_efforts(self, summaries):
-        return []
-
 
 # ---------------------------------------------------------------------------
 # Parser tests
@@ -274,18 +269,6 @@ class TestParsers:
         raw = ('{"capture_type": "idea", "cleaned_text": "text", "summary": "'
                + "x" * 200 + '"}')
         assert len(_parse_synthesis(raw).summary) == 80
-
-    def test_effort_suggestions_fenced(self):
-        raw = """```json
-{"suggestions": [{"title": "Void", "rationale": "keeps coming up", "intensity": "active"}]}
-```"""
-        result = _parse_effort_suggestions(raw)
-        assert len(result) == 1
-        assert result[0].title == "Void"
-
-    def test_effort_suggestions_bad_intensity_defaults(self):
-        raw = '{"suggestions": [{"title": "X", "rationale": "", "intensity": "blazing"}]}'
-        assert _parse_effort_suggestions(raw)[0].intensity == "simmering"
 
     def test_strip_fences_no_fence_passthrough(self):
         assert _strip_json_fences('{"a": 1}') == '{"a": 1}'
@@ -703,7 +686,7 @@ class TestWebSearch:
         svc = None
         return focus_tools(
             task_service=svc, goal_service=svc, capture_service=svc,
-            effort_service=svc, reminder_service=svc, cleanup_service=svc,
+            effort_service=svc, reminder_service=svc,
             sense_service=svc, web_search=web_search, tz=TZ,
         )
 

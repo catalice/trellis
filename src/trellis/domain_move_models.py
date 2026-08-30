@@ -34,3 +34,7 @@ class RunLog:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     activity_type: str | None = None        # running / strength_training / hiit / ...
     user_note: str | None = None            # the user's layer, sync can't touch it
+    name: str | None = None                 # the Garmin name alone
+    duration_min: float | None = None
+    avg_hr: int | None = None
+    max_hr: int | None = None

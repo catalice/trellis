@@ -50,7 +50,6 @@ from trellis.domain_focus_repo import (
 from trellis.domain_focus_service import (
     BrainDumpService,
     CaptureService,
-    CleanupService,
     EffortService,
     GoalService,
     ReminderService,
@@ -234,7 +233,6 @@ def main() -> None:
         capture_repo, task_repo, brain_dump_claude, settings.timezone,
         projection=vault, memory=memory,
     )
-    cleanup_service = CleanupService(capture_repo, effort_repo, brain_dump_claude)
 
     # --- Move domain (reads goals from the second brain; stores its own plan) ---
     # Garmin push (workouts -> watch) + recent-run read + data sync. Gated: needs the
@@ -270,6 +268,7 @@ def main() -> None:
         garmin_push=garmin_push,
         garmin_read=garmin_read,
         garmin_sync=garmin_sync,
+        health_repo=health_reader,
         projection=vault,
     )
 
@@ -287,7 +286,6 @@ def main() -> None:
             capture_service=capture_service,
             effort_service=effort_service,
             reminder_service=reminder_service,
-            cleanup_service=cleanup_service,
             sense_service=sense_service,
             web_search=web_search,
             tz=settings.timezone,
