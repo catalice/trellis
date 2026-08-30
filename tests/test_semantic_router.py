@@ -21,12 +21,14 @@ from trellis.infra_router import SemanticRouter
 from trellis.domain_focus_tool import FOCUS_ROOMS
 from trellis.domain_sense_tool import SENSE_ROOMS
 from trellis.domain_move_tool import MOVE_ROOMS
+from trellis.domain_learn_tool import LEARN_ROOMS
 
 # The real houses — used by the Layer 2 live proof against the actual embedder.
 HOUSES = {
     "focus": FOCUS_ROOMS,
     "sense": SENSE_ROOMS,
     "move": MOVE_ROOMS,
+    "learn": LEARN_ROOMS,
 }
 
 # Layer 1 proves the ROUTING LOGIC with hand-controlled vectors. Two synthetic
@@ -219,6 +221,9 @@ LIVE_CASES = [
     ("hey", "BIGBRAIN"),
     ("thanks, that's great", "BIGBRAIN"),
     ("morning!", "BIGBRAIN"),
+    ("teach me how central banks actually work", ["learn"]),
+    ("start a learning thread on geopolitics", ["learn"]),
+    ("test my knowledge on what we covered", ["learn"]),
     # borderline — sits on a line between houses with the current rooms.
     ("did I sleep ok for a run tomorrow?", "BORDERLINE"),
     ("what do we do this week?", "BORDERLINE"),

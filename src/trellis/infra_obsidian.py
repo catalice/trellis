@@ -731,6 +731,20 @@ class ObsidianVault:
 
     # --- The Watcher's window ------------------------------------------------
 
+    def learn_map(self, title: str, body: str) -> None:
+        """One map page per Learn thread (Atlas/Maps/<title>.md). The map is
+        drawn by the user in conversation; this is its window. Same write-only
+        never-raise contract as every projection."""
+        try:
+            if not self._vault.exists():
+                return
+            safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Untitled"
+            path = self._vault / "Atlas" / "Maps" / f"{safe}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"# {title}\n\n{body}", encoding="utf-8")
+        except Exception:
+            logger.warning("learn map write failed", exc_info=True)
+
     def watcher_page(self, body: str) -> None:
         """The window into the slow mind — everything the Watcher is thinking,
         by status. Rewritten on every tick/verdict; same write-only contract."""

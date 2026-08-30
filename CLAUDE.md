@@ -15,7 +15,7 @@ Trellis is a second brain. Not a coaching bot. Not a task manager. A persistent 
   - **Move** — the running coach. The DOING side of the body: plans, workouts, races, Garmin push.
   - **Sense** — health and wellbeing tracking. The MONITORING side: mood, energy, meds, cycle, sleep, HRV, readiness. Owns the Garmin health data.
   - **Focus** — executive function. The recording side: tasks, reminders, ideas, brain dumps, goals, efforts.
-  - **Learn** — deliberate knowledge building. Future house; not yet registered.
+  - **Learn** — deliberate understanding. Knowledge maps the user draws, built bottom-up; sources fetched, never recalled.
 - **Rooms** are the phrases inside each house that describe what it handles ("shopping lists", "recovery and readiness", "intervals and long runs"). The router matches messages against rooms, not house names. Growing a house = adding a room to its list.
 
 The axis between Move and Sense is doing vs monitoring, NOT physical vs mental — that's why aches live in Sense.
@@ -259,11 +259,11 @@ Garmin sync runs two ways: automatically in the background daily, and via the `s
 
 ## The Learn house
 
-Future. Deliberate knowledge building — a different cognitive mode from Focus.
+Deliberate understanding — a different cognitive mode from Focus (registered 30 Aug 2026).
 
 **The distinction:** Focus is retrieval and action (closing tabs, not losing things). Learn is synthesis and understanding (building something deliberately). Test: does it need to be *done* or *understood*? Done → Focus. Understood → Learn.
 
-When built: learning threads (named topics), entries within threads, periodic synthesis within a thread.
+**The shape: a MAP the user draws.** They are the cartographer — they name regions and place pieces; Trellis is the surveyor: checks the map against fetched sources, keeps "you are here" current, and runs retrieval-practice tests FROM their map (conversation, no tools — outcomes land as kind='test' entries). Rooms cover threads/maps, bottom-up explanation, news-onto-scaffolding, cited research, and quizzes — news and research are tempos of understanding, not separate houses. Source-in-truth is enforced in the service: a kind='source' entry without a fetched URL is refused. Collecting isn't climbing: thread health is when they last climbed, never how much is saved. The Watcher never reads map content; learning ACTIVITY is garden-visible like any behavior. Maps project to `Atlas/Maps/<thread>.md`.
 
 ---
 
@@ -310,16 +310,17 @@ Two patterns, chosen by risk profile:
 | **Dispatch write** `{house}_add` / `{house}_update` | Create/change verbs repeated across a house's entities | One door per verb (her call, 30 Aug — "we can always regress"). Detail lives in PER-FIELD descriptions tagged by entity, never one prose wall. The proven per-entity handlers stay behind the dispatch. log_state was the precedent: a union write that works. |
 | **Specific named write** `save_training_plan`, `push_to_watch`, `delete_entry` | Distinct acts and destructive acts | An act with its own risk profile keeps its own name — deletion must never be reachable by enum typo. |
 
-**All tools are always available** — routing never gates them. The current 16:
+**All tools are always available** — routing never gates them. The current 18:
 
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`, `pattern_response`
 - **Focus:** `focus_get`, `focus_add`, `focus_update`, `delete_entry`, `web_search`
 - **Sense:** `log_state` (the ONE tool — reads are context, not tools)
+- **Learn:** `learn_get`, `learn_add` (dispatch pair; retrieval tests are conversation + one write)
 - **Move:** `move_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_workout`
 
 (Onboarding mode additionally wires `save_identity`.)
 
-**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 16 (dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 18 (Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 
@@ -384,6 +385,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.
 - **Never gate tools by routing.** Routing shapes context only.
 - **Room phrases: no single words, no time words, no chat phrasing, no catch-alls.** See Routing.
+- **Design for the actual brain.** Anchors not schedules, dials not switches, experiments not streaks, one-action protocols, they-are-the-study — the runtime laws live in the constitution (`_SYSTEM_BASE`, "What you ask of them"); every feature must be designed so those laws are followable.
 - **Clean-audit every stage of a restructure**, not just the end: 0 non-conforming filenames, 0 dead modules, 0 duplicated logic, tests green + entrypoints import, tool count flat.
 
 ---

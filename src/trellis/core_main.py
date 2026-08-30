@@ -68,6 +68,14 @@ from trellis.domain_focus_tool import (
 
 # Sense domain — Mind / wellbeing tracking (mood, energy, meds, sleep, period) +
 # the reading of Garmin health/readiness. The monitoring side.
+from trellis.domain_learn_repo import PostgresLearnRepository
+from trellis.domain_learn_service import LearnService
+from trellis.domain_learn_tool import (
+    LEARN_ROOMS,
+    LEARN_SIGNALS,
+    learn_context_loader,
+    learn_tools,
+)
 from trellis.domain_sense_repo import PostgresStateRepository
 from trellis.domain_sense_service import SenseService
 from trellis.domain_sense_tool import (
@@ -300,6 +308,17 @@ def main() -> None:
         sense_tools(sense_service, settings.timezone),
         SENSE_SIGNALS,
         rooms=SENSE_ROOMS,
+    )
+
+    learn_service = LearnService(
+        PostgresLearnRepository(database), settings.timezone, projection=vault,
+    )
+    registry.add_domain(
+        "learn",
+        learn_context_loader(learn_service),
+        learn_tools(learn_service),
+        LEARN_SIGNALS,
+        rooms=LEARN_ROOMS,
     )
 
     registry.add_domain(
