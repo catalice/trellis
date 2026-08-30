@@ -278,6 +278,7 @@ Deliberate understanding — a different cognitive mode from Focus (registered 3
 - Every Claude call has a **typed return** — parse the response, return a dataclass or None
 - Parse failures **log a warning and return None** — callers handle gracefully, never crash
 - `max_tokens` must be set generously for calls that return full JSON (8192+)
+- **Guidance lines are short.** One rule, one or two sentences, plain. Long lines burn tokens and blur — if a rule needs a paragraph, it's two rules or it's unclear.
 - Never call Claude for something Python can calculate deterministically
 
 ---
