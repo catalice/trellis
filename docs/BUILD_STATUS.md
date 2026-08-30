@@ -56,3 +56,28 @@ Working rules: `../CLAUDE.md`. Direction: `DIRECTION.md`.
 - Migrations: `src/trellis/migrations/001–012`, applied automatically on start.
 - Nightly DB backup: `scripts/backup_db.sh` → vault `.backups/`.
 - Tests: `.venv/bin/pytest tests/ -q`.
+
+
+## Queued next (agreed 30 Aug 2026)
+
+Builds, in order:
+1. Document ingestion — chunking (heading-aware + sentence boundaries), PDF/text
+   extract, chunk identity in the memory index, Telegram file handler; pieces land
+   on Learn maps. Needs an awake spec (migration design).
+2. News, layer two — the user's own RSS source list (stored as preference, read
+   directly — no aggregator service), "brief me" onto map scaffolding, Guardian
+   full-text ingest.
+3. Two-channel Watcher — imported-from-literature hypotheses, provenance-labeled
+   ("discovered" vs "imported"), same Python verification. First: verify the
+   planting write-path exists at all.
+4. Watcher-proposed trackable kinds — recurring words in their notes become
+   proposed tracking kinds; their yes mints the kind. Extend daily frames to
+   correlate any kind by name.
+5. Global tool fold — at trigger (~2 weeks of clean dispatch-write logs); the
+   context/preferences meta pair rides the same review.
+6. From-scratch setup test — fresh install + onboarding walked end to end, so
+   "anyone sets up Trellis and it builds itself for them" is verified, not assumed.
+
+Small, awaiting a yes: Watcher in-chat evidence labeled as historical examples
+(the hallucinated-effort fix); wordiness pass over the older prompts; NYT news
+source if wanted.
