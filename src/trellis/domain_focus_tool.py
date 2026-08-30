@@ -30,6 +30,115 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 # Tool schemas — Claude tools API format
 # ---------------------------------------------------------------------------
 
+FOCUS_ADD_TOOL: dict = {
+    "name": "focus_add",
+    "description": (
+        "Create one Focus record: a task, seed, goal, reminder, or a note onto "
+        "an effort. Pick 'what', then send only that entity's fields (marked "
+        "per-field below). Results warn about same-named duplicates — read them."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "what": {
+                "type": "string",
+                "enum": ["task", "goal", "reminder", "effort_note"],
+                "description": (
+                    "task: todo or seed (kind field). goal: any life/training goal. "
+                    "reminder: a timed nudge, one-off or recurring. "
+                    "effort_note: keep content on an effort page (or file an "
+                    "existing capture there via capture_id)."
+                ),
+            },
+            "title": {"type": "string", "description": "task/goal: what it is. Required for both."},
+            "kind": {
+                "type": "string", "enum": ["todo", "seed"], "default": "todo",
+                "description": "task: todo = obligation. seed = exploration, no due date, never nags.",
+            },
+            "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "task: default medium."},
+            "energy": {
+                "type": "string", "enum": ["low", "medium", "high"],
+                "description": "task: mental/physical energy needed. low=routine, high=deep focus. Default medium.",
+            },
+            "description": {"type": "string", "description": "task: optional detail."},
+            "due": {
+                "type": "string",
+                "description": (
+                    "task: due date/time in the USER'S LOCAL time (YYYY-MM-DDTHH:MM "
+                    "or YYYY-MM-DD). Resolve relative phrases from context. No "
+                    "timezone conversion. Omit if no deadline."
+                ),
+            },
+            "goal_type": {
+                "type": "string",
+                "enum": ["race", "aerobic", "strength", "life", "habit", "general"],
+                "description": "goal: race/aerobic/strength feed the training module; life/habit/general are everything else. Required for goals.",
+            },
+            "target_date": {"type": "string", "description": "goal: YYYY-MM-DD. Omit if open-ended."},
+            "is_fixed_date": {"type": "boolean", "description": "goal: true if the date cannot move (race day)."},
+            "notes": {"type": "string", "description": "goal: optional notes."},
+            "label": {"type": "string", "description": "reminder: what it's for. Required for reminders."},
+            "remind_at": {
+                "type": "string",
+                "description": (
+                    "reminder: USER-LOCAL YYYY-MM-DDTHH:MM, exactly the time they "
+                    "said — no timezone conversion. Required for reminders."
+                ),
+            },
+            "task_id": {"type": "string", "description": "reminder: optionally link to an existing task."},
+            "recurrence": {
+                "type": "string", "enum": ["daily", "weekly", "monthly", "yearly"],
+                "description": "reminder: how it repeats ('every Sunday evening' -> weekly with remind_at on the next Sunday). Omit for a one-off.",
+            },
+            "effort_title": {
+                "type": "string",
+                "description": "effort_note: short evocative area name, e.g. 'Making Music'. Reuse the exact name to add to an existing effort. Required for effort_note.",
+            },
+            "content": {"type": "string", "description": "effort_note: the research/notes to keep — full digest, links and all."},
+            "graduated_seed_id": {"type": "string", "description": "effort_note: seed this grew from, if any — it gets retired."},
+            "capture_id": {"type": "string", "description": "effort_note: an existing capture (focus_get inbox) to file into the effort instead of content."},
+        },
+        "required": ["what"],
+    },
+}
+
+FOCUS_UPDATE_TOOL: dict = {
+    "name": "focus_update",
+    "description": (
+        "Change one existing Focus record by id: a task/seed, a goal, or a "
+        "reminder. Pick 'what' + id, then send only the fields that change. "
+        "Task: done -> status='done'; delete/remove -> status='dropped' (gone "
+        "forever); shelve -> status='parked'; reclassify todo<->seed with kind. "
+        "Goal: achieved -> status='achieved'. Reminder: the ONLY change is "
+        "status='cancelled' (to move one, cancel it and focus_add a new one)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "what": {"type": "string", "enum": ["task", "goal", "reminder"]},
+            "id": {"type": "string", "description": "UUID of the record (from focus_get)."},
+            "title": {"type": "string", "description": "task/goal: new title."},
+            "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "task."},
+            "energy": {"type": "string", "enum": ["low", "medium", "high"], "description": "task."},
+            "kind": {"type": "string", "enum": ["todo", "seed"], "description": "task: reclassify."},
+            "status": {
+                "type": "string",
+                "enum": ["open", "done", "dropped", "parked", "active", "achieved", "paused", "cancelled"],
+                "description": (
+                    "task: open/done/dropped/parked. goal: active/achieved/paused/dropped. "
+                    "reminder: cancelled only."
+                ),
+            },
+            "due": {"type": "string", "description": "task: user-local YYYY-MM-DDTHH:MM or YYYY-MM-DD."},
+            "description": {"type": "string", "description": "task."},
+            "target_date": {"type": "string", "description": "goal: YYYY-MM-DD."},
+            "is_fixed_date": {"type": "boolean", "description": "goal."},
+            "notes": {"type": "string", "description": "goal: REPLACES stored notes — the result echoes what was overwritten."},
+        },
+        "required": ["what", "id"],
+    },
+}
+
 BRAIN_DUMP_TOOL: dict = {
     "name": "brain_dump",
     "description": (
@@ -788,6 +897,64 @@ RECALL_TOOL: dict = {
 }
 
 
+def handle_focus_add(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    task_service,
+    goal_service,
+    reminder_service,
+    effort_service,
+    capture_service,
+    tz,
+) -> str:
+    """Dispatch write: one door, the proven per-entity handlers behind it."""
+    what = str(input_dict.get("what", "")).strip()
+    if what == "task":
+        return handle_create_task(user_id, input_dict, now, task_service=task_service, tz=tz)
+    if what == "goal":
+        return handle_add_goal(user_id, input_dict, now, goal_service=goal_service)
+    if what == "reminder":
+        return handle_set_reminder(user_id, input_dict, now, reminder_service=reminder_service, tz=tz)
+    if what == "effort_note":
+        return handle_save_to_effort(
+            user_id, input_dict, now,
+            effort_service=effort_service, capture_service=capture_service,
+            task_service=task_service,
+        )
+    return f"Unknown what: {what!r}. Use: task, goal, reminder, effort_note."
+
+
+def handle_focus_update(
+    user_id: UUID,
+    input_dict: dict,
+    now: datetime,
+    *,
+    task_service,
+    goal_service,
+    reminder_service,
+) -> str:
+    """Dispatch write: routes to the per-entity update handlers by 'what'."""
+    what = str(input_dict.get("what", "")).strip()
+    rec_id = str(input_dict.get("id", "")).strip()
+    if what == "task":
+        return handle_update_task(
+            user_id, {**input_dict, "task_id": rec_id}, now, task_service=task_service,
+        )
+    if what == "goal":
+        return handle_update_goal(
+            user_id, {**input_dict, "goal_id": rec_id}, now, goal_service=goal_service,
+        )
+    if what == "reminder":
+        if input_dict.get("status") != "cancelled":
+            return "Reminders only cancel (status='cancelled'). To move one: cancel it, then focus_add a new one."
+        return handle_cancel_reminder(
+            user_id, {"reminder_id": rec_id}, now, reminder_service=reminder_service,
+        )
+    return f"Unknown what: {what!r}. Use: task, goal, reminder."
+
+
 def handle_save_to_effort(
     user_id: UUID,
     input_dict: dict,
@@ -1037,43 +1204,31 @@ def focus_tools(
             ),
         ),
         (
-            CREATE_TASK_TOOL,
-            lambda uid, inp, now: handle_create_task(uid, inp, now, task_service=task_service, tz=tz),
+            FOCUS_ADD_TOOL,
+            lambda uid, inp, now: handle_focus_add(
+                uid, inp, now,
+                task_service=task_service,
+                goal_service=goal_service,
+                reminder_service=reminder_service,
+                effort_service=effort_service,
+                capture_service=capture_service,
+                tz=tz,
+            ),
         ),
         (
-            UPDATE_TASK_TOOL,
-            lambda uid, inp, now: handle_update_task(uid, inp, now, task_service=task_service),
-        ),
-        (
-            SET_REMINDER_TOOL,
-            lambda uid, inp, now: handle_set_reminder(uid, inp, now, reminder_service=reminder_service, tz=tz),
-        ),
-        (
-            CANCEL_REMINDER_TOOL,
-            lambda uid, inp, now: handle_cancel_reminder(uid, inp, now, reminder_service=reminder_service),
-        ),
-        (
-            ADD_GOAL_TOOL,
-            lambda uid, inp, now: handle_add_goal(uid, inp, now, goal_service=goal_service),
-        ),
-        (
-            UPDATE_GOAL_TOOL,
-            lambda uid, inp, now: handle_update_goal(uid, inp, now, goal_service=goal_service),
+            FOCUS_UPDATE_TOOL,
+            lambda uid, inp, now: handle_focus_update(
+                uid, inp, now,
+                task_service=task_service,
+                goal_service=goal_service,
+                reminder_service=reminder_service,
+            ),
         ),
         (
             DELETE_ENTRY_TOOL,
             lambda uid, inp, now: handle_delete_entry(
                 uid, inp, now, sense_service=sense_service,
                 task_service=task_service, capture_service=capture_service,
-            ),
-        ),
-        (
-            SAVE_TO_EFFORT_TOOL,
-            lambda uid, inp, now: handle_save_to_effort(
-                uid, inp, now,
-                effort_service=effort_service,
-                capture_service=capture_service,
-                task_service=task_service,
             ),
         ),
     ]

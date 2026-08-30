@@ -821,3 +821,83 @@ class TestAuditConsolidation:
         )
         assert "Task created" in reply
         assert "already existed" in reply
+
+
+class TestDispatchWrites:
+    """30 Aug: Focus writes collapse to focus_add/focus_update — one door per
+    verb, the proven per-entity handlers behind it. log_state precedent says
+    union schemas work; these lock the dispatch itself."""
+
+    def _services(self):
+        task_svc = TaskService(FakeTaskRepo(), TZ)
+        rem_svc = ReminderService(FakeReminderRepo(), TZ)
+        return task_svc, rem_svc
+
+    def test_add_task_dispatches(self):
+        from trellis.domain_focus_tool import handle_focus_add
+        task_svc, rem_svc = self._services()
+        reply = handle_focus_add(
+            UID, {"what": "task", "title": "Buy wine"}, NOW,
+            task_service=task_svc, goal_service=None, reminder_service=rem_svc,
+            effort_service=None, capture_service=None, tz=TZ,
+        )
+        assert "Task created: Buy wine" in reply
+
+    def test_add_reminder_dispatches(self):
+        from trellis.domain_focus_tool import handle_focus_add
+        task_svc, rem_svc = self._services()
+        reply = handle_focus_add(
+            UID, {"what": "reminder", "label": "Stretch", "remind_at": "2026-09-01T09:00"},
+            NOW, task_service=task_svc, goal_service=None, reminder_service=rem_svc,
+            effort_service=None, capture_service=None, tz=TZ,
+        )
+        assert "Reminder set: Stretch" in reply
+
+    def test_update_task_done_via_dispatch(self):
+        from trellis.domain_focus_tool import handle_focus_add, handle_focus_update
+        task_svc, rem_svc = self._services()
+        handle_focus_add(
+            UID, {"what": "task", "title": "Buy wine"}, NOW,
+            task_service=task_svc, goal_service=None, reminder_service=rem_svc,
+            effort_service=None, capture_service=None, tz=TZ,
+        )
+        task = task_svc.list_open(UID)[0]
+        reply = handle_focus_update(
+            UID, {"what": "task", "id": str(task.id), "status": "done"}, NOW,
+            task_service=task_svc, goal_service=None, reminder_service=rem_svc,
+        )
+        assert reply == "Done: Buy wine"
+
+    def test_reminder_update_only_cancels(self):
+        from trellis.domain_focus_tool import handle_focus_update
+        task_svc, rem_svc = self._services()
+        r = rem_svc.set(UID, "Stretch", NOW + timedelta(days=1), now=NOW)
+        nudge = handle_focus_update(
+            UID, {"what": "reminder", "id": str(r.id), "remind_at": "x"}, NOW,
+            task_service=task_svc, goal_service=None, reminder_service=rem_svc,
+        )
+        assert "only cancel" in nudge
+        reply = handle_focus_update(
+            UID, {"what": "reminder", "id": str(r.id), "status": "cancelled"}, NOW,
+            task_service=task_svc, goal_service=None, reminder_service=rem_svc,
+        )
+        assert "cancelled" in reply.lower()
+
+    def test_unknown_what_teaches(self):
+        from trellis.domain_focus_tool import handle_focus_add
+        reply = handle_focus_add(
+            UID, {"what": "wibble"}, NOW,
+            task_service=None, goal_service=None, reminder_service=None,
+            effort_service=None, capture_service=None, tz=TZ,
+        )
+        assert "task, goal, reminder, effort_note" in reply
+
+    def test_registered_tools_are_the_dispatch_set(self):
+        from trellis.domain_focus_tool import focus_tools
+        svc = None
+        names = [s["name"] for s, _ in focus_tools(
+            task_service=svc, goal_service=svc, capture_service=svc,
+            effort_service=svc, reminder_service=svc,
+            sense_service=svc, web_search=None, tz=TZ,
+        )]
+        assert names == ["focus_get", "focus_add", "focus_update", "delete_entry"]
