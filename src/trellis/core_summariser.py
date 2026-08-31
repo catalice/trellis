@@ -45,6 +45,18 @@ def make_summariser(
             if not turns:
                 return
             conversation_messages = history.to_messages(turns)
+            # Free-tier Groq caps tokens/minute; a fat history 413s the call.
+            # Keep the newest ~16k chars (~4k tokens) — summaries are about
+            # the recent arc anyway.
+            budget = 16000
+            trimmed = []
+            for m in reversed(conversation_messages):
+                c = str(m.get("content") or "")
+                if budget - len(c) < 0:
+                    break
+                budget -= len(c)
+                trimmed.append(m)
+            conversation_messages = list(reversed(trimmed)) or conversation_messages[-2:]
             system_prompt = _SYSTEM_PROMPT.format(domain=domain)
             response = groq_client.chat.completions.create(
                 model=model,

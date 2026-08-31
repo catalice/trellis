@@ -219,22 +219,34 @@ class TelegramTrellis:
             await self._maybe_alert_embed_failures(update)
 
     async def _deliver(self, update: Update, placeholder, text: str) -> None:
-        """Land the reply no matter what. Try Markdown first; if Telegram can't
-        parse it (an unbalanced * or _ in natural text) OR the edit fails, fall
-        back to PLAIN text — which can never fail to parse — so a reply is never
-        lost to a formatting quirk."""
-        # 1. edit the placeholder, formatted.
-        try:
-            await placeholder.edit_text(text, parse_mode="Markdown")
+        """Land the reply no matter what. Over-limit texts are CHUNKED at
+        paragraph boundaries first (Telegram hard-caps messages at 4096 chars —
+        a 6,439-char reply once vanished into Message_too_long with the user
+        told nothing). Then: Markdown first; if Telegram can't parse it (an
+        unbalanced * or _) OR the edit fails, fall back to PLAIN text — so a
+        reply is never lost to a formatting quirk."""
+        chunks = _chunk_message(text)
+        if len(chunks) > 1:
+            await self._deliver_once(update, placeholder, chunks[0])
+            for chunk in chunks[1:]:
+                await self._deliver_once(update, None, chunk)
             return
-        except Exception:
-            pass
-        # 2. edit the placeholder, plain (handles the Markdown-parse case).
-        try:
-            await placeholder.edit_text(text)
-            return
-        except Exception:
-            self.logger.warning("Editing placeholder failed; sending fresh", exc_info=True)
+        await self._deliver_once(update, placeholder, text)
+
+    async def _deliver_once(self, update: Update, placeholder, text: str) -> None:
+        if placeholder is not None:
+            # 1. edit the placeholder, formatted.
+            try:
+                await placeholder.edit_text(text, parse_mode="Markdown")
+                return
+            except Exception:
+                pass
+            # 2. edit the placeholder, plain (handles the Markdown-parse case).
+            try:
+                await placeholder.edit_text(text)
+                return
+            except Exception:
+                self.logger.warning("Editing placeholder failed; sending fresh", exc_info=True)
         # 3. edit impossible (e.g. too long) — send fresh, formatted then plain.
         try:
             await update.message.reply_text(text, parse_mode="Markdown")
@@ -270,3 +282,30 @@ class TelegramTrellis:
             telegram_user_id,
             str(self.settings.timezone),
         )
+
+
+_TELEGRAM_LIMIT = 3900  # headroom under Telegram's hard 4096
+
+
+def _chunk_message(text: str, limit: int = _TELEGRAM_LIMIT) -> list[str]:
+    """Split at paragraph boundaries, hard-splitting any monster paragraph."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for para in text.split("\n\n"):
+        while len(para) > limit:            # a single over-limit paragraph
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(para[:limit])
+            para = para[limit:]
+        candidate = f"{current}\n\n{para}" if current else para
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = para
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return [c for c in chunks if c.strip()]
