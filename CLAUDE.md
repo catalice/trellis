@@ -401,6 +401,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - **Never gate tools by routing.** Routing shapes context only.
 - **Room phrases: no single words, no time words, no chat phrasing, no catch-alls.** See Routing.
 - **Design for the actual brain.** Anchors not schedules, dials not switches, experiments not streaks, one-action protocols, they-are-the-study — the runtime laws live in the constitution (`_SYSTEM_BASE`, "What you ask of them"); every feature must be designed so those laws are followable.
+- **A piped pytest lies.** `pytest | tail` masks the exit code - twice now a red suite rode a green-looking pipe to deploy. `set -o pipefail` or check the code separately, every time.
 - **Clean-audit every stage of a restructure**, not just the end: 0 non-conforming filenames, 0 dead modules, 0 duplicated logic, tests green + entrypoints import, tool count flat.
 
 ---
