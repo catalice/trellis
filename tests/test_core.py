@@ -470,26 +470,25 @@ class TestVaultDailyProperties:
         assert note.count("tracking") == 2       # both receipts kept
 
 
-class TestMessageChunking(unittest.TestCase):
+class TestMessageChunking:
     """31 Aug: a 6,439-char reply vanished into Telegram's 4096 hard cap with
     the user told nothing. Over-limit texts chunk at paragraph boundaries."""
 
     def test_short_text_untouched(self):
         from trellis.core_telegram import _chunk_message
-        self.assertEqual(_chunk_message("hello\n\nworld"), ["hello\n\nworld"])
+        assert _chunk_message("hello\n\nworld") == ["hello\n\nworld"]
 
     def test_long_text_chunks_under_limit(self):
         from trellis.core_telegram import _chunk_message
         text = "\n\n".join(f"para {i} " + "x" * 500 for i in range(15))
         chunks = _chunk_message(text)
-        self.assertGreater(len(chunks), 1)
-        for c in chunks:
-            self.assertLessEqual(len(c), 3900)
-        self.assertIn("para 0", chunks[0])
-        self.assertIn("para 14", chunks[-1])
+        assert len(chunks) > 1
+        assert all(len(c) <= 3900 for c in chunks)
+        assert "para 0" in chunks[0]
+        assert "para 14" in chunks[-1]
 
     def test_monster_paragraph_hard_splits(self):
         from trellis.core_telegram import _chunk_message
         chunks = _chunk_message("y" * 9000)
-        self.assertTrue(all(len(c) <= 3900 for c in chunks))
-        self.assertEqual(sum(len(c) for c in chunks), 9000)
+        assert all(len(c) <= 3900 for c in chunks)
+        assert sum(len(c) for c in chunks) == 9000
