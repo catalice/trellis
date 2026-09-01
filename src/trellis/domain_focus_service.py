@@ -38,6 +38,7 @@ class CaptureRepository(Protocol):
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Capture]: ...
     def list_unassigned(self, user_id: UUID, *, since: date) -> list[Capture]: ...
     def assign_to_effort(self, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
+    def list_for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]: ...
     def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
 
 
@@ -46,6 +47,8 @@ class EffortRepository(Protocol):
     def get(self, effort_id: UUID) -> Effort | None: ...
     def get_by_title(self, user_id: UUID, title: str) -> Effort | None: ...
     def list_all(self, user_id: UUID) -> list[Effort]: ...
+    def delete(self, user_id: UUID, effort_id: UUID) -> bool: ...
+    def rename(self, user_id: UUID, effort_id: UUID, title: str, obsidian_path: str) -> bool: ...
 
 
 class TaskRepository(Protocol):
@@ -88,6 +91,8 @@ class VaultProjection(Protocol):
     def effort_created(self, effort: Effort) -> None: ...
     def capture_assigned(self, capture: Capture) -> None: ...
     def research_saved(self, capture: Capture) -> None: ...
+    def effort_page_removed(self, obsidian_path: str) -> None: ...
+    def effort_page_moved(self, old_path: str | None, effort: Effort) -> None: ...
 
 
 class Memory(Protocol):
@@ -218,6 +223,9 @@ class CaptureService:
         since = (datetime.now(timezone.utc) - timedelta(days=days)).date()
         return self._repo.list_unassigned(user_id, since=since)
 
+    def for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]:
+        return self._repo.list_for_effort(user_id, effort_id)
+
     def assign(self, capture_id: UUID, effort_id: UUID) -> Capture:
         capture = self._repo.assign_to_effort(capture_id, effort_id)
         if self._projection:
@@ -295,6 +303,53 @@ class EffortService:
 
     def list_all(self, user_id: UUID) -> list[Effort]:
         return self._repo.list_all(user_id)
+
+    def page(self, user_id: UUID, title: str, captures) -> "tuple[Effort, list[Capture]] | None":
+        """One effort's full page: the effort + every capture filed on it."""
+        effort = self._repo.get_by_title(user_id, title)
+        if effort is None:
+            return None
+        return effort, captures.for_effort(user_id, effort.id)
+
+    def delete_if_empty(self, user_id: UUID, effort_id: UUID, captures) -> str:
+        """Erase an effort ONLY when nothing is filed on it — the empty guard
+        is fact (Python), never judgment. 'deleted' | 'not_empty' | 'not_found'."""
+        effort = self._repo.get(effort_id)
+        if effort is None or effort.user_id != user_id:
+            return "not_found"
+        if captures.for_effort(user_id, effort_id):
+            return "not_empty"
+        old_path = effort.obsidian_path
+        if not self._repo.delete(user_id, effort_id):
+            return "not_found"
+        if self._memory is not None:
+            self._memory.forget("effort", effort_id)
+        if self._projection is not None and old_path:
+            try:
+                self._projection.effort_page_removed(old_path)
+            except Exception:
+                _log.warning("effort page removal failed", exc_info=True)
+        return "deleted"
+
+    def rename(self, user_id: UUID, effort_id: UUID, new_title: str) -> Effort | None:
+        """Rename: title + vault page moved with it — never an orphaned ghost."""
+        effort = self._repo.get(effort_id)
+        if effort is None or effort.user_id != user_id or not new_title.strip():
+            return None
+        old_path = effort.obsidian_path
+        if not self._repo.rename(user_id, effort_id, new_title,
+                                 _effort_obsidian_path(new_title)):
+            return None
+        renamed = self._repo.get(effort_id)
+        if renamed is None:
+            return None
+        self._embed(renamed)
+        if self._projection is not None:
+            try:
+                self._projection.effort_page_moved(old_path, renamed)
+            except Exception:
+                _log.warning("effort page move failed", exc_info=True)
+        return renamed
 
     def summary_for_context(self, user_id: UUID) -> str | None:
         efforts = self._repo.list_all(user_id)

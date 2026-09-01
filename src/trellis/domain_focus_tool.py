@@ -110,12 +110,13 @@ FOCUS_UPDATE_TOOL: dict = {
         "Task: done -> status='done'; delete/remove -> status='dropped' (gone "
         "forever); shelve -> status='parked'; reclassify todo<->seed with kind. "
         "Goal: achieved -> status='achieved'. Reminder: the ONLY change is "
-        "status='cancelled' (to move one, cancel it and focus_add a new one)."
+        "status='cancelled' (to move one, cancel it and focus_add a new one). "
+        "Effort: the ONLY change is title (rename — its vault page moves with it)."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "what": {"type": "string", "enum": ["task", "goal", "reminder"]},
+            "what": {"type": "string", "enum": ["task", "goal", "reminder", "effort"]},
             "id": {"type": "string", "description": "UUID of the record (from focus_get)."},
             "title": {"type": "string", "description": "task/goal: new title."},
             "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "task."},
@@ -168,17 +169,20 @@ FOCUS_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["tasks", "seeds", "goals", "inbox", "efforts", "reminders"],
+                "enum": ["tasks", "seeds", "goals", "inbox", "efforts", "effort", "reminders"],
                 "description": (
                     "tasks: open todos ordered by urgency, plus parked. "
                     "seeds: the exploration menu — for 'what could I explore'. "
                     "goals: all active goals. "
                     "inbox: unassigned captures for cleanup. "
                     "efforts: all efforts by intensity. "
+                    "effort: ONE effort's full page — every note filed on it, with ids "
+                    "(pass name). Read it before advising on or reorganising a project. "
                     "reminders: ALL scheduled reminders (with ids + recurrence) + recent delivery status. "
                     "(wellbeing/tracking lives in the Sense room, in context there — not here.)"
                 ),
-            }
+            },
+            "name": {"type": "string", "description": "effort: the effort's title."},
         },
         "required": ["what"],
     },
@@ -355,7 +359,9 @@ DELETE_ENTRY_TOOL: dict = {
         "a task the user decided against gets update_task status='dropped' instead. "
         "Corrections are delete + re-log. Get IDs from focus_get first. "
         "Erasing a capture does NOT erase tasks extracted from it — erase those "
-        "by their own ids. Deleting a task also deletes reminders attached to it."
+        "by their own ids. Deleting a task also deletes reminders attached to it. "
+        "An EMPTY duplicate effort can be erased too (its page is removed); one "
+        "with notes still on it is refused — move them first."
     ),
     "input_schema": {
         "type": "object",
@@ -485,6 +491,25 @@ def handle_focus_get(
         lines = []
         for e in efforts:
             lines.append(f"  [{e.id}] {e.title} ({e.intensity.value})")
+        return "\n".join(lines)
+
+    if what == "effort":
+        title = str(input_dict.get("name", "")).strip()
+        if not title:
+            return "name is required for what='effort'."
+        page = effort_service.page(user_id, title, capture_service)
+        if page is None:
+            return f"No effort called '{title}'. focus_get what='efforts' lists them."
+        effort, captures = page
+        lines = [f"Effort: {effort.title} ({effort.intensity.value}) [{effort.id}]"]
+        if effort.notes:
+            lines.append(effort.notes)
+        if not captures:
+            lines.append("Nothing filed on it yet.")
+        for c in captures:
+            when = c.created_at.strftime("%d %b")
+            body = (c.synthesis or c.raw or "").strip()
+            lines.append(f"  [{c.id}] {when} — {body[:300]}")
         return "\n".join(lines)
 
     if what == "reminders":
@@ -804,6 +829,7 @@ def handle_delete_entry(
     sense_service,
     task_service,
     capture_service,
+    effort_service=None,
 ) -> str:
     entry_id_str = str(input_dict.get("entry_id", "")).strip()
     if not entry_id_str:
@@ -818,6 +844,13 @@ def handle_delete_entry(
         or capture_service.delete(user_id, entry_id)
     ):
         return "Erased."
+    verdict = (effort_service.delete_if_empty(user_id, entry_id, capture_service)
+               if effort_service is not None else "not_found")
+    if verdict == "deleted":
+        return "Erased (empty effort, page removed)."
+    if verdict == "not_empty":
+        return ("That effort still has notes filed on it — move them first "
+                "(save_to_effort with capture_id), then erase.")
     return "No record with that id."
 
 
@@ -942,6 +975,7 @@ def handle_focus_update(
     task_service,
     goal_service,
     reminder_service,
+    effort_service=None,
 ) -> str:
     """Dispatch write: routes to the per-entity update handlers by 'what'."""
     what = str(input_dict.get("what", "")).strip()
@@ -960,7 +994,18 @@ def handle_focus_update(
         return handle_cancel_reminder(
             user_id, {"reminder_id": rec_id}, now, reminder_service=reminder_service,
         )
-    return f"Unknown what: {what!r}. Use: task, goal, reminder."
+    if what == "effort":
+        new_title = str(input_dict.get("title", "")).strip()
+        if not new_title:
+            return "title is required to rename an effort."
+        try:
+            renamed = effort_service.rename(user_id, UUID(rec_id), new_title)
+        except ValueError:
+            return f"Invalid id: {rec_id!r}"
+        if renamed is None:
+            return "No effort with that id."
+        return f"Renamed to '{renamed.title}' — its vault page moved with it."
+    return f"Unknown what: {what!r}. Use: task, goal, reminder, effort."
 
 
 def handle_save_to_effort(
@@ -1233,6 +1278,7 @@ def focus_tools(
                 task_service=task_service,
                 goal_service=goal_service,
                 reminder_service=reminder_service,
+                effort_service=effort_service,
             ),
         ),
         (
@@ -1240,6 +1286,7 @@ def focus_tools(
             lambda uid, inp, now: handle_delete_entry(
                 uid, inp, now, sense_service=sense_service,
                 task_service=task_service, capture_service=capture_service,
+                effort_service=effort_service,
             ),
         ),
     ]

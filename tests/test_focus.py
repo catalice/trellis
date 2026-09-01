@@ -901,3 +901,69 @@ class TestDispatchWrites:
             sense_service=svc, web_search=None, tz=TZ,
         )]
         assert names == ["focus_get", "focus_add", "focus_update", "delete_entry"]
+
+
+class TestEffortOperations:
+    """1 Sep: the oracle couldn't READ an effort page (duplicate-cleanup
+    blindness), erase an empty duplicate, or rename. Read/delete-empty/rename
+    - all through existing tool doors, count stays 18."""
+
+    class _EffortRepo:
+        def __init__(self):
+            self.efforts = {}
+        def save(self, e):
+            self.efforts[e.id] = e
+            return e
+        def get(self, eid):
+            return self.efforts.get(eid)
+        def get_by_title(self, uid, title):
+            return next((e for e in self.efforts.values()
+                         if e.title.lower() == title.strip().lower()), None)
+        def list_all(self, uid):
+            return list(self.efforts.values())
+        def delete(self, uid, eid):
+            return self.efforts.pop(eid, None) is not None
+        def rename(self, uid, eid, title, obsidian_path):
+            from dataclasses import replace
+            if eid in self.efforts:
+                self.efforts[eid] = replace(self.efforts[eid], title=title,
+                                            obsidian_path=obsidian_path)
+                return True
+            return False
+
+    class _Captures:
+        def __init__(self, filed=()):
+            self.filed = list(filed)
+        def for_effort(self, uid, eid):
+            return [c for c in self.filed if c.effort_id == eid]
+
+    def _svc(self):
+        from trellis.domain_focus_service import EffortService
+        return EffortService(self._EffortRepo())
+
+    def _effort(self, svc, title="Writing"):
+        return svc.find_or_create(UID, title, NOW)
+
+    def test_empty_effort_deletes(self):
+        svc = self._svc()
+        e = self._effort(svc)
+        assert svc.delete_if_empty(UID, e.id, self._Captures()) == "deleted"
+
+    def test_non_empty_effort_refused(self):
+        from trellis.domain_focus_models import Capture, CaptureType
+        from uuid import uuid4
+        svc = self._svc()
+        e = self._effort(svc)
+        filed = Capture(id=uuid4(), user_id=UID, raw="a note",
+                        capture_type=CaptureType.BRAIN_DUMP, synthesis=None,
+                        summary=None, effort_id=e.id, created_at=NOW)
+        assert svc.delete_if_empty(UID, e.id, self._Captures([filed])) == "not_empty"
+        assert svc.list_all(UID)  # survived
+
+    def test_rename_moves_path(self):
+        svc = self._svc()
+        e = self._effort(svc, "Neurodivergence Writing")
+        renamed = svc.rename(UID, e.id, "Writing")
+        assert renamed.title == "Writing"
+        assert "Writing" in renamed.obsidian_path
+        assert "Neurodivergence" not in renamed.obsidian_path

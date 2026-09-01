@@ -32,6 +32,7 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class PostgresCaptureRepository:
+    # list_for_effort lives below with the other list methods.
     def __init__(self, database: Any) -> None:
         self._db = database
 
@@ -85,6 +86,16 @@ class PostgresCaptureRepository:
                     ORDER BY created_at ASC
                     """,
                     (user_id, since),
+                )
+                return [_capture(r) for r in cur.fetchall()]
+
+    def list_for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM captures WHERE user_id = %s AND effort_id = %s"
+                    " ORDER BY created_at",
+                    (user_id, effort_id),
                 )
                 return [_capture(r) for r in cur.fetchall()]
 
@@ -169,6 +180,25 @@ class PostgresEffortRepository:
                 )
                 row = cur.fetchone()
                 return _effort(row) if row else None
+
+    def delete(self, user_id: UUID, effort_id: UUID) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM efforts WHERE id = %s AND user_id = %s",
+                    (effort_id, user_id),
+                )
+                return cur.rowcount > 0
+
+    def rename(self, user_id: UUID, effort_id: UUID, title: str, obsidian_path: str) -> bool:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE efforts SET title = %s, obsidian_path = %s, updated_at = NOW()"
+                    " WHERE id = %s AND user_id = %s",
+                    (title.strip(), obsidian_path, effort_id, user_id),
+                )
+                return cur.rowcount > 0
 
     def list_all(self, user_id: UUID) -> list[Effort]:
         with self._db.connect() as conn:

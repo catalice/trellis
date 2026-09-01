@@ -778,6 +778,37 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: effort page write failed", exc_info=True)
 
+    def effort_page_removed(self, obsidian_path: str) -> None:
+        """Delete an erased (empty) effort's page — the one projection that
+        removes a file, and only for a record the user chose to erase."""
+        try:
+            path = self._vault / obsidian_path
+            if path.exists():
+                path.unlink()
+        except Exception:
+            _log.warning("obsidian: effort page removal failed", exc_info=True)
+
+    def effort_page_moved(self, old_path: str | None, effort: Effort) -> None:
+        """Rename = move the page: write under the new name, remove the old.
+        Content is preserved; a ghost is never left behind."""
+        try:
+            new = self._effort_path(effort)
+            if new is None:
+                return
+            old = (self._vault / old_path) if old_path else None
+            if old is not None and old.exists() and old != new:
+                new.parent.mkdir(parents=True, exist_ok=True)
+                body = old.read_text(encoding="utf-8")
+                lines = body.splitlines()
+                if lines and lines[0].startswith("# "):
+                    lines[0] = f"# {effort.title}"
+                new.write_text("\n".join(lines), encoding="utf-8")
+                old.unlink()
+            elif not new.exists():
+                self.effort_created(effort)
+        except Exception:
+            _log.warning("obsidian: effort page move failed", exc_info=True)
+
     def capture_assigned(self, capture: Capture) -> None:
         if capture.effort_id is None:
             return
