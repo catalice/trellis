@@ -78,47 +78,37 @@ def handle_update_current_context(
 SAVE_PREFERENCES_TOOL = {
     "name": "save_preferences",
     "description": (
-        "Save the user's standing preferences. Call when they express how they want "
-        "Trellis to behave. Use domain='global' for anything that applies everywhere — "
-        "formatting, tone, how to speak to them ('no tables', 'keep replies short'); "
-        "global preferences load on every turn. Use a specific domain only for "
-        "preferences about that area ('I prefer shorter sessions' -> move); those "
-        "load when the domain is active. Preferences ACCUMULATE: a new one is added "
-        "to what's already saved — send just the new preference, not a rewrite of "
-        "the old ones. Set replace=true ONLY when deliberately rewriting the whole "
-        "set (correcting or consolidating)."
+        "The user's standing preference RULES — one rule per row, each with an "
+        "id. action='add': save a new rule (domain='global' applies every turn; "
+        "a house domain loads with that house). action='list': every rule with "
+        "its id — read before updating or removing. action='update'/'remove': "
+        "change or delete ONE rule by rule_id. Rules also appear in the vault "
+        "(Atlas/Brain/Preferences.md) where the user reviews them."
     ),
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["add", "list", "update", "remove"],
+                "default": "add",
+            },
             "domain": {
                 "type": "string",
-                "enum": ["global", "focus", "sense", "move"],
-                "description": (
-                    "'global' for preferences that apply to every reply; otherwise "
-                    "the domain they're about. When in doubt, use 'global'."
-                ),
+                "enum": ["global", "focus", "sense", "move", "learn"],
+                "description": "add: where the rule applies. 'global' when in doubt.",
             },
-            "content": {
+            "text": {
                 "type": "string",
                 "description": (
-                    "The user's preferences in plain text. Write in second person "
-                    "as a reminder to future Trellis — e.g. 'You never use tables; "
-                    "they don't render in Telegram.'"
+                    "add/update: the rule, second person, one sentence or two — "
+                    "e.g. 'You never use tables; they don't render in Telegram.'"
                 ),
             },
-            "replace": {
-                "type": "boolean",
-                "default": False,
-                "description": (
-                    "True ONLY to rewrite this domain's ENTIRE preference set "
-                    "(content must then include everything that should survive). "
-                    "Default false: content is appended to the existing preferences."
-                ),
-            },
+            "rule_id": {"type": "string", "description": "update/remove: the rule's id (from action='list')."},
         },
-        "required": ["domain", "content"],
+        "required": ["action"],
     },
 }
 
@@ -129,38 +119,85 @@ def handle_save_preferences(
     now: datetime,
     *,
     preferences_repository,
+    brain_changed=None,   # () -> None: refresh the vault's Brain pages
 ) -> str:
-    domain = input_dict.get("domain", "").strip()
-    content = input_dict.get("content", "").strip()
-    replace = bool(input_dict.get("replace", False))
-    if not domain or not content:
-        return "Domain and content are required."
+    action = str(input_dict.get("action", "add")).strip()
+    text = str(input_dict.get("text", "")).strip()
+
+    def _refresh():
+        if brain_changed is not None:
+            try:
+                brain_changed()
+            except Exception:
+                _log.warning("brain page refresh failed", exc_info=True)
+
     try:
-        preferences_repository.set(user_id, domain, content, replace=replace)
-        verb = "rewritten" if replace else "added"
-        return f"Preferences {verb} for {domain}."
+        if action == "list":
+            rules = preferences_repository.list_rules(user_id)
+            if not rules:
+                return "No preference rules saved yet."
+            lines = ["Preference rules:"]
+            for r in rules:
+                lines.append(f"  [{r['id']}] ({r['domain']}) {r['rule']}")
+            return "\n".join(lines)
+
+        if action == "add":
+            domain = str(input_dict.get("domain", "")).strip() or "global"
+            if not text:
+                return "text is required to add a rule."
+            preferences_repository.add_rule(user_id, domain, text)
+            _refresh()
+            return f"Rule saved ({domain})."
+
+        if action == "update":
+            rid = str(input_dict.get("rule_id", "")).strip()
+            if not rid or not text:
+                return "rule_id and text are required to update."
+            if not preferences_repository.update_rule(user_id, UUID(rid), text):
+                return "No rule with that id — action='list' shows them."
+            _refresh()
+            return "Rule updated."
+
+        if action == "remove":
+            rid = str(input_dict.get("rule_id", "")).strip()
+            if not rid:
+                return "rule_id is required to remove."
+            if not preferences_repository.remove_rule(user_id, UUID(rid)):
+                return "No rule with that id — action='list' shows them."
+            _refresh()
+            return "Rule removed."
+
+        return "Unknown action. Use: add, list, update, remove."
+    except ValueError:
+        return "That rule_id isn't a valid id."
     except Exception:
         _log.exception("save_preferences failed for user %s", user_id)
-        return "Couldn't save preferences — try again in a moment."
-
-
-# --- Registration ------------------------------------------------------------
+        return "Couldn't save that — try again in a moment."
 
 def meta_tools(
     context_service: CurrentContextService,
     preferences_repository,
+    brain_changed=None,   # (user_id) -> None: refresh the vault's Brain pages
 ) -> list[tuple[dict, callable]]:
+    def _refresh(uid):
+        if brain_changed is not None:
+            try:
+                brain_changed(uid)
+            except Exception:
+                _log.warning("brain page refresh failed", exc_info=True)
+
+    def _context(uid, inp, now):
+        out = handle_update_current_context(uid, inp, now, context_service=context_service)
+        _refresh(uid)
+        return out
+
+    def _prefs(uid, inp, now):
+        return handle_save_preferences(
+            uid, inp, now, preferences_repository=preferences_repository,
+            brain_changed=lambda: _refresh(uid),
+        )
+
     return [
-        (
-            UPDATE_CONTEXT_TOOL,
-            lambda uid, inp, now: handle_update_current_context(
-                uid, inp, now, context_service=context_service,
-            ),
-        ),
-        (
-            SAVE_PREFERENCES_TOOL,
-            lambda uid, inp, now: handle_save_preferences(
-                uid, inp, now, preferences_repository=preferences_repository,
-            ),
-        ),
+        (UPDATE_CONTEXT_TOOL, _context),
+        (SAVE_PREFERENCES_TOOL, _prefs),
     ]

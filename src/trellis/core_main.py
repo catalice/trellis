@@ -357,6 +357,17 @@ def main() -> None:
         vault=vault, memory=memory, history=history,
     )
 
+    def brain_refresh(uid) -> None:
+        """Feed the vault's Brain pages from the live stores (her window into
+        everything saved about her)."""
+        vault.brain_changed(
+            uid,
+            profile=profile_service.get(uid),
+            context=context_service.get(uid),
+            pref_rules=preferences_repository.list_rules(uid),
+            kinds=state_repo.tracked_kinds(uid),
+        )
+
     # Always-available tools — offered every turn regardless of the routed domain.
     always_tools = [
         (
@@ -366,7 +377,7 @@ def main() -> None:
                 tz=settings.timezone,
             ),
         ),
-        *meta_tools(context_service, preferences_repository),
+        *meta_tools(context_service, preferences_repository, brain_changed=brain_refresh),
         (
             PATTERN_RESPONSE_TOOL,
             lambda uid, inp, now: handle_pattern_response(uid, inp, now, watcher=watcher),

@@ -731,6 +731,64 @@ class ObsidianVault:
 
     # --- The Watcher's window ------------------------------------------------
 
+    def brain_changed(self, user_id, profile=None, context=None,
+                      pref_rules=None, kinds=None) -> None:
+        """The window into what's saved about THEM (her ask, 2 Sep: 'I should
+        be able to see everything rather than it going into a black hole').
+        Atlas/Brain/: Profile, Context, Preferences (with rule ids), Tracked
+        kinds. Caller supplies the data; write-only, never raises."""
+        try:
+            folder = self._vault / "Atlas" / "Brain"
+            folder.mkdir(parents=True, exist_ok=True)
+            stamp = f"*Updated {datetime.now(self._tz).strftime('%a %-d %b, %H:%M')}*\n"
+
+            lines = ["# Profile\n", stamp]
+            if profile is not None:
+                for label, val in (("Name", getattr(profile, "name", None)),
+                                   ("Physical", getattr(profile, "physical_notes", None)),
+                                   ("Cognitive", getattr(profile, "cognitive_notes", None))):
+                    if val:
+                        lines.append(f"**{label}:** {val}\n")
+            else:
+                lines.append("*Empty — onboarding fills this.*\n")
+            (folder / "Profile.md").write_text("\n".join(lines), encoding="utf-8")
+
+            lines = ["# Current context\n", stamp]
+            if context is not None:
+                until = getattr(context, "valid_until", None)
+                if until:
+                    lines.append(f"*Valid until {until}*\n")
+                for label, val in (("Now", getattr(context, "misc_notes", None)),
+                                   ("Physical", getattr(context, "physical_notes", None)),
+                                   ("Cognitive", getattr(context, "cognitive_notes", None))):
+                    if val:
+                        lines.append(f"**{label}:** {val}\n")
+            else:
+                lines.append("*Empty — tell Trellis what's live in your life.*\n")
+            (folder / "Context.md").write_text("\n".join(lines), encoding="utf-8")
+
+            lines = ["# Preferences\n", stamp,
+                     "*One rule per line. To change one, tell Trellis — "
+                     "quote the rule or its id.*\n"]
+            current_domain = None
+            for r in (pref_rules or []):
+                if r["domain"] != current_domain:
+                    current_domain = r["domain"]
+                    lines.append(f"\n## {current_domain}\n")
+                lines.append(f"- {r['rule']}  \n  ^`{r['id']}`\n")
+            if not pref_rules:
+                lines.append("*None yet.*\n")
+            (folder / "Preferences.md").write_text("\n".join(lines), encoding="utf-8")
+
+            lines = ["# Tracked kinds\n", stamp,
+                     "*Every dimension ever logged — new ones cost nothing, "
+                     "just mention them.*\n"]
+            for k in (kinds or []):
+                lines.append(f"- {k}")
+            (folder / "Tracked kinds.md").write_text("\n".join(lines), encoding="utf-8")
+        except Exception:
+            logger.warning("brain pages write failed", exc_info=True)
+
     def learn_map(self, title: str, body: str) -> None:
         """One map page per Learn thread (Atlas/Maps/<title>.md). The map is
         drawn by the user in conversation; this is its window. Same write-only

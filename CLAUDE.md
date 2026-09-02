@@ -394,7 +394,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - **Don't build what wasn't asked for.**
 - **Content belongs to Claude.** Never hardcode session content, coaching rules, or synthesis logic in Python.
 - **max_tokens too low truncates JSON silently.** Always set 16000+ for structured responses (on Sonnet 5, thinking shares the max_tokens cap).
-- **Preferences accumulate.** save_preferences APPENDS by default; replace=true only for deliberate rewrites — a new preference must never silently erase an old one.
+- **Preferences are rows.** One rule, one row, one id (migration 021) — add/list/update/remove individually; a new rule can never touch an old one. They project to Atlas/Brain/Preferences.md, where the user reviews them.
 - **Exactness ≠ permanence.** One exact prescription per session, but every prescription is re-chosen in the Sunday weekly review — never carried forward by default.
 - **Don't revert a commit by amending.** Create a new commit.
 - **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.

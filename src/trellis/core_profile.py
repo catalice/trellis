@@ -114,6 +114,10 @@ class CurrentContextService:
     def __init__(self, repository: CurrentContextRepository) -> None:
         self.repository = repository
 
+    def get(self, user_id: UUID) -> CurrentContext | None:
+        """The stored context even if EXPIRED — the Brain page shows truth."""
+        return self.repository.get(user_id)
+
     def get_valid(self, user_id: UUID, today: date) -> CurrentContext | None:
         ctx = self.repository.get(user_id)
         if ctx is None or not ctx.is_valid(today):
@@ -236,39 +240,64 @@ class PostgresCurrentContextRepository:
 
 
 class PostgresPreferencesRepository:
+    """Preferences as ROWS (migration 021): one rule, one row, one id —
+    listable, updatable, removable. get() composes the joined text the
+    assembler has always read."""
+
     def __init__(self, database: PostgresDatabase) -> None:
         self.database = database
 
     def get(self, user_id: UUID, domain: str) -> str | None:
-        with self.database.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT content FROM user_preferences WHERE user_id = %s AND domain = %s",
-                    (user_id, domain),
-                )
-                row = cur.fetchone()
-                return row[0] if row else None
+        rules = self.list_rules(user_id, domain)
+        return "\n".join(r["rule"] for r in rules) or None
 
-    def set(self, user_id: UUID, domain: str, content: str, *, replace: bool = False) -> None:
-        """Save a preference. Preferences ACCUMULATE by default — a new one is
-        appended to the domain's existing text, so saving 'keep replies short'
-        can never silently erase 'no tables'. replace=True rewrites the whole
-        domain deliberately (corrections, consolidation)."""
-        if not replace:
-            existing = self.get(user_id, domain)
-            if existing:
-                if content.strip() in existing:
-                    content = existing
+    def list_rules(self, user_id: UUID, domain: str | None = None) -> list[dict]:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                if domain is None:
+                    cur.execute(
+                        "SELECT id, domain, rule FROM preference_rules"
+                        " WHERE user_id = %s ORDER BY domain, created_at",
+                        (user_id,),
+                    )
                 else:
-                    content = existing.rstrip() + "\n" + content.strip()
+                    cur.execute(
+                        "SELECT id, domain, rule FROM preference_rules"
+                        " WHERE user_id = %s AND domain = %s ORDER BY created_at",
+                        (user_id, domain),
+                    )
+                return [{"id": r[0], "domain": r[1], "rule": r[2]} for r in cur.fetchall()]
+
+    def add_rule(self, user_id: UUID, domain: str, rule: str) -> None:
         with self.database.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    INSERT INTO user_preferences (user_id, domain, content, updated_at)
-                    VALUES (%s, %s, %s, NOW())
-                    ON CONFLICT (user_id, domain) DO UPDATE
-                        SET content = EXCLUDED.content, updated_at = NOW()
-                    """,
-                    (user_id, domain, content),
+                    "SELECT 1 FROM preference_rules WHERE user_id = %s AND domain = %s"
+                    " AND lower(rule) = lower(%s)",
+                    (user_id, domain, rule.strip()),
                 )
+                if cur.fetchone():
+                    return
+                cur.execute(
+                    "INSERT INTO preference_rules (user_id, domain, rule) VALUES (%s, %s, %s)",
+                    (user_id, domain, rule.strip()),
+                )
+
+    def update_rule(self, user_id: UUID, rule_id: UUID, rule: str) -> bool:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE preference_rules SET rule = %s, updated_at = NOW()"
+                    " WHERE id = %s AND user_id = %s",
+                    (rule.strip(), rule_id, user_id),
+                )
+                return cur.rowcount > 0
+
+    def remove_rule(self, user_id: UUID, rule_id: UUID) -> bool:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM preference_rules WHERE id = %s AND user_id = %s",
+                    (rule_id, user_id),
+                )
+                return cur.rowcount > 0
