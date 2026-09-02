@@ -245,107 +245,16 @@ class TestOracleSilentFinish:
         assert result.text == "All done!"
 
 
-class TestAnswerCheck:
-    """Audit item 29: three live failures of 'did the work, ignored the
-    questions' — prompt lines lose to tool-momentum, so a mechanical gate:
-    tool-turn + '?' in her message -> one review call before the reply ships."""
+class TestAnswerCheckRetired:
+    """Item 29's gate was RETIRED 2 Sep 2026: near-silent for weeks, then it
+    degraded replies (leaked its ACTIONS/DRAFT scaffold to the user, invented
+    a duplicate message). The 29b prevention - her message re-attached behind
+    every tool round - is the surviving fix. This locks the retirement."""
 
-    class _Resp:
-        def __init__(self, stop_reason, content):
-            self.stop_reason = stop_reason
-            self.content = content
-
-    class _Block:
-        def __init__(self, **kw):
-            self.__dict__.update(kw)
-
-    def _oracle(self, responses):
-        from trellis.core_oracle import Oracle
-
-        class FakeMessages:
-            def __init__(self, resps):
-                self._resps = list(resps)
-                self.requests = []
-
-            def create(self, **kwargs):
-                self.requests.append(kwargs)
-                return self._resps.pop(0)
-
-        class FakeClient:
-            def __init__(self, resps): self.messages = FakeMessages(resps)
-
-        client = FakeClient(responses)
-        return Oracle(client=client, model="test"), client
-
-    def test_question_plus_tools_gets_checked_and_rewritten(self):
-        tool_use = self._Block(type="tool_use", name="save_training_plan", id="t1", input={})
-        oracle, client = self._oracle([
-            self._Resp("tool_use", [tool_use]),
-            self._Resp("end_turn", [self._Block(type="text", text="Plan updated.")]),
-            self._Resp("end_turn", [self._Block(type="text",
-                text="4:1 because... 125-145 because... And the plan's updated.")]),
-        ])
-        result = oracle.run("sys", [{"role": "user", "content": "Why 4:1? Why HR 125-145?"}],
-                            tools=[{"name": "save_training_plan"}],
-                            handlers={"save_training_plan": lambda inp: "Saved."})
-        assert "because" in result.text
-        # the check call carried her message + the draft, with no tools
-        check_request = client.messages.requests[-1]
-        assert "tools" not in check_request
-        assert "Why 4:1" in check_request["messages"][0]["content"]
-        assert "Plan updated." in check_request["messages"][0]["content"]
-
-    def test_her_message_rides_behind_tool_results(self):
-        """Item 29b (her idea): the message is re-attached after every round of
-        tool results, so it's the nearest thing in context at reply time."""
-        tool_use = self._Block(type="tool_use", name="log_state", id="t1", input={})
-        oracle, client = self._oracle([
-            self._Resp("tool_use", [tool_use]),
-            self._Resp("end_turn", [self._Block(type="text", text="Logged. Feeling good?")]),
-        ])
-        oracle.run("sys", [{"role": "user", "content": "log this and also why am I so tired"}],
-                   tools=[{"name": "log_state"}],
-                   handlers={"log_state": lambda inp: "State logged."})
-        second_request = client.messages.requests[1]
-        tool_result_msg = second_request["messages"][-1]["content"]
-        reminder_blocks = [b for b in tool_result_msg
-                           if isinstance(b, dict) and b.get("type") == "text"]
-        assert reminder_blocks, "reminder text block missing after tool results"
-        assert "why am I so tired" in reminder_blocks[0]["text"]
-
-    def test_no_question_means_no_extra_call(self):
-        tool_use = self._Block(type="tool_use", name="log_state", id="t1", input={})
-        oracle, client = self._oracle([
-            self._Resp("tool_use", [tool_use]),
-            self._Resp("end_turn", [self._Block(type="text", text="Logged, sounds like a good morning.")]),
-        ])
-        result = oracle.run("sys", [{"role": "user", "content": "feeling good today"}],
-                            tools=[{"name": "log_state"}],
-                            handlers={"log_state": lambda inp: "State logged."})
-        assert result.text == "Logged, sounds like a good morning."
-        assert len(client.messages.requests) == 2  # loop calls only, no check
-
-    def test_check_failure_ships_the_draft(self):
-        tool_use = self._Block(type="tool_use", name="log_state", id="t1", input={})
-
-        class Boom(Exception):
-            pass
-
-        oracle, client = self._oracle([
-            self._Resp("tool_use", [tool_use]),
-            self._Resp("end_turn", [self._Block(type="text", text="Draft reply.")]),
-        ])
-        original_create = client.messages.create
-        def create(**kwargs):
-            if kwargs.get("system", "").startswith("You review a draft"):
-                raise Boom()
-            return original_create(**kwargs)
-        client.messages.create = create
-        result = oracle.run("sys", [{"role": "user", "content": "did it work?"}],
-                            tools=[{"name": "log_state"}],
-                            handlers={"log_state": lambda inp: "ok"})
-        assert result.text == "Draft reply."
-
+    def test_oracle_has_no_answer_check(self):
+        import trellis.core_oracle as oracle
+        assert not hasattr(oracle.Oracle, "_answer_checked")
+        assert not hasattr(oracle, "_ANSWER_CHECK_SYSTEM")
 
 class TestPreferencesLoading:
     """Preferences were written but never read (the 'saved under learn' black

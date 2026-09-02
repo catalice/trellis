@@ -219,7 +219,7 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
 # Formatting
 # ---------------------------------------------------------------------------
 
-def _fmt_tracking(states: list, events: list) -> "str | None":
+def _fmt_tracking(states: list, events: list, tz) -> "str | None":
     """Recent state logs + events with IDs (IDs let delete_entry erase a specific
     entry). None when there's nothing. Used by the context loader."""
     if not states and not events:
@@ -231,7 +231,7 @@ def _fmt_tracking(states: list, events: list) -> "str | None":
             scores = "/".join(p for p in (
                 f"e{s.energy}" if s.energy else "", f"m{s.mood}" if s.mood else "",
             ) if p)
-            felt = s.felt_at.strftime("%d %b %H:%M")
+            felt = s.felt_at.astimezone(tz).strftime("%d %b %H:%M")
             lines.append(f"  [{s.id}] {felt} {scores or '·'} — {s.note[:80]}")
     if events:
         lines.append("Events:")
@@ -241,7 +241,7 @@ def _fmt_tracking(states: list, events: list) -> "str | None":
                 bits.append(e.detail)
             if e.value is not None:
                 bits.append(f"{e.value:g}")
-            lines.append(f"  [{e.id}] {e.occurred_at.strftime('%d %b %H:%M')} — {' '.join(bits)}")
+            lines.append(f"  [{e.id}] {e.occurred_at.astimezone(tz).strftime('%d %b %H:%M')} — {' '.join(bits)}")
     return "\n".join(lines)
 
 
@@ -306,7 +306,7 @@ def _fmt_health(health: "dict | None") -> "str | None":
 # Context loader (Tier 1b) + snapshot (Tier 2)
 # ---------------------------------------------------------------------------
 
-def sense_context_loader(sense_service) -> ContextLoader:
+def sense_context_loader(sense_service, tz) -> ContextLoader:
     """Loaded when Sense is routed. Carries the wellbeing guidance, recent tracking
     (state/meds/sleep/period, with IDs so delete_entry can target one), and the
     latest readiness — so the room reflects from what's stored, no read tool needed."""
@@ -325,6 +325,7 @@ def sense_context_loader(sense_service) -> ContextLoader:
             tracking = _fmt_tracking(
                 sense_service.recent_states(user_id, days=7, now=now),
                 sense_service.recent_events(user_id, days=7, now=now),
+                tz,
             )
             if tracking:
                 parts.append(tracking)

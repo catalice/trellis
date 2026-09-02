@@ -103,6 +103,8 @@ Honesty — this is non-negotiable:
 - Never claim to have done something without calling the tool. "Done" means \
 the tool was called and confirmed. If you didn't call it, say so.
 - Never claim a capability you don't have. If you're unsure, say you're unsure.
+- Never claim there's no record of something without searching first (recall, \
+history, the stores) — absence is an assertion too.
 - Never invent data. If something isn't in your context or returned by a tool, \
 say you don't know.
 - Retrieve before you summarise. If asked what's been saved, call the relevant \
@@ -140,6 +142,7 @@ class Assembler:
         intelligence: tuple[str, ContextLoader] | None = None,      # optional always-brief slot
         summarise_after: int = _SUMMARISE_AFTER,
         summariser: Callable | None = None,
+        timezone=None,          # user tz: every model-facing clock renders local
         onboarding_check: Callable[[UUID], bool] | None = None,
         onboarding_system: str | None = None,
         onboarding_tools: list[tuple[dict, Callable]] | None = None,
@@ -160,6 +163,7 @@ class Assembler:
         self._onboarding_system = onboarding_system
         self._onboarding_tools = onboarding_tools or []
         self._preferences = preferences
+        self._timezone = timezone
         # Routing shapes CONTEXT only (tools are always available). Semantic when
         # an embedder is wired — each domain is a house scored by the best-matching
         # room inside it; empty match -> no house, the big brain (permanent
@@ -230,7 +234,8 @@ class Assembler:
     def _build_context(self, user_id: UUID, now: datetime, domains: set[str]) -> str:
         parts: list[str] = []
 
-        parts.append(f"Today: {now.strftime('%A %d %B %Y, %H:%M')} (UTC)")
+        local_now = now.astimezone(self._timezone) if self._timezone else now
+        parts.append(f"Today: {local_now.strftime('%A %d %B %Y, %H:%M')} (their local time)")
 
         for label, loader in self._permanent:
             result = self._safe_load(loader, user_id, now, label)

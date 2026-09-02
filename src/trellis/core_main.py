@@ -326,7 +326,7 @@ def main() -> None:
 
     registry.add_domain(
         "sense",
-        sense_context_loader(sense_service),
+        sense_context_loader(sense_service, settings.timezone),
         sense_tools(sense_service, settings.timezone),
         SENSE_SIGNALS,
         rooms=SENSE_ROOMS,
@@ -379,6 +379,7 @@ def main() -> None:
     ))
 
     assembler = Assembler(
+        timezone=settings.timezone,
         oracle=oracle,
         registry=registry,
         history=history,

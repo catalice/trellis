@@ -374,7 +374,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 ## Lean constraints (non-negotiable)
 
-- **One ORACLE call per turn** (the agentic loop). Two bounded single-shot guards are the only exceptions, both born from live failures: the silent-turn NUDGE (empty reply after tools) and the ANSWER CHECK (tool-turn + question in her message -> tiny standalone review call, item 29). Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
+- **One ORACLE call per turn** (the agentic loop). One bounded single-shot guard is the only exception, born from a live failure: the silent-turn NUDGE (empty reply after tools). (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
 - **Minimal pre-loaded context.** The failure mode is loading too much, not too little.
 - **Bounded context.** Insights and history enter as summaries. Never pass raw records.
 - **Tools as the API surface.** A future UI calls the same tools Telegram does.

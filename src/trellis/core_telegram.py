@@ -77,7 +77,13 @@ class TelegramTrellis:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.message)
         )
         application.add_handler(MessageHandler(filters.VOICE, self.voice))
+        application.add_error_handler(self._on_error)
         return application
+
+    async def _on_error(self, update, context) -> None:
+        """Registered handler: polling/network hiccups get one WARNING line
+        instead of a naked 'No error handlers are registered' traceback."""
+        self.logger.warning("telegram error: %s", context.error)
 
     async def _post_init(self, application: Application) -> None:
         if self.reminders is not None:

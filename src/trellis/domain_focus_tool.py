@@ -479,7 +479,7 @@ def handle_focus_get(
             return "Inbox is clear — no unassigned captures."
         lines = [f"Unassigned captures ({len(captures)}):"]
         for c in captures:
-            date_str = c.created_at.strftime("%d %b")
+            date_str = c.created_at.astimezone(tz).strftime("%d %b")
             summary = c.summary or c.raw[:60]
             lines.append(f"  [{c.id}] {date_str} — {summary}")
         return "\n".join(lines)
@@ -507,7 +507,7 @@ def handle_focus_get(
         if not captures:
             lines.append("Nothing filed on it yet.")
         for c in captures:
-            when = c.created_at.strftime("%d %b")
+            when = c.created_at.astimezone(tz).strftime("%d %b")
             body = (c.synthesis or c.raw or "").strip()
             lines.append(f"  [{c.id}] {when} — {body[:300]}")
         return "\n".join(lines)
