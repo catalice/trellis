@@ -120,10 +120,14 @@ def _profile_loader(svc: UserProfileService):
 def _current_context_loader(svc: CurrentContextService):
     def loader(user_id: UUID, now: datetime) -> str | None:
         ctx = svc.get_valid(user_id, now.date())
-        if not ctx:
-            return None
-        text = ctx.for_coach()
-        return f"[Current context]\n{text}" if text else None
+        if ctx:
+            text = ctx.for_coach()
+            return f"[Current context]\n{text}" if text else None
+        # Empty or expired: their life moved on and this slot went dark —
+        # surface it so a natural moment refills it (never nag).
+        state = "EXPIRED" if svc.get(user_id) is not None else "empty"
+        return (f"[Current context] {state} — ask what's live in their life "
+                "when a natural moment comes.")
     return loader
 
 
@@ -397,7 +401,7 @@ def main() -> None:
         permanent=[
             ("profile", _profile_loader(profile_service)),
             ("current_context", _current_context_loader(context_service)),
-            ("snapshot", focus_snapshot(task_service, reminder_service)),
+            ("snapshot", focus_snapshot(task_service, reminder_service, goal_service)),
             ("sense_snapshot", sense_snapshot(sense_service)),
             ("move_snapshot", move_snapshot(move_service)),
         ],
@@ -458,6 +462,7 @@ def main() -> None:
             watcher.tick(uid, datetime.now(timezone.utc))
             for uid, _tg in database.list_users()
         ],
+        message_log=history,
     ).build()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

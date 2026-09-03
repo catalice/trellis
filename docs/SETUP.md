@@ -40,6 +40,7 @@ Fill in `.env`:
 | `TRELLIS_SECRET_KEY` | any long random string — encrypts stored Garmin sessions |
 | `HEALTH_WORKER_SECRET` | any long random string — auths the Garmin worker |
 | `GROQ_API_KEY` | optional, voice notes |
+| `TRELLIS_CHAT_TTL_HOURS` | optional: >0 sweeps Telegram messages older than N hours (the chat matches the bot's verbatim window); 0 keeps chat forever |
 | `TAVILY_API_KEY` | optional, web search |
 
 Then:

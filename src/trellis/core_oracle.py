@@ -70,7 +70,7 @@ class Oracle:
 
     def run(
         self,
-        system: str,
+        system,                       # str, or content blocks (cache_control-ready)
         messages: list[dict],
         tools: list[dict],
         handlers: dict[str, Callable[[dict], str]],
@@ -91,8 +91,19 @@ class Oracle:
         calls: list[ToolCall] = []
         response = None
         nudged = False
+        logged_cache = False
         for _ in range(_MAX_TOOL_ITERATIONS):
             response = self._api_call(kwargs)
+            if not logged_cache:
+                logged_cache = True
+                u = getattr(response, "usage", None)
+                if u is not None:
+                    _log.info(
+                        "oracle usage: in=%s cache_read=%s cache_write=%s",
+                        getattr(u, "input_tokens", "?"),
+                        getattr(u, "cache_read_input_tokens", 0),
+                        getattr(u, "cache_creation_input_tokens", 0),
+                    )
 
             if response.stop_reason == "end_turn":
                 # The NUDGE: a silent end_turn after tool calls means the model

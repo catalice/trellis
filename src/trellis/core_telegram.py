@@ -46,6 +46,7 @@ class TelegramTrellis:
         memory: MemoryIndex | None = None,
         garmin_sync: Callable[[], None] | None = None,
         watcher_tick: Callable[[], None] | None = None,
+        message_log=None,        # history repo: telegram message registry (chat sweep)
     ):
         self.settings = settings
         self.database = database
@@ -55,6 +56,8 @@ class TelegramTrellis:
         self.memory = memory
         self._garmin_sync = garmin_sync
         self._watcher_tick = watcher_tick
+        self._message_log = message_log
+        self._chat_ttl_hours = getattr(settings, "chat_ttl_hours", 0)
         self._watcher_task: asyncio.Task | None = None
         self._reminder_delivery_task: asyncio.Task | None = None
         self._garmin_sync_task: asyncio.Task | None = None
@@ -92,6 +95,10 @@ class TelegramTrellis:
             )
         if self._garmin_sync is not None:
             self._garmin_sync_task = asyncio.create_task(self._garmin_sync_loop())
+        if self._chat_ttl_hours > 0 and self._message_log is not None:
+            self._chat_sweep_task = asyncio.create_task(
+                self._chat_sweep_loop(application)
+            )
         if self._watcher_tick is not None:
             self._watcher_task = asyncio.create_task(self._watcher_loop())
 
@@ -133,6 +140,31 @@ class TelegramTrellis:
                 self.logger.exception("Watcher tick failed")
             await asyncio.sleep(24 * 3600)
 
+    async def _chat_sweep_loop(self, application: Application) -> None:
+        """Her design: the visible chat matches the verbatim window. Messages
+        older than the TTL are deleted (Telegram allows deletion only within
+        48h, so undeletable stragglers are forgotten, not retried)."""
+        from datetime import timedelta
+        await asyncio.sleep(300)
+        while True:
+            try:
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=self._chat_ttl_hours)
+                hard = datetime.now(timezone.utc) - timedelta(hours=47, minutes=30)
+                swept = 0
+                for chat_id, message_id, sent_at in self._message_log.sweepable_telegram_messages(older_than=cutoff):
+                    if sent_at > hard:
+                        try:
+                            await application.bot.delete_message(chat_id=chat_id, message_id=message_id)
+                            swept += 1
+                        except Exception:
+                            pass   # already gone, or refused — forget either way
+                    self._message_log.forget_telegram_message(chat_id, message_id)
+                if swept:
+                    self.logger.info("chat sweep: %d message(s) aged out", swept)
+            except Exception:
+                self.logger.exception("chat sweep failed")
+            await asyncio.sleep(6 * 3600)
+
     async def _deliver_due_reminders_loop(self, application: Application) -> None:
         while True:
             try:
@@ -154,10 +186,11 @@ class TelegramTrellis:
                 continue
             due = self.reminders.upcoming(user_id, hours=0, now=now)
             for reminder in due:
-                await application.bot.send_message(
+                sent = await application.bot.send_message(
                     chat_id=telegram_user_id,
                     text=f"Reminder: {reminder.label}",
                 )
+                self._record_msg(sent)
                 self.reminders.mark_sent(reminder.id)
                 if reminder.recurrence:
                     self.reminders.reschedule(user_id, reminder, now=now)
@@ -206,12 +239,23 @@ class TelegramTrellis:
 
         await self._respond(update, user_id, transcript)
 
+    def _record_msg(self, message) -> None:
+        """Register a Telegram message id for the chat sweep. Never raises."""
+        if self._message_log is None or message is None:
+            return
+        try:
+            self._message_log.record_telegram_message(message.chat_id, message.message_id)
+        except Exception:
+            self.logger.warning("message record failed", exc_info=True)
+
     async def _respond(self, update: Update, user_id, text: str) -> None:
         lock = self._turn_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            self._record_msg(update.message)
             # A real "working" message, not just the typing indicator — sent now and
             # edited into the final reply, so there's visible feedback the whole turn.
             placeholder = await update.message.reply_text("🧠 on it…")
+            self._record_msg(placeholder)
             try:
                 reply = await asyncio.to_thread(
                     self.assembler.handle_turn, user_id, text
@@ -255,10 +299,10 @@ class TelegramTrellis:
                 self.logger.warning("Editing placeholder failed; sending fresh", exc_info=True)
         # 3. edit impossible (e.g. too long) — send fresh, formatted then plain.
         try:
-            await update.message.reply_text(text, parse_mode="Markdown")
+            self._record_msg(await update.message.reply_text(text, parse_mode="Markdown"))
         except Exception:
             try:
-                await update.message.reply_text(text)
+                self._record_msg(await update.message.reply_text(text))
             except Exception:
                 self.logger.warning("Failed to deliver reply", exc_info=True)
 

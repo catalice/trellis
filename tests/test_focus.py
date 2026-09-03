@@ -967,3 +967,30 @@ class TestEffortOperations:
         assert renamed.title == "Writing"
         assert "Writing" in renamed.obsidian_path
         assert "Neurodivergence" not in renamed.obsidian_path
+
+
+class TestDatedGoalCountdowns:
+    """3 Sep: facts from data — a dated goal becomes a computed countdown in
+    the snapshot, staleness-impossible (the wedding can't quietly expire again)."""
+
+    def test_countdown_renders(self):
+        from datetime import date as _d
+        from trellis.domain_focus_tool import focus_snapshot
+        from trellis.domain_focus_models import Goal, GoalStatus, GoalType
+        from uuid import uuid4
+
+        class Goals:
+            def list_active(self, uid):
+                return [Goal(id=uuid4(), user_id=uid, title="Get married",
+                             goal_type=GoalType.LIFE, status=GoalStatus.ACTIVE,
+                             target_date=_d(2026, 10, 3), created_at=NOW,
+                             updated_at=NOW)]
+
+        class Empty:
+            def list_open(self, uid): return []
+            def due_today(self, uid, now): return []
+            def upcoming(self, uid, hours, now): return []
+
+        loader = focus_snapshot(Empty(), Empty(), Goals())
+        snap = loader(UID, NOW.replace(month=9, day=3))
+        assert "Get married in 4w2d (3 Oct)" in snap

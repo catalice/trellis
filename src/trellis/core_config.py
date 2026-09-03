@@ -25,6 +25,7 @@ class Settings:
     groq_api_key: str = ""
     tavily_api_key: str = ""
     guardian_api_key: str = ""
+    chat_ttl_hours: int = 0   # 0 = keep chat forever; >0 sweeps messages older than N hours
     github_token: str = ""
 
     @classmethod
@@ -62,6 +63,7 @@ class Settings:
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
             guardian_api_key=os.getenv("GUARDIAN_API_KEY", ""),
+            chat_ttl_hours=int(os.getenv("TRELLIS_CHAT_TTL_HOURS", "0") or 0),
             github_token=os.getenv("GITHUB_TOKEN", ""),
         )
 

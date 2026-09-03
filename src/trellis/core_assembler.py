@@ -21,7 +21,9 @@ from trellis.infra_router import Embedder, SemanticRouter
 
 _log = logging.getLogger(__name__)
 
-_HISTORY_TURNS = 10
+_HISTORY_TURNS = 10           # onboarding only; the main path is time-based
+_WINDOW_HOURS = 24            # verbatim memory = the last day (her design) ...
+_WINDOW_CAP = 60              # ... capped so a wild day can't run away
 _SUMMARISE_AFTER = 20
 
 _SYSTEM_BASE = """\
@@ -123,6 +125,7 @@ duplicate or overwrite. Never silently discard existing content.
 class _HistoryRepo(Protocol):
     def append(self, user_id: UUID, role: str, content: str, metadata: dict | None = None) -> None: ...
     def recent(self, user_id: UUID, limit: int) -> list: ...
+    def recent_window(self, user_id: UUID, *, since, cap: int) -> list: ...
     def to_messages(self, turns: list) -> list[dict]: ...
     def domain_summary(self, user_id: UUID, domain: str) -> str | None: ...
     def turn_count(self, user_id: UUID) -> int: ...
@@ -188,15 +191,32 @@ class Assembler:
         _log.debug("routed %s → %s", message[:60], domains)
 
         context = self._build_context(user_id, now, domains)
-        system = f"{_SYSTEM_BASE}\n\n---\n\n{context}"
+        # System as two blocks: the constitution never changes, so it (plus the
+        # tool schemas before it) caches at a tenth of the price; the context
+        # block is the volatile tail.
+        system = [
+            {"type": "text", "text": _SYSTEM_BASE,
+             "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": f"---\n\n{context}"},
+        ]
 
         tool_schemas, bound_handlers = self._build_tools(user_id, now, domains)
 
-        turns = self._history.recent(user_id, limit=_HISTORY_TURNS)
+        from datetime import timedelta
+        turns = self._history.recent_window(
+            user_id, since=now - timedelta(hours=_WINDOW_HOURS), cap=_WINDOW_CAP,
+        )
         messages = [
             *self._history.to_messages(turns),
             {"role": "user", "content": message},
         ]
+        # History is append-only within the day, so its prefix is stable —
+        # mark the last history message and the whole prefix caches too.
+        if len(messages) >= 2 and isinstance(messages[-2].get("content"), str):
+            messages[-2]["content"] = [{
+                "type": "text", "text": messages[-2]["content"],
+                "cache_control": {"type": "ephemeral"},
+            }]
 
         result = self._oracle.run(system, messages, tool_schemas, bound_handlers)
 

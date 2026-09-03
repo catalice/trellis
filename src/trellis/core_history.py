@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
 from uuid import UUID
 
 from trellis.infra_postgres import PostgresDatabase
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,61 @@ class PostgresConversationHistory:
             )
             for row in reversed(rows)
         ]
+
+    def recent_window(self, user_id: UUID, *, since, cap: int = 60) -> list[ConversationTurn]:
+        """Verbatim memory is TIME-based (her design): everything since `since`,
+        capped so a wild day can't run away. Newest-first query, returned oldest-first."""
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, user_id, role, content, created_at
+                    FROM conversation_turns
+                    WHERE user_id = %s AND created_at >= %s
+                    ORDER BY created_at DESC LIMIT %s
+                    """,
+                    (user_id, since, cap),
+                )
+                rows = cur.fetchall()
+        return [
+            ConversationTurn(
+                id=row[0], user_id=row[1], role=row[2],
+                content=row[3], created_at=row[4],
+            )
+            for row in reversed(rows)
+        ]
+
+    # --- Telegram message registry (chat sweep) ----------------------------
+
+    def record_telegram_message(self, chat_id: int, message_id: int) -> None:
+        try:
+            with self.database.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO telegram_messages (chat_id, message_id)"
+                        " VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                        (chat_id, message_id),
+                    )
+        except Exception:
+            _log.warning("telegram message record failed", exc_info=True)
+
+    def sweepable_telegram_messages(self, *, older_than) -> list[tuple[int, int, Any]]:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT chat_id, message_id, sent_at FROM telegram_messages"
+                    " WHERE sent_at < %s ORDER BY sent_at",
+                    (older_than,),
+                )
+                return list(cur.fetchall())
+
+    def forget_telegram_message(self, chat_id: int, message_id: int) -> None:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM telegram_messages WHERE chat_id = %s AND message_id = %s",
+                    (chat_id, message_id),
+                )
 
     def to_messages(self, turns: list[ConversationTurn]) -> list[dict[str, Any]]:
         while turns and turns[0].role == "assistant":

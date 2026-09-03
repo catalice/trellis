@@ -1164,6 +1164,7 @@ def focus_context_loader(
 def focus_snapshot(
     task_service,
     reminder_service,
+    goal_service=None,
 ) -> ContextLoader:
     """
     Tier 2 snapshot contribution — existence/urgency only, always loaded.
@@ -1192,6 +1193,26 @@ def focus_snapshot(
                 parts.append(f"Reminders: {len(soon)} due in 4h")
         except Exception:
             _log.warning("focus_snapshot: reminders failed", exc_info=True)
+
+        # Dated goals become COMPUTED countdowns — facts from data, never typed,
+        # never stale (her design: the wedding can't quietly expire again).
+        if goal_service is not None:
+            try:
+                today = now.date()
+                bits = []
+                for g in goal_service.list_active(user_id):
+                    if g.target_date is None:
+                        continue
+                    days = (g.target_date - today).days
+                    if days < 0 or days > 400:
+                        continue
+                    w, d = divmod(days, 7)
+                    span = f"{w}w{d}d" if w else f"{d}d"
+                    bits.append(f"{g.title} in {span} ({g.target_date.strftime('%-d %b')})")
+                if bits:
+                    parts.append("Dated: " + "; ".join(bits))
+            except Exception:
+                _log.warning("focus_snapshot: countdowns failed", exc_info=True)
 
         return " | ".join(parts) if parts else None
 
