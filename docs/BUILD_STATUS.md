@@ -79,6 +79,10 @@ Builds, in order:
    (the doc is the test script; every divergence fixes the doc or the code),
    ending with onboarding building a Trellis for whoever showed up.
 
+Standing doc rule (her note, 4 Sep): the public docs speak to STRANGERS.
+README/SETUP/BUILD_STATUS carry no insider shorthand - every release that
+changes behaviour updates them in plain words, same discipline as tests.
+
 Small, awaiting a yes: Watcher in-chat evidence labeled as historical examples
 (the hallucinated-effort fix); wordiness pass over the older prompts; NYT news
 source if wanted.
