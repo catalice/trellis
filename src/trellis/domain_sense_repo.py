@@ -108,6 +108,19 @@ class PostgresStateRepository:
                 views = _event_views(row) if row else []
                 return views[0] if views else None
 
+    def period_starts(self, user_id: UUID) -> list:
+        """Distinct dates of period starts, oldest first (dupes from the old
+        double-logging era collapse here)."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT felt_at::date FROM tracking_log"
+                    " WHERE user_id = %s AND facts->>'period' = 'started'"
+                    " ORDER BY 1",
+                    (user_id,),
+                )
+                return [r[0] for r in cur.fetchall()]
+
     def tracked_kinds(self, user_id: UUID) -> list[str]:
         """Every fact key ever logged — so the model reuses kind names instead
         of minting synonyms, and the Watcher can correlate any kind by name."""

@@ -316,11 +316,11 @@ Two patterns, chosen by risk profile:
 | **Dispatch write** `{house}_add` / `{house}_update` | Create/change verbs repeated across a house's entities | One door per verb (her call, 30 Aug — "we can always regress"). Detail lives in PER-FIELD descriptions tagged by entity, never one prose wall. The proven per-entity handlers stay behind the dispatch. log_state was the precedent: a union write that works. |
 | **Specific named write** `save_training_plan`, `push_to_watch`, `delete_entry` | Distinct acts and destructive acts | An act with its own risk profile keeps its own name — deletion must never be reachable by enum typo. |
 
-**All tools are always available** — routing never gates them. The current 18:
+**All tools are always available** — routing never gates them. The current 19:
 
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`, `pattern_response`
 - **Focus:** `focus_get`, `focus_add`, `focus_update`, `delete_entry`, `web_search`
-- **Sense:** `log_state` (the ONE tool — reads are context, not tools)
+- **Sense:** `log_state`, `sense_get` (reads-are-context was the law until 9 months of data made history invisible — sense_get is the seeing-all door, reusing the Watcher's day-frame view)
 - **Learn:** `learn_get`, `learn_add` (dispatch pair; retrieval tests are conversation + one write)
 - **Move:** `move_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_workout`
 
@@ -335,7 +335,7 @@ logs, propose the global fold.** If the middle rung misbehaves instead, fix or
 regress it first. Candidate riding the same review: `update_current_context` +
 `save_preferences` → one meta pair.
 
-**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 18 (Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 19 (sense_get added 5 Sep — her cycle history was invisible five weeks before her wedding; the fast mind now borrows the Watcher's eyes on demand. Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 

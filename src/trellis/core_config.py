@@ -26,6 +26,7 @@ class Settings:
     tavily_api_key: str = ""
     guardian_api_key: str = ""
     chat_ttl_hours: int = 0   # 0 = keep chat forever; >0 sweeps messages older than N hours
+    marker_hour: int = -1     # local hour for the daily memory-horizon marker; -1 = off
     github_token: str = ""
 
     @classmethod
@@ -64,6 +65,7 @@ class Settings:
             tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
             guardian_api_key=os.getenv("GUARDIAN_API_KEY", ""),
             chat_ttl_hours=int(os.getenv("TRELLIS_CHAT_TTL_HOURS", "0") or 0),
+            marker_hour=int(os.getenv("TRELLIS_MORNING_MARKER_HOUR", "-1") or -1),
             github_token=os.getenv("GITHUB_TOKEN", ""),
         )
 

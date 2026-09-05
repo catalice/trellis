@@ -117,9 +117,73 @@ LOG_STATE_TOOL: dict = {
     },
 }
 
+SENSE_GET_TOOL: dict = {
+    "name": "sense_get",
+    "description": (
+        "Read their tracked history — the same day-by-day view the Watcher "
+        "sees. what='days': one line per day over a date range (mood, energy, "
+        "meds, sleep, and any tracked kind) — use it for reviews, comparisons, "
+        "and experiments ('dose days vs not'). what='cycle': full cycle maths — "
+        "every period start, average length, next expected window. Recent days "
+        "already ride your context; this is for looking FURTHER back."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "what": {"type": "string", "enum": ["days", "cycle"]},
+            "since": {"type": "string", "description": "days: start date YYYY-MM-DD (max 120 days back)."},
+            "until": {"type": "string", "description": "days: end date, default today."},
+        },
+        "required": ["what"],
+    },
+}
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
+
+def handle_sense_get(user_id: UUID, input_dict: dict, now: datetime, *, sense_service, tz) -> str:
+    what = str(input_dict.get("what", "")).strip()
+
+    if what == "cycle":
+        c = sense_service.cycle_summary(user_id)
+        if c is None:
+            return "Fewer than two period starts logged — no cycle maths yet."
+        starts = ", ".join(d.strftime("%-d %b") for d in c["starts"][-8:])
+        return (
+            f"Cycle: {len(c['starts'])} starts logged (recent: {starts}). "
+            f"Length avg {c['avg_days']}d, range {c['min_days']}-{c['max_days']}d. "
+            f"Last start {c['last_start'].strftime('%-d %b')}; next expected "
+            f"~{c['next_expected'].strftime('%-d %b')} "
+            f"(window {c['window_start'].strftime('%-d %b')}–{c['window_end'].strftime('%-d %b')})."
+        )
+
+    if what == "days":
+        from datetime import date as _date, timedelta
+        try:
+            since = _date.fromisoformat(str(input_dict.get("since", "")).strip())
+        except ValueError:
+            return "since is required (YYYY-MM-DD)."
+        until_raw = str(input_dict.get("until", "")).strip()
+        until = _date.fromisoformat(until_raw) if until_raw else now.astimezone(tz).date()
+        if (until - since).days > 120:
+            since = until - timedelta(days=120)
+        rows = sense_service.day_rows(user_id, since=since, until=until, now=now)
+        if not rows:
+            return f"Nothing tracked between {since} and {until}."
+        lines = [f"Days {since} to {until} (the Watcher's view):"]
+        for d in sorted(rows):
+            row = rows[d]
+            bits = []
+            for k in sorted(row):
+                v = row[k]
+                bits.append(f"{k} {round(v, 1) if isinstance(v, float) else v}")
+            lines.append(f"  {d.isoformat()}: " + ", ".join(bits))
+        return "\n".join(lines)
+
+    return "Unknown what. Use: days, cycle."
+
 
 def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_service, tz) -> str:
     note = str(input_dict.get("note", "")).strip()
@@ -313,6 +377,17 @@ def sense_context_loader(sense_service, tz) -> ContextLoader:
     def loader(user_id: UUID, now: datetime) -> str | None:
         parts: list[str] = [SENSE_GUIDANCE]
         try:
+            c = sense_service.cycle_summary(user_id)
+            if c:
+                parts.append(
+                    f"[Cycle — computed from {len(c['starts'])} logged starts] "
+                    f"avg {c['avg_days']}d ({c['min_days']}-{c['max_days']}); "
+                    f"last {c['last_start'].strftime('%-d %b')}, next expected "
+                    f"~{c['next_expected'].strftime('%-d %b')}"
+                )
+        except Exception:
+            _log.warning("cycle summary failed", exc_info=True)
+        try:
             kinds = sense_service.tracked_kinds(user_id)
             if kinds:
                 parts.append(
@@ -354,6 +429,9 @@ def sense_snapshot(sense_service) -> ContextLoader:
             cycle = sense_service.cycle_day(user_id, now)
             if cycle is not None:
                 parts.append(f"Cycle day {cycle}")
+            c = sense_service.cycle_summary(user_id)
+            if c:
+                parts.append(f"Next period ~{c['next_expected'].strftime('%-d %b')}")
         except Exception:
             _log.warning("sense_snapshot: state failed", exc_info=True)
         try:
@@ -404,11 +482,16 @@ SENSE_ROOMS: list[str] = [
 # ---------------------------------------------------------------------------
 
 def sense_tools(sense_service, tz) -> list[tuple[dict, Any]]:
-    # ONE tool: log_state (a write). Reads are context (loader + snapshot), not a
-    # dispatch tool — keeps the app tool count flat (no new tool added by this room).
+    # log_state (the write) + sense_get (the seeing-all door, added 5 Sep 2026:
+    # reads-are-context worked at two weeks of data and failed at nine months —
+    # the cycle history was invisible five weeks before her wedding).
     return [
         (
             LOG_STATE_TOOL,
             lambda uid, inp, now: handle_log_state(uid, inp, now, sense_service=sense_service, tz=tz),
+        ),
+        (
+            SENSE_GET_TOOL,
+            lambda uid, inp, now: handle_sense_get(uid, inp, now, sense_service=sense_service, tz=tz),
         ),
     ]

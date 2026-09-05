@@ -110,6 +110,26 @@ class PostgresConversationHistory:
                 )
                 return list(cur.fetchall())
 
+    def get_marker(self, chat_id: int) -> int | None:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT message_id FROM chat_markers WHERE chat_id = %s", (chat_id,))
+                row = cur.fetchone()
+                return row[0] if row else None
+
+    def set_marker(self, chat_id: int, message_id: int) -> None:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO chat_markers (chat_id, message_id, sent_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (chat_id) DO UPDATE
+                        SET message_id = EXCLUDED.message_id, sent_at = NOW()
+                    """,
+                    (chat_id, message_id),
+                )
+
     def forget_telegram_message(self, chat_id: int, message_id: int) -> None:
         with self.database.connect() as conn:
             with conn.cursor() as cur:

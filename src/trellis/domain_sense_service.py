@@ -102,6 +102,54 @@ class SenseService:
             self._projection.tracking_changed(user_id)
         return event
 
+    def day_rows(self, user_id: UUID, *, since, until, now) -> dict:
+        """The Watcher's day-by-day view, on demand — one dict per day of
+        everything tracked. Borrow the slow mind's eyes (her design)."""
+        from datetime import datetime as _dt, time as _t, timezone as _tz
+        from trellis.core_watcher import build_daily_frame
+        start_dt = _dt.combine(since, _t.min, tzinfo=self._tz)
+        states = [s for s in self._repo.list_states_since(user_id, since=start_dt)
+                  if s.felt_at.astimezone(self._tz).date() <= until]
+        events = [e for e in self._repo.list_events_since(user_id, since=start_dt)
+                  if e.occurred_at.astimezone(self._tz).date() <= until]
+        health = []
+        if self._health is not None:
+            try:
+                health = [h for h in self._health.daily_health_since(user_id, since=since)
+                          if h.observed_on <= until]
+            except Exception:
+                _log.warning("day_rows health failed", exc_info=True)
+        frame = build_daily_frame(
+            user_id, states=states, events=events, health_rows=health,
+            runs=(), tz=self._tz, today=until,
+        )
+        return {d: row for d, row in frame.items() if since <= d <= until}
+
+    def cycle_summary(self, user_id: UUID) -> dict | None:
+        """Computed from the FULL period history — never typed, never stale.
+        Returns starts, average/min/max cycle length, and the next expected
+        window. None until two starts exist."""
+        starts = self._repo.period_starts(user_id)
+        if len(starts) < 2:
+            return None
+        gaps = [(b - a).days for a, b in zip(starts, starts[1:])]
+        gaps = [g for g in gaps if 15 <= g <= 60]   # ignore data glitches
+        if not gaps:
+            return None
+        avg = sum(gaps) / len(gaps)
+        from datetime import timedelta
+        last = starts[-1]
+        return {
+            "starts": starts,
+            "avg_days": round(avg, 1),
+            "min_days": min(gaps),
+            "max_days": max(gaps),
+            "last_start": last,
+            "next_expected": last + timedelta(days=round(avg)),
+            "window_start": last + timedelta(days=min(gaps)),
+            "window_end": last + timedelta(days=max(gaps)),
+        }
+
     def tracked_kinds(self, user_id: UUID) -> list[str]:
         return self._repo.tracked_kinds(user_id)
 

@@ -58,6 +58,7 @@ class TelegramTrellis:
         self._watcher_tick = watcher_tick
         self._message_log = message_log
         self._chat_ttl_hours = getattr(settings, "chat_ttl_hours", 0)
+        self._marker_hour = getattr(settings, "marker_hour", -1)
         self._watcher_task: asyncio.Task | None = None
         self._reminder_delivery_task: asyncio.Task | None = None
         self._garmin_sync_task: asyncio.Task | None = None
@@ -95,6 +96,8 @@ class TelegramTrellis:
             )
         if self._garmin_sync is not None:
             self._garmin_sync_task = asyncio.create_task(self._garmin_sync_loop())
+        if self._marker_hour >= 0 and self._message_log is not None:
+            self._marker_task = asyncio.create_task(self._marker_loop(application))
         if self._chat_ttl_hours > 0 and self._message_log is not None:
             self._chat_sweep_task = asyncio.create_task(
                 self._chat_sweep_loop(application)
@@ -139,6 +142,38 @@ class TelegramTrellis:
             except Exception:
                 self.logger.exception("Watcher tick failed")
             await asyncio.sleep(24 * 3600)
+
+    async def _marker_loop(self, application: Application) -> None:
+        """The memory-horizon marker (her design): one line each morning —
+        everything below it is verbatim memory; older lives in the records.
+        Yesterday's marker is deleted so they never pile up."""
+        from datetime import timedelta
+        while True:
+            now_local = datetime.now(self.settings.timezone)
+            target = now_local.replace(hour=self._marker_hour, minute=0,
+                                       second=0, microsecond=0)
+            if target <= now_local:
+                target += timedelta(days=1)
+            await asyncio.sleep((target - now_local).total_seconds())
+            try:
+                for user_id, tg_id in self.database.list_users():
+                    if (self.settings.telegram_allowed_users
+                            and tg_id not in self.settings.telegram_allowed_users):
+                        continue
+                    old = self._message_log.get_marker(tg_id)
+                    sent = await application.bot.send_message(
+                        chat_id=tg_id,
+                        text=("☀️ — everything below this I remember "
+                              "word-for-word; older, ask me to look it up."),
+                    )
+                    self._message_log.set_marker(tg_id, sent.message_id)
+                    if old:
+                        try:
+                            await application.bot.delete_message(chat_id=tg_id, message_id=old)
+                        except Exception:
+                            pass
+            except Exception:
+                self.logger.exception("marker loop failed")
 
     async def _chat_sweep_loop(self, application: Application) -> None:
         """Her design: the visible chat matches the verbatim window. Messages

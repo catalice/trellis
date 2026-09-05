@@ -229,3 +229,38 @@ class TestHealthStaleness:
         svc = self._service(NOW.astimezone(TZ).date() - timedelta(days=1))
         health = svc.recent_health(UID)
         assert "stale_days" not in health
+
+
+class TestCycleSummary:
+    """5 Sep: nine months of cycle history was invisible to the fast mind five
+    weeks before her wedding. The maths is Python's, computed from the log."""
+
+    class _Repo:
+        def __init__(self, starts):
+            self.starts = starts
+        def period_starts(self, uid):
+            return self.starts
+
+    def _svc(self, starts):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_sense_service import SenseService
+        return SenseService(self._Repo(starts), ZoneInfo("UTC"))
+
+    def test_average_and_next_expected(self):
+        from datetime import date as d
+        starts = [d(2026, 6, 16), d(2026, 7, 11), d(2026, 8, 7), d(2026, 9, 5)]
+        c = self._svc(starts).cycle_summary("uid")
+        assert c["avg_days"] == 27.0          # 25, 27, 29 -> 81/3
+        assert c["next_expected"] == d(2026, 10, 2)
+        assert c["window_start"] == d(2026, 9, 30)
+        assert c["window_end"] == d(2026, 10, 4)
+
+    def test_glitch_gaps_ignored(self):
+        from datetime import date as d
+        starts = [d(2026, 6, 1), d(2026, 6, 3), d(2026, 6, 29)]  # 2d glitch
+        c = self._svc(starts).cycle_summary("uid")
+        assert c["min_days"] == 26
+
+    def test_single_start_returns_none(self):
+        from datetime import date as d
+        assert self._svc([d(2026, 9, 5)]).cycle_summary("uid") is None
