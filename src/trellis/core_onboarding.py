@@ -88,7 +88,8 @@ class _ProfileService(Protocol):
 
 def onboarding_tools(profile_service: _ProfileService) -> list[tuple[dict, callable]]:
     def handle_save_identity(user_id: UUID, input_dict: dict, now: datetime) -> str:
-        name = input_dict.get("name", "").strip()
+        # str() guard: a JSON null for name must not crash the save mid-onboarding.
+        name = str(input_dict.get("name") or "").strip()
         if not name:
             return "Name is required."
         profile_service.update(

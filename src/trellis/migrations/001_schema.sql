@@ -120,7 +120,9 @@ CREATE TABLE IF NOT EXISTS goals (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES trellis_users(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
-    goal_type TEXT NOT NULL CHECK (goal_type IN ('race', 'aerobic', 'strength', 'life', 'habit', 'general')),
+    -- label: optional free-text tag the user invents ('race'/'aerobic'/
+    -- 'strength' feed the coach by convention). A goal is just a goal.
+    label TEXT,
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'achieved', 'paused', 'dropped')),
     target_date DATE,

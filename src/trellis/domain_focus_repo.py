@@ -14,7 +14,6 @@ from trellis.domain_focus_models import (
     EffortIntensity,
     Goal,
     GoalStatus,
-    GoalType,
     Reminder,
     Task,
     TaskEnergy,
@@ -94,21 +93,21 @@ class PostgresCaptureRepository:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     "SELECT * FROM captures WHERE user_id = %s AND effort_id = %s"
-                    " ORDER BY created_at",
+                    " AND archived = false ORDER BY created_at",
                     (user_id, effort_id),
                 )
                 return [_capture(r) for r in cur.fetchall()]
 
-    def assign_to_effort(self, capture_id: UUID, effort_id: UUID | None) -> Capture:
+    def assign_to_effort(self, user_id: UUID, capture_id: UUID, effort_id: UUID | None) -> Capture:
         with self._db.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
                     UPDATE captures SET effort_id = %s
-                    WHERE id = %s
+                    WHERE id = %s AND user_id = %s
                     RETURNING *
                     """,
-                    (effort_id, capture_id),
+                    (effort_id, capture_id, user_id),
                 )
                 row = cur.fetchone()
                 if row is None:
@@ -437,21 +436,26 @@ class PostgresReminderRepository:
                 )
                 return [_reminder(r) for r in cur.fetchall()]
 
-    def cancel(self, reminder_id: UUID) -> None:
+    def cancel(self, reminder_id: UUID) -> bool:
+        """True only if a scheduled reminder actually changed state — a blind
+        UPDATE reporting success for a mistyped id lets the real one still fire."""
         with self._db.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE reminders SET status = 'cancelled' WHERE id = %s",
+                    "UPDATE reminders SET status = 'cancelled'"
+                    " WHERE id = %s AND status = 'scheduled'",
                     (reminder_id,),
                 )
+                return cur.rowcount > 0
 
-    def mark_sent(self, reminder_id: UUID) -> None:
+    def mark_sent(self, reminder_id: UUID) -> bool:
         with self._db.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE reminders SET status = 'sent' WHERE id = %s",
                     (reminder_id,),
                 )
+                return cur.rowcount > 0
 
 
 # ---------------------------------------------------------------------------
@@ -468,14 +472,14 @@ class PostgresGoalRepository:
                 cur.execute(
                     """
                     INSERT INTO goals (
-                        id, user_id, title, goal_type, status,
+                        id, user_id, title, label, status,
                         target_date, is_fixed_date, notes,
                         created_at, updated_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         goal.id, goal.user_id, goal.title,
-                        str(goal.goal_type), str(goal.status),
+                        goal.label, str(goal.status),
                         goal.target_date, goal.is_fixed_date, goal.notes,
                         goal.created_at, goal.updated_at,
                     ),
@@ -496,13 +500,7 @@ class PostgresGoalRepository:
                     """
                     SELECT * FROM goals
                     WHERE user_id = %s AND status = 'active'
-                    ORDER BY
-                        CASE goal_type
-                            WHEN 'race' THEN 1
-                            WHEN 'aerobic' THEN 2
-                            WHEN 'strength' THEN 3
-                            ELSE 4
-                        END, target_date NULLS LAST, created_at
+                    ORDER BY target_date NULLS LAST, created_at
                     """,
                     (user_id,),
                 )
@@ -511,7 +509,7 @@ class PostgresGoalRepository:
     def update(self, goal_id: UUID, **kwargs: Any) -> Goal:
         if not kwargs:
             raise ValueError("update called with no fields")
-        allowed = {"title", "goal_type", "status", "target_date", "is_fixed_date", "notes", "updated_at"}
+        allowed = {"title", "label", "status", "target_date", "is_fixed_date", "notes", "updated_at"}
         unknown = set(kwargs) - allowed
         if unknown:
             raise ValueError(f"unknown goal fields: {unknown}")
@@ -600,7 +598,7 @@ def _goal(row: dict) -> Goal:
         id=row["id"],
         user_id=row["user_id"],
         title=row["title"],
-        goal_type=GoalType(row["goal_type"]),
+        label=row.get("label"),
         status=GoalStatus(row["status"]),
         target_date=row.get("target_date"),
         is_fixed_date=row.get("is_fixed_date", False),

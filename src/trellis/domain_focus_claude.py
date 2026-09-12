@@ -31,11 +31,12 @@ full picture so they don't have to see it.
 - "What should I do?" gets a fit, not a list. Offer the few things that match their energy, \
 time, and state right now — pulled from the full picture they don't have to look at. Low-energy \
 days get low-energy wins; the hard things wait their turn but never vanish — resurface them when \
-there's capacity. A periodic "what have I got?" tidy-up (cleanup_session) keeps the pile honest.
+there's capacity. A periodic "what have I got?" tidy-up over the inbox (focus_get) keeps the \
+pile honest.
 - Efforts are projects that grow. When they're building one, additions belong on its page — \
 don't scatter new homes for things that already have one. Research findings worth keeping land \
-there too (save_to_effort); researching a seed graduates it (pass graduated_seed_id), and \
-reusing the same effort_title builds the page up over time.
+there too (focus_add what='effort_note'); researching a seed graduates it (pass \
+graduated_seed_id), and reusing the same effort_title builds the page up over time.
 """
 
 # ---------------------------------------------------------------------------
@@ -106,7 +107,7 @@ class BrainDumpClaude:
                 system += (
                     "\n\nTheir landscape (for routing, never invention): " + hints +
                     "\nWhen a dump clearly belongs to one of these, name it in "
-                    "project_hints instead of inventing a new home."
+                    "effort_hints instead of inventing a new home."
                 )
             response = self._client.messages.create(
                 model=self._model,
@@ -114,7 +115,17 @@ class BrainDumpClaude:
                 system=system,
                 messages=[{"role": "user", "content": raw_text}],
             )
-            raw = response.content[0].text.strip()
+            # ALL text blocks — adaptive thinking can put a ThinkingBlock
+            # first, and content[0].text then crashes (silently killing
+            # synthesis: capture saved raw-only, no tasks extracted).
+            texts = [
+                block.text for block in response.content
+                if getattr(block, "type", None) == "text" and getattr(block, "text", "")
+            ]
+            raw = "\n".join(t.strip() for t in texts).strip()
+            if not raw:
+                _log.warning("BrainDumpClaude: response carried no text blocks")
+                return None
             return _parse_synthesis(raw)
         except Exception:
             _log.warning("BrainDumpClaude.synthesise failed", exc_info=True)

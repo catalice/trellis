@@ -1,6 +1,6 @@
 """
 Deterministic tests for the Garmin structured-workout builder and CSV baseline.
-No network — run offline with:  uv run pytest tests/test_training_workout.py -q
+No network — run offline with:  uv run pytest tests/test_move_workout.py -q
 """
 from __future__ import annotations
 
@@ -143,10 +143,6 @@ class TestBuildGarminWorkout(unittest.TestCase):
         ):
             with self.assertRaises(WorkoutSpecError):
                 build_garmin_workout(bad)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestActivityVisibility(unittest.TestCase):
@@ -525,3 +521,7 @@ class TestStructuredSplitFilter(unittest.TestCase):
         )
         rows = _extract_splits(detail)
         self.assertEqual(len(rows), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

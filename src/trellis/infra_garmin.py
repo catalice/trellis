@@ -9,6 +9,7 @@ import argparse
 import getpass
 import json
 import logging
+import http.client
 import socket
 import urllib.error
 import urllib.request
@@ -179,6 +180,10 @@ class UrllibJsonTransport:
         except urllib.error.URLError as error:
             reason = getattr(error, "reason", error)
             raise GarminTransportError(f"Could not reach Garmin worker: {reason}") from error
+        except (ConnectionError, http.client.HTTPException) as error:
+            # Mid-read failures (reset, remote disconnect) belong to the same
+            # transport taxonomy the callers switch on — not raw exceptions.
+            raise GarminTransportError(f"Garmin worker connection failed: {error}") from error
 
         try:
             return json.loads(payload)
@@ -308,6 +313,17 @@ class GarminDirectService:
             raise RuntimeError("Garmin not connected. Use /garmin_setup to connect.")
         try:
             import garminconnect  # noqa: F401
+            # The pin guard: stored sessions are garth dumps and 0.3.x cannot
+            # load them. If the pin ever moves (dependabot, manual bump), fail
+            # with the real cause instead of an opaque session error later.
+            from importlib.metadata import version as _pkg_version
+            installed = _pkg_version("garminconnect")
+            if not installed.startswith("0.2."):
+                raise RuntimeError(
+                    f"garminconnect=={installed} cannot load stored garth "
+                    "sessions (pinned era is 0.2.x). Re-pin, or migrate every "
+                    "stored session deliberately — see pyproject.toml."
+                )
             client = garminconnect.Garmin()
             # Stored sessions are garth token dumps — garminconnect is PINNED to
             # the garth era (==0.2.40 in pyproject; 0.3.x switched to DI-token

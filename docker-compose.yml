@@ -23,7 +23,9 @@ services:
       dockerfile: Dockerfile
     env_file:
       - path: .env
-        required: false
+        # required: a missing .env must fail HERE, not as opaque runtime
+        # errors (empty bot token, 500ing health worker) far from the cause.
+        required: true
     environment:
       PORT: 8001
     healthcheck:
@@ -43,7 +45,9 @@ services:
     build: .
     env_file:
       - path: .env
-        required: false
+        # required: a missing .env must fail HERE, not as opaque runtime
+        # errors (empty bot token, 500ing health worker) far from the cause.
+        required: true
     environment:
       DATABASE_URL: postgresql://trellis:trellis@postgres:5432/trellis
       OBSIDIAN_VAULT: /vault

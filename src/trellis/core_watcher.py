@@ -523,11 +523,14 @@ class WatcherDiscovery:
                           if getattr(b, "type", None) == "text").strip()
             return _parse_hypotheses(raw)
         except Exception:
+            # None = the call FAILED (API down) — distinct from []: a real
+            # "nothing new". The caller must not advance the discovery cursor
+            # on a failure, or an outage on discovery day silently costs a week.
             _log.warning("watcher discovery failed", exc_info=True)
-            return []
+            return None
 
 
-def _parse_hypotheses(raw: str) -> list[tuple[str, dict | None]]:
+def _parse_hypotheses(raw: str) -> list[tuple[str, dict | None, str | None]] | None:
     text = raw.strip()
     if text.startswith("```"):
         first = text.find("\n")
@@ -539,7 +542,7 @@ def _parse_hypotheses(raw: str) -> list[tuple[str, dict | None]]:
         data = json.loads(text.strip())
     except json.JSONDecodeError:
         _log.warning("watcher: discovery response was not valid JSON")
-        return []
+        return None
     out: list[tuple[str, dict | None, str | None]] = []
     for h in data.get("hypotheses", [])[:_MAX_NEW_HYPOTHESES]:
         if not isinstance(h, dict):
@@ -596,8 +599,12 @@ class Watcher:
             self._verify_all(user_id, frame, now)
             last = self._repo.last_discovery_at(user_id)
             if last is None or (now - last) >= timedelta(days=_DISCOVERY_EVERY_DAYS):
-                self._discover(user_id, frame)
-                self._repo.mark_discovery_ran(user_id, now)
+                # The cursor advances only when discovery genuinely RAN (zero
+                # proposals is a fine answer and advances it). A too-young
+                # frame or a failed Claude call doesn't — otherwise a new user
+                # waits an extra week, and an API outage costs a week.
+                if self._discover(user_id, frame):
+                    self._repo.mark_discovery_ran(user_id, now)
             self._project(user_id)
         except Exception:
             _log.warning("watcher tick failed", exc_info=True)
@@ -635,29 +642,40 @@ class Watcher:
                 continue
             if not p["test_spec"]:
                 continue
-            verified, evidence, stats = verify(frame, p["test_spec"], theme_counter=counter)
-            if stats.get("error"):
-                # The test COULDN'T RUN (missing index, unknown verb) — that is
-                # not a result. Never overwrite real evidence or demote on it.
-                _log.warning("watcher: test could not run for %s: %s", p["id"], evidence)
-                continue
-            self._repo.set_verification(p["id"], verified=verified,
-                                        evidence=evidence, stats=stats)
+            try:
+                verified, evidence, stats = verify(frame, p["test_spec"],
+                                                   theme_counter=counter)
+                if stats.get("error"):
+                    # The test COULDN'T RUN (missing index, unknown verb) — that
+                    # is not a result. Never overwrite real evidence or demote.
+                    _log.warning("watcher: test could not run for %s: %s", p["id"], evidence)
+                    continue
+                self._repo.set_verification(p["id"], verified=verified,
+                                            evidence=evidence, stats=stats)
+            except Exception:
+                # One bad pattern must not abort everyone else's verification.
+                _log.warning("watcher: verification failed for %s", p["id"], exc_info=True)
 
-    def _discover(self, user_id: UUID, frame: dict) -> None:
+    def _discover(self, user_id: UUID, frame: dict) -> bool:
+        """True when discovery genuinely ran (even proposing zero); False when
+        it was skipped (young frame) or the Claude call failed."""
         if len(frame) < 14:
-            return  # a garden this young has nothing to notice yet — stay silent
+            return False  # a garden this young has nothing to notice yet — stay silent
         existing = [p["hypothesis"] for p in self._repo.all_for(user_id)
                     if p["status"] != "dismissed"]
         dismissed = [p["hypothesis"] for p in self._repo.all_for(user_id)
                      if p["status"] == "dismissed"]
         summary = self._garden_summary(user_id, frame)
-        for hypothesis, test, wanted in self._discovery.propose(summary, existing, dismissed):
+        proposals = self._discovery.propose(summary, existing, dismissed)
+        if proposals is None:
+            return False  # the call failed — try again next tick, not next week
+        for hypothesis, test, wanted in proposals:
             # a dismissed pattern is never resurrected, even reworded — the
             # prompt forbids duplicates and this is the deterministic backstop
             if any(hypothesis.lower() == h.lower() for h in existing + dismissed):
                 continue
             self._repo.add(user_id, hypothesis, test, wanted)
+        return True
 
     def _garden_summary(self, user_id: UUID, frame: dict[date, dict]) -> str:
         """Everything Trellis knows, compactly — the discovery pass reads ALL of

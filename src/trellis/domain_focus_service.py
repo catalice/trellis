@@ -15,7 +15,6 @@ from trellis.domain_focus_models import (
     EffortIntensity,
     Goal,
     GoalStatus,
-    GoalType,
     Reminder,
     Task,
     TaskEnergy,
@@ -37,7 +36,7 @@ class CaptureRepository(Protocol):
     def save(self, capture: Capture) -> Capture: ...
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Capture]: ...
     def list_unassigned(self, user_id: UUID, *, since: date) -> list[Capture]: ...
-    def assign_to_effort(self, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
+    def assign_to_effort(self, user_id: UUID, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
     def list_for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]: ...
     def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
 
@@ -68,8 +67,8 @@ class ReminderRepository(Protocol):
     def list_upcoming(self, user_id: UUID, *, before: datetime) -> list[Reminder]: ...
     def list_scheduled(self, user_id: UUID) -> list[Reminder]: ...
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Reminder]: ...
-    def cancel(self, reminder_id: UUID) -> None: ...
-    def mark_sent(self, reminder_id: UUID) -> None: ...
+    def cancel(self, reminder_id: UUID) -> bool: ...
+    def mark_sent(self, reminder_id: UUID) -> bool: ...
 
 
 class GoalRepository(Protocol):
@@ -80,7 +79,9 @@ class GoalRepository(Protocol):
 
 
 class BrainDumpClaude(Protocol):
-    def synthesise(self, raw_text: str, current_date_line: str) -> BrainDumpResult | None: ...
+    def synthesise(
+        self, raw_text: str, current_date_line: str, hints: str | None = None,
+    ) -> BrainDumpResult | None: ...
 
 
 class VaultProjection(Protocol):
@@ -112,6 +113,7 @@ class ProcessedDump:
     capture: Capture
     tasks_created: tuple[Task, ...]
     synthesis: BrainDumpResult | None     # None if Claude call failed; capture still saved
+    duplicates_skipped: tuple[str, ...] = ()  # extracted titles already on the open list
 
 
 class TaskNotFoundError(Exception):
@@ -175,9 +177,28 @@ class BrainDumpService:
             self._memory.remember(user_id, "capture", capture.id, capture.embedding_text())
 
         tasks: list[Task] = []
+        duplicates: list[str] = []
         if result:
+            # Dedup against the open list: the same dump sent twice must not
+            # create the same tasks twice. Exact title match only — anything
+            # fuzzier is a judgement, and judgements go to Claude.
+            try:
+                existing_titles = {
+                    t.title.strip().lower() for t in self._tasks.list_open(user_id)
+                }
+            except Exception:
+                _log.warning("brain dump dedup check failed", exc_info=True)
+                existing_titles = set()
             for extracted in result.extracted_tasks:
-                due_at = _parse_local_due(extracted.due, self._tz)
+                if extracted.title.strip().lower() in existing_titles:
+                    duplicates.append(extracted.title)
+                    continue
+                # Seeds never carry deadlines — same rule as TaskService.create,
+                # enforced on BOTH creation paths so they can't drift.
+                due_at = (
+                    _parse_local_due(extracted.due, self._tz)
+                    if extracted.kind == TaskKind.TODO else None
+                )
                 task = self._tasks.save(Task(
                     id=uuid4(),
                     user_id=user_id,
@@ -198,7 +219,10 @@ class BrainDumpService:
             if tasks:
                 self._projection.tasks_changed(user_id)
 
-        return ProcessedDump(capture=capture, tasks_created=tuple(tasks), synthesis=result)
+        return ProcessedDump(
+            capture=capture, tasks_created=tuple(tasks), synthesis=result,
+            duplicates_skipped=tuple(duplicates),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +250,8 @@ class CaptureService:
     def for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]:
         return self._repo.list_for_effort(user_id, effort_id)
 
-    def assign(self, capture_id: UUID, effort_id: UUID) -> Capture:
-        capture = self._repo.assign_to_effort(capture_id, effort_id)
+    def assign(self, user_id: UUID, capture_id: UUID, effort_id: UUID) -> Capture:
+        capture = self._repo.assign_to_effort(user_id, capture_id, effort_id)
         if self._projection:
             self._projection.capture_assigned(capture)
         return capture
@@ -427,12 +451,17 @@ class TaskService:
         return [t for t in self._repo.list_open(user_id) if t.kind == TaskKind.SEED]
 
     def list_parked(self, user_id: UUID) -> list[Task]:
-        return self._repo.list_parked(user_id)
+        """Parked todos — parked seeds stay out of the tasks view."""
+        return [t for t in self._repo.list_parked(user_id) if t.kind == TaskKind.TODO]
 
     def complete(self, user_id: UUID, task_id: UUID, *, now: datetime) -> Task:
         task = self._repo.get(task_id)
         if task is None or task.user_id != user_id:
             raise TaskNotFoundError(task_id)
+        # Idempotent: re-completing keeps the original completed_at and doesn't
+        # append a second event — the event history stays honest.
+        if task.status == TaskStatus.DONE:
+            return task
         updated = self._repo.update(task_id, status=TaskStatus.DONE, completed_at=now)
         self._repo.save_event(TaskEvent(
             id=uuid4(), task_id=task_id, user_id=user_id,
@@ -542,11 +571,13 @@ class ReminderService:
         self._vault_refresh(user_id)
         return reminder
 
-    def cancel(self, reminder_id: UUID) -> None:
+    def cancel(self, reminder_id: UUID) -> bool:
+        """True only if a scheduled reminder was actually cancelled."""
         reminder = self._repo.get(reminder_id)
-        self._repo.cancel(reminder_id)
-        if reminder:
+        cancelled = self._repo.cancel(reminder_id)
+        if cancelled and reminder:
             self._vault_refresh(reminder.user_id)
+        return cancelled
 
     def upcoming(self, user_id: UUID, *, hours: int = 24, now: datetime) -> list[Reminder]:
         before = now + timedelta(hours=hours)
@@ -584,6 +615,9 @@ class ReminderService:
 # GoalService
 # ---------------------------------------------------------------------------
 
+_UNSET = object()  # sentinel: "field not sent" vs "explicitly cleared to None"
+
+
 class GoalService:
     def __init__(self, repo: GoalRepository) -> None:
         self._repo = repo
@@ -592,8 +626,8 @@ class GoalService:
         self,
         user_id: UUID,
         title: str,
-        goal_type: GoalType,
         *,
+        label: str | None = None,
         target_date: date | None = None,
         is_fixed_date: bool = False,
         notes: str | None = None,
@@ -603,7 +637,7 @@ class GoalService:
             id=uuid4(),
             user_id=user_id,
             title=title,
-            goal_type=goal_type,
+            label=(label or "").strip() or None,
             target_date=target_date,
             is_fixed_date=is_fixed_date,
             notes=notes,
@@ -614,6 +648,12 @@ class GoalService:
     def list_active(self, user_id: UUID) -> list[Goal]:
         return self._repo.list_active(user_id)
 
+    def get(self, user_id: UUID, goal_id: UUID) -> Goal | None:
+        goal = self._repo.get(goal_id)
+        if goal is None or goal.user_id != user_id:
+            return None
+        return goal
+
     def list_training_goals(self, user_id: UUID) -> list[Goal]:
         return [g for g in self._repo.list_active(user_id) if g.is_training_goal()]
 
@@ -623,6 +663,7 @@ class GoalService:
         goal_id: UUID,
         *,
         title: str | None = None,
+        label: str | None = _UNSET,  # None is meaningful: it clears the label
         target_date: date | None = None,
         is_fixed_date: bool | None = None,
         notes: str | None = None,
@@ -635,6 +676,8 @@ class GoalService:
         kwargs: dict[str, Any] = {"updated_at": now}
         if title is not None:
             kwargs["title"] = title
+        if label is not _UNSET:
+            kwargs["label"] = label
         if target_date is not None:
             kwargs["target_date"] = target_date
         if is_fixed_date is not None:
@@ -689,6 +732,9 @@ def _parse_local_due(value: str | None, tz: tzinfo) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value.strip())
     except ValueError:
+        # Visible, not silent: an unparseable due means the task lands undated
+        # while the user believes the deadline stuck.
+        _log.warning("unparseable due date %r — task will have no due date", value)
         return None
     if parsed.hour == 0 and parsed.minute == 0 and "T" not in value:
         parsed = parsed.replace(hour=9)

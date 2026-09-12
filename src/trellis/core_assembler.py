@@ -141,7 +141,6 @@ class Assembler:
         history: _HistoryRepo,
         permanent: list[tuple[str, ContextLoader]],     # (label, loader) — always loaded, in order
         always_tools: list[tuple[dict, Callable]],      # always passed regardless of routing
-        tracking_summary: tuple[str, ContextLoader] | None = None,  # optional always-brief slot
         intelligence: tuple[str, ContextLoader] | None = None,      # optional always-brief slot
         summarise_after: int = _SUMMARISE_AFTER,
         summariser: Callable | None = None,
@@ -157,7 +156,6 @@ class Assembler:
         self._registry = registry
         self._history = history
         self._permanent = permanent
-        self._tracking_summary = tracking_summary
         self._intelligence = intelligence
         self._always_tools = always_tools
         self._summarise_after = summarise_after
@@ -167,6 +165,7 @@ class Assembler:
         self._onboarding_tools = onboarding_tools or []
         self._preferences = preferences
         self._timezone = timezone
+        self._default_domain = default_domain
         # Routing shapes CONTEXT only (tools are always available). Semantic when
         # an embedder is wired — each domain is a house scored by the best-matching
         # room inside it; empty match -> no house, the big brain (permanent
@@ -218,12 +217,24 @@ class Assembler:
                 "cache_control": {"type": "ephemeral"},
             }]
 
-        result = self._oracle.run(system, messages, tool_schemas, bound_handlers)
-
+        # The user's message is persisted BEFORE the oracle runs: if the API
+        # dies past its retries mid-turn, tool side effects from earlier
+        # iterations have already committed — history must show the turn
+        # happened, or the model (and the user) are told "nothing changed"
+        # about a turn that changed things.
         self._history.append(user_id, "user", message, metadata={
             "handled_by": "claude",
             "domains": sorted(domains),
         })
+        try:
+            result = self._oracle.run(system, messages, tool_schemas, bound_handlers)
+        except Exception:
+            self._history.append(
+                user_id, "assistant",
+                "[turn failed mid-run — tool actions from before the error may "
+                "have completed; retrieve before assuming nothing changed]",
+            )
+            raise
         self._save_assistant_turn(user_id, result)
 
         self._maybe_summarise(user_id, domains)
@@ -268,12 +279,6 @@ class Assembler:
         global_prefs = self._safe_preferences(user_id, "global")
         if global_prefs:
             parts.append(f"[Their standing preferences — always apply]\n{global_prefs}")
-
-        if self._tracking_summary is not None:
-            t_label, t_loader = self._tracking_summary
-            tracking = self._safe_load(t_loader, user_id, now, t_label)
-            if tracking:
-                parts.append(tracking)
 
         if self._intelligence is not None:
             i_label, i_loader = self._intelligence
@@ -325,9 +330,14 @@ class Assembler:
         # CONTEXT only, never which tools exist. This stops the model denying a
         # capability (e.g. Garmin) just because the message missed a keyword.
         for schema, handler in list(self._always_tools) + self._registry.all_tools():
-            if schema["name"] not in seen:
-                seen.add(schema["name"])
-                raw.append((schema, handler))
+            if schema["name"] in seen:
+                # First registration wins — but never silently: a misconfigured
+                # registry could otherwise hide a live tool without trace.
+                _log.warning("duplicate tool name %r — later registration ignored",
+                             schema["name"])
+                continue
+            seen.add(schema["name"])
+            raw.append((schema, handler))
         schemas = [schema for schema, _ in raw]
         handlers = {
             schema["name"]: _bind(handler, user_id, now)
@@ -354,6 +364,11 @@ class Assembler:
             self._history.prune(user_id, keep=500)
         except Exception:
             _log.warning("history prune failed", exc_info=True)
+        # Big-brain turns route empty; summarise them under the default domain
+        # so the cursor still advances — otherwise a run of generic chat
+        # re-fires the prune every turn and no summary is ever written.
+        if not domains and self._default_domain:
+            domains = {self._default_domain}
         for domain in domains:
             try:
                 self._summariser(user_id, domain, self._history)

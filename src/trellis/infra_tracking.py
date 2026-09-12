@@ -195,33 +195,20 @@ class HealthSyncRun:
 # ---------------------------------------------------------------------------
 
 class HealthRepository(Protocol):
+    # Interface only — implementations live below. (Copy-pasted live bodies
+    # once sat inside this Protocol; structural typing meant they never ran
+    # and silently drifted from the real ones.)
     def upsert_daily_health(self, record: GarminDailyHealthRecord) -> GarminDailyHealthRecord: ...
     def daily_health_since(self, user_id: UUID, *, since: date) -> list[GarminDailyHealthRecord]:
         """All synced daily-health rows from `since` on — the Watcher's frame."""
-        with self.database.connect() as connection:
-            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(
-                    "SELECT * FROM garmin_daily_health WHERE user_id = %s"
-                    " AND observed_on >= %s ORDER BY observed_on",
-                    (user_id, since),
-                )
-                return [self._daily_health(r) for r in cursor.fetchall()]
+        ...
 
     def latest_daily_health(self, user_id: UUID) -> GarminDailyHealthRecord | None: ...
     def upsert_activity(self, record: GarminActivityRecord) -> GarminActivityRecord: ...
     def latest_activities(self, user_id: UUID, *, limit: int, activity_type: str | None = None) -> tuple[GarminActivityRecord, ...]: ...
     def activities_since(self, user_id: UUID, *, since: date) -> list[GarminActivityRecord]:
         """All synced activities from `since` on — the Watcher's training frame."""
-        with self.database.connect() as connection:
-            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(
-                    "SELECT * FROM garmin_activities WHERE user_id = %s"
-                    " AND start_time_epoch_seconds >= %s"
-                    " ORDER BY start_time_epoch_seconds",
-                    (user_id, int(datetime.combine(since, datetime.min.time(),
-                                                   tzinfo=timezone.utc).timestamp())),
-                )
-                return [self._activity(r) for r in cursor.fetchall()]
+        ...
 
     def upsert_activity_detail(self, *, user_id: UUID, activity_id: str, raw_data: dict[str, Any], sync_run_id: UUID | None) -> None: ...
     def get_activity_detail(self, user_id: UUID, activity_id: str) -> dict | None: ...
@@ -551,22 +538,6 @@ class PostgresHealthRepository:
             updated_at=row["updated_at"],
         )
 
-    @staticmethod
-    def _sync_run(row: dict[str, Any]) -> HealthSyncRun:
-        return HealthSyncRun(
-            id=row["id"],
-            user_id=row["user_id"],
-            provider=HealthProvider(row["provider"]),
-            kind=HealthSyncKind(row["sync_kind"]),
-            status=HealthSyncStatus(row["status"]),
-            start_date=row["start_date"],
-            end_date=row["end_date"],
-            started_at=row["started_at"],
-            completed_at=row["completed_at"],
-            records_upserted=row["records_upserted"],
-            error=row["error"],
-            metadata=dict(row["metadata"] or {}),
-        )
 
 
 # ---------------------------------------------------------------------------

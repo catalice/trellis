@@ -22,6 +22,18 @@ if [[ ! -f "$DENYLIST" ]]; then
     exit 0
 fi
 
+# As a pre-push hook, git hands us the refs being pushed on stdin — check the
+# TREES OF THOSE COMMITS, not just the worktree: a marker removed from the
+# checkout but alive in a pushed commit's tree would otherwise ride out.
+REFS_TO_CHECK=()
+if [[ ! -t 0 ]]; then
+    while read -r _local_ref local_sha _remote_ref _remote_sha; do
+        [[ -z "${local_sha:-}" ]] && continue
+        [[ "$local_sha" =~ ^0+$ ]] && continue   # deletion push
+        REFS_TO_CHECK+=("$local_sha")
+    done || true
+fi
+
 FAILED=0
 while IFS= read -r pattern; do
     [[ -z "$pattern" || "$pattern" == \#* ]] && continue
@@ -32,6 +44,14 @@ while IFS= read -r pattern; do
         echo "$hits" | head -5
         FAILED=1
     fi
+    for sha in "${REFS_TO_CHECK[@]+"${REFS_TO_CHECK[@]}"}"; do
+        if hits=$(cd "$REPO_DIR" && git grep -iEn "$pattern" "$sha" -- \
+                ':!scripts/check_public_hygiene.sh' 2>/dev/null); then
+            echo "hygiene: personal marker '$pattern' in pushed commit $sha:"
+            echo "$hits" | head -5
+            FAILED=1
+        fi
+    done
 done < "$DENYLIST"
 
 if [[ "$FAILED" == 1 ]]; then

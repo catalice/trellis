@@ -7,6 +7,7 @@ Registration: focus_tools(...)
 """
 from __future__ import annotations
 
+import difflib
 import logging
 from datetime import date, datetime
 from typing import Any, Callable
@@ -14,7 +15,6 @@ from uuid import UUID
 
 from trellis.domain_focus_models import (
     GoalStatus,
-    GoalType,
     TaskEnergy,
     TaskPriority,
 )
@@ -44,7 +44,7 @@ FOCUS_ADD_TOOL: dict = {
                 "type": "string",
                 "enum": ["task", "goal", "reminder", "effort_note"],
                 "description": (
-                    "task: todo or seed (kind field). goal: any life/training goal. "
+                    "task: todo or seed (kind field). goal: any goal. "
                     "reminder: a timed nudge, one-off or recurring. "
                     "effort_note: keep content on an effort page (or file an "
                     "existing capture there via capture_id)."
@@ -69,15 +69,19 @@ FOCUS_ADD_TOOL: dict = {
                     "timezone conversion. Omit if no deadline."
                 ),
             },
-            "goal_type": {
-                "type": "string",
-                "enum": ["race", "aerobic", "strength", "life", "habit", "general"],
-                "description": "goal: race/aerobic/strength feed the training module; life/habit/general are everything else. Required for goals.",
-            },
             "target_date": {"type": "string", "description": "goal: YYYY-MM-DD. Omit if open-ended."},
             "is_fixed_date": {"type": "boolean", "description": "goal: true if the date cannot move (race day)."},
             "notes": {"type": "string", "description": "goal: optional notes."},
-            "label": {"type": "string", "description": "reminder: what it's for. Required for reminders."},
+            "label": {
+                "type": "string",
+                "description": (
+                    "reminder: what it's for — required for reminders. "
+                    "goal: OPTIONAL free-text tag, only if they name one — "
+                    "'race'/'aerobic'/'strength' feed the training module; "
+                    "anything else is just a tag; reuse their existing labels "
+                    "before inventing one; omit by default, a goal is just a goal."
+                ),
+            },
             "remind_at": {
                 "type": "string",
                 "description": (
@@ -99,6 +103,7 @@ FOCUS_ADD_TOOL: dict = {
             "capture_id": {"type": "string", "description": "effort_note: an existing capture (focus_get inbox) to file into the effort instead of content."},
         },
         "required": ["what"],
+        "additionalProperties": False,
     },
 }
 
@@ -135,8 +140,10 @@ FOCUS_UPDATE_TOOL: dict = {
             "target_date": {"type": "string", "description": "goal: YYYY-MM-DD."},
             "is_fixed_date": {"type": "boolean", "description": "goal."},
             "notes": {"type": "string", "description": "goal: REPLACES stored notes — the result echoes what was overwritten."},
+            "label": {"type": "string", "description": "goal: change its free-text tag ('race'/'aerobic'/'strength' feed the coach); empty string clears it."},
         },
         "required": ["what", "id"],
+        "additionalProperties": False,
     },
 }
 
@@ -158,6 +165,7 @@ BRAIN_DUMP_TOOL: dict = {
             }
         },
         "required": ["text"],
+        "additionalProperties": False,
     },
 }
 
@@ -188,117 +196,9 @@ FOCUS_GET_TOOL: dict = {
     },
 }
 
-CREATE_TASK_TOOL: dict = {
-    "name": "create_task",
-    "description": (
-        "Create a task or seed directly (when not part of a brain dump). "
-        "kind='todo' for admin the user owes; kind='seed' for curiosity they might "
-        "feed — explorations with zero obligation, never urgent."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "title": {"type": "string"},
-            "kind": {
-                "type": "string", "enum": ["todo", "seed"], "default": "todo",
-                "description": "todo = obligation. seed = exploration, no due date, never nags.",
-            },
-            "priority": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
-            "energy": {
-                "type": "string",
-                "enum": ["low", "medium", "high"],
-                "description": "Mental/physical energy needed. low=routine, high=deep focus.",
-                "default": "medium",
-            },
-            "description": {"type": "string"},
-            "due": {
-                "type": "string",
-                "description": (
-                    "Due date/time in the USER'S LOCAL time: YYYY-MM-DDTHH:MM, or "
-                    "YYYY-MM-DD if no time. Resolve relative phrases yourself using "
-                    "today's date from context. No timezone conversion. Omit if no deadline."
-                ),
-            },
-        },
-        "required": ["title"],
-    },
-}
-
-UPDATE_TASK_TOOL: dict = {
-    "name": "update_task",
-    "description": (
-        "Update a task or seed: title, priority, energy, kind, due date, "
-        "description, or status. Done → status='done'. Delete/remove → "
-        "status='dropped' (gone from every view, never again). Shelve for "
-        "later → status='parked' (visible in its own section). Reclassify "
-        "todo↔seed with kind. Only send fields that change."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "task_id": {"type": "string"},
-            "title": {"type": "string"},
-            "priority": {"type": "string", "enum": ["low", "medium", "high"]},
-            "energy": {"type": "string", "enum": ["low", "medium", "high"]},
-            "kind": {"type": "string", "enum": ["todo", "seed"]},
-            "status": {
-                "type": "string", "enum": ["open", "done", "dropped", "parked"],
-                "description": "done = completed. dropped = never again, invisible. parked = not now, shelved but visible. open = back on the list.",
-            },
-            "due": {
-                "type": "string",
-                "description": "User-local YYYY-MM-DDTHH:MM or YYYY-MM-DD. No timezone conversion.",
-            },
-            "description": {"type": "string"},
-        },
-        "required": ["task_id"],
-    },
-}
-
-SET_REMINDER_TOOL: dict = {
-    "name": "set_reminder",
-    "description": "Set a reminder. Works for appointments, time-sensitive tasks, and recurring nudges (daily, weekly, monthly or yearly).",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "label": {"type": "string", "description": "What the reminder is for."},
-            "remind_at": {
-                "type": "string",
-                "description": (
-                    "Date and time in the USER'S LOCAL time, format YYYY-MM-DDTHH:MM. "
-                    "Send exactly the time the user said — do NOT convert timezones; "
-                    "Python handles that."
-                ),
-            },
-            "task_id": {
-                "type": "string",
-                "description": "Optionally link to an existing task.",
-            },
-            "recurrence": {
-                "type": "string",
-                "enum": ["daily", "weekly", "monthly", "yearly"],
-                "description": (
-                    "How it repeats, if it does: 'every Sunday evening' -> weekly "
-                    "with remind_at on the next Sunday; 'monthly' fires the same "
-                    "day each month (clamped for short months). Omit for a one-off."
-                ),
-            },
-        },
-        "required": ["label", "remind_at"],
-    },
-}
-
-CANCEL_REMINDER_TOOL: dict = {
-    "name": "cancel_reminder",
-    "description": "Cancel a scheduled reminder.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "reminder_id": {"type": "string"}
-        },
-        "required": ["reminder_id"],
-    },
-}
+# (The per-entity write schemas were folded into FOCUS_ADD/FOCUS_UPDATE — the
+# handlers survive behind the dispatch; only ADD_GOAL_TOOL keeps a schema, for
+# onboarding.)
 
 ADD_GOAL_TOOL: dict = {
     "name": "add_goal",
@@ -307,12 +207,12 @@ ADD_GOAL_TOOL: dict = {
         "type": "object",
         "properties": {
             "title": {"type": "string"},
-            "goal_type": {
+            "label": {
                 "type": "string",
-                "enum": ["race", "aerobic", "strength", "life", "habit", "general"],
                 "description": (
-                    "race/aerobic/strength = training goals (fed into training module). "
-                    "life/habit/general = everything else."
+                    "OPTIONAL free-text tag, only if they name one. "
+                    "'race'/'aerobic'/'strength' feed the training module; "
+                    "omit by default — a goal is just a goal."
                 ),
             },
             "target_date": {
@@ -326,27 +226,8 @@ ADD_GOAL_TOOL: dict = {
             },
             "notes": {"type": "string"},
         },
-        "required": ["title", "goal_type"],
-    },
-}
-
-UPDATE_GOAL_TOOL: dict = {
-    "name": "update_goal",
-    "description": "Update a goal's details or status. Use status='achieved' when done.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "goal_id": {"type": "string"},
-            "title": {"type": "string"},
-            "target_date": {"type": "string"},
-            "is_fixed_date": {"type": "boolean"},
-            "notes": {"type": "string"},
-            "status": {
-                "type": "string",
-                "enum": ["active", "achieved", "paused", "dropped"],
-            },
-        },
-        "required": ["goal_id"],
+        "required": ["title"],
+        "additionalProperties": False,
     },
 }
 
@@ -369,6 +250,7 @@ DELETE_ENTRY_TOOL: dict = {
             "entry_id": {"type": "string", "description": "UUID of the record to erase."},
         },
         "required": ["entry_id"],
+        "additionalProperties": False,
     },
 }
 
@@ -408,6 +290,12 @@ def handle_brain_dump(
             due = f" (due {_fmt_datetime(t.due_at, tz)})" if t.due_at else ""
             task_lines.append(f"  • {t.title}{due} [{t.priority}/{t.energy}]")
         parts.append("".join(task_lines))
+
+    if result.duplicates_skipped:
+        parts.append(
+            "\nAlready on the open list (not re-created): "
+            + ", ".join(result.duplicates_skipped)
+        )
 
     if syn.questions:
         parts.append("\nOpen questions:\n" + "\n".join(f"  ? {q}" for q in syn.questions))
@@ -528,7 +416,7 @@ def handle_focus_get(
             lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at, tz)} — {r.status}" for r in recent)
         return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
 
-    return f"Unknown option: {what!r}. Use: tasks, seeds, goals, inbox, efforts, reminders."
+    return f"Unknown option: {what!r}. Use: tasks, seeds, goals, inbox, efforts, effort, reminders."
 
 
 def handle_create_task(
@@ -567,14 +455,16 @@ def handle_create_task(
     due = f" — due {_fmt_datetime(task.due_at, tz)}" if task.due_at else ""
     result = f"Task created: {task.title}{due} [{task.id}]"
     try:
+        # Todos AND seeds — a duplicate seed is just as silently wasteful.
+        existing = task_service.list_open(user_id) + task_service.list_seeds(user_id)
         dup = next(
-            (t for t in task_service.list_open(user_id)
+            (t for t in existing
              if t.id != task.id and t.title.strip().lower() == title.lower()),
             None,
         )
         if dup is not None:
             result += (
-                f"\nHeads up: an open task with this title already existed [{dup.id}]. "
+                f"\nHeads up: an open item with this title already existed [{dup.id}]. "
                 "If that makes this a duplicate, ask them which to drop."
             )
     except Exception:
@@ -623,6 +513,13 @@ def handle_update_task(
         from trellis.domain_focus_models import TaskStatus
         if input_dict["status"] in ("open", "dropped", "parked"):
             kwargs["status"] = TaskStatus(input_dict["status"])
+        elif input_dict["status"] != "done":
+            # Refuse loudly — a silent drop here reported "Updated" while
+            # changing nothing but updated_at.
+            return (
+                f"Invalid task status: {input_dict['status']!r}. "
+                "Use open, done, dropped, or parked."
+            )
 
     if "kind" in input_dict:
         from trellis.domain_focus_models import TaskKind
@@ -667,6 +564,11 @@ def handle_set_reminder(
     # user's local wall-clock time.
     if remind_at.tzinfo is None:
         remind_at = remind_at.replace(tzinfo=tz)
+    if remind_at <= now:
+        return (
+            f"That time ({_fmt_datetime(remind_at, tz)}) is already past — a "
+            "reminder set there would never usefully fire. Pick a future time."
+        )
 
     task_id = None
     if "task_id" in input_dict and input_dict["task_id"]:
@@ -713,10 +615,12 @@ def handle_cancel_reminder(
     if not rid_str:
         return "reminder_id is required."
     try:
-        reminder_service.cancel(UUID(rid_str))
-        return "Reminder cancelled."
+        cancelled = reminder_service.cancel(UUID(rid_str))
     except ValueError:
         return f"Invalid reminder_id: {rid_str!r}"
+    if not cancelled:
+        return "No scheduled reminder with that id — focus_get what='reminders' lists them."
+    return "Reminder cancelled."
 
 
 def handle_add_goal(
@@ -727,13 +631,9 @@ def handle_add_goal(
     goal_service,
 ) -> str:
     title = str(input_dict.get("title", "")).strip()
-    goal_type_str = str(input_dict.get("goal_type", "")).strip()
-    if not title or not goal_type_str:
-        return "title and goal_type are required."
-    try:
-        goal_type = GoalType(goal_type_str)
-    except ValueError:
-        return f"Unknown goal_type: {goal_type_str!r}. Use: race, aerobic, strength, life, habit, general."
+    if not title:
+        return "title is required."
+    label = str(input_dict.get("label", "") or "").strip() or None
 
     target_date = None
     if input_dict.get("target_date"):
@@ -743,9 +643,11 @@ def handle_add_goal(
             return f"Invalid target_date: {input_dict['target_date']!r}. Use YYYY-MM-DD."
 
     goal = goal_service.add(
-        user_id, title, goal_type,
+        user_id, title,
+        label=label,
         target_date=target_date,
-        is_fixed_date=bool(input_dict.get("is_fixed_date", False)),
+        # Strict identity check: bool("false") is True — only a real JSON true counts.
+        is_fixed_date=input_dict.get("is_fixed_date") is True,
         notes=input_dict.get("notes"),
         now=now,
     )
@@ -784,13 +686,15 @@ def handle_update_goal(
     kwargs: dict[str, Any] = {}
     if "title" in input_dict:
         kwargs["title"] = str(input_dict["title"]).strip()
+    if "label" in input_dict:
+        kwargs["label"] = str(input_dict["label"] or "").strip() or None
     if "target_date" in input_dict and input_dict["target_date"]:
         try:
             kwargs["target_date"] = date.fromisoformat(str(input_dict["target_date"]))
         except ValueError:
             return f"Invalid target_date format."
     if "is_fixed_date" in input_dict:
-        kwargs["is_fixed_date"] = bool(input_dict["is_fixed_date"])
+        kwargs["is_fixed_date"] = input_dict["is_fixed_date"] is True
     if "notes" in input_dict:
         kwargs["notes"] = input_dict["notes"]
     if "status" in input_dict:
@@ -800,14 +704,13 @@ def handle_update_goal(
             return f"Unknown status: {input_dict['status']!r}."
 
     # Notes are a wholesale text replace — echo what got overwritten so a bad
-    # rewrite is visible in the result, not silently gone.
+    # rewrite is visible in the result, not silently gone. Fetched by id so
+    # paused/achieved goals get the echo too, not just active ones.
     old_notes = None
     if "notes" in kwargs:
         try:
-            old_notes = next(
-                (g.notes for g in goal_service.list_active(user_id) if g.id == goal_id),
-                None,
-            )
+            existing = goal_service.get(user_id, goal_id)
+            old_notes = existing.notes if existing else None
         except Exception:
             old_notes = None
 
@@ -850,45 +753,9 @@ def handle_delete_entry(
         return "Erased (empty effort, page removed)."
     if verdict == "not_empty":
         return ("That effort still has notes filed on it — move them first "
-                "(save_to_effort with capture_id), then erase.")
+                "(focus_add what='effort_note' with capture_id), then erase.")
     return "No record with that id."
 
-
-SAVE_TO_EFFORT_TOOL: dict = {
-    "name": "save_to_effort",
-    "description": (
-        "Keep research, notes, or findings onto an Effort — an area the user is "
-        "actively exploring (its own page in their vault that accumulates over time). "
-        "Use this the moment there's something worth keeping from a research "
-        "conversation, instead of offering to 'save to a seed'. Finds the effort "
-        "by name or creates it if new — so a seed graduating into real exploration "
-        "gets a home. If this came from a seed, pass graduated_seed_id to retire "
-        "the seed (it's an effort now). To file an EXISTING inbox capture into an "
-        "effort, pass capture_id instead of content."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "effort_title": {
-                "type": "string",
-                "description": "Short, evocative name for the area, e.g. 'Making Music'. Reuse the exact name to add to an existing effort.",
-            },
-            "content": {
-                "type": "string",
-                "description": "The research/notes to keep — the full digest, links and all. Markdown is fine.",
-            },
-            "graduated_seed_id": {
-                "type": "string",
-                "description": "UUID of the seed this grew from, if any — it gets retired.",
-            },
-            "capture_id": {
-                "type": "string",
-                "description": "UUID of an existing capture (from focus_get inbox) to file into this effort — instead of content.",
-            },
-        },
-        "required": ["effort_title"],
-    },
-}
 
 WEB_SEARCH_TOOL: dict = {
     "name": "web_search",
@@ -1024,13 +891,39 @@ def handle_save_to_effort(
         return "effort_title is required."
     if not content and not capture_id_str:
         return "Pass content (new material) or capture_id (an existing capture to file)."
+
+    # A typo must not silently spawn a second effort: say when one was created,
+    # and flag a near-miss against the existing names so a slip is caught in
+    # the result, not months later in the vault.
+    existing_titles = []
+    try:
+        existing_titles = [e.title for e in effort_service.list_all(user_id)]
+    except Exception:
+        _log.warning("save_to_effort: effort list failed", exc_info=True)
+    was_existing = any(t.lower() == title.lower() for t in existing_titles)
     effort = effort_service.find_or_create(user_id, title, now)
+    created_note = ""
+    if not was_existing:
+        created_note = " (new effort created)"
+        close = difflib.get_close_matches(
+            title.lower(), [t.lower() for t in existing_titles], n=1, cutoff=0.75,
+        )
+        if close:
+            original = next(t for t in existing_titles if t.lower() == close[0])
+            created_note += (
+                f" — heads up: this is close to the existing effort "
+                f"'{original}'. If that was the target, ask them, then move the "
+                "note and erase the new effort."
+            )
+
     if capture_id_str:
         try:
-            capture_service.assign(UUID(capture_id_str), effort.id)
+            capture_service.assign(user_id, UUID(capture_id_str), effort.id)
         except ValueError:
             return f"Invalid capture_id: {capture_id_str!r}"
-        return f"Filed that capture into '{effort.title}'. It's on your {effort.title} page."
+        except LookupError:
+            return f"No capture with id {capture_id_str} — focus_get what='inbox' lists them."
+        return f"Filed that capture into '{effort.title}'{created_note}."
     capture_service.save_research(user_id, content, effort_id=effort.id, now=now)
 
     retired = ""
@@ -1042,7 +935,8 @@ def handle_save_to_effort(
             retired = " (seed retired — it's an effort now)"
         except Exception:
             _log.warning("save_to_effort: seed retirement failed", exc_info=True)
-    return f"Saved to effort '{effort.title}'{retired}. It's on your {effort.title} page."
+            retired = " (seed retirement FAILED — the seed is still on the list)"
+    return f"Saved to effort '{effort.title}'{created_note}{retired}."
 
 
 def handle_web_search(

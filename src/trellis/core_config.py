@@ -20,14 +20,11 @@ class Settings:
     health_worker_url: str
     health_worker_secret: str
     trellis_secret_key: str
-    lthr: int | None
-    max_hr: int | None
     groq_api_key: str = ""
     tavily_api_key: str = ""
     guardian_api_key: str = ""
     chat_ttl_hours: int = 0   # 0 = keep chat forever; >0 sweeps messages older than N hours
     marker_hour: int = -1     # local hour for the daily memory-horizon marker; -1 = off
-    github_token: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -59,14 +56,11 @@ class Settings:
             ),
             health_worker_secret=os.getenv("HEALTH_WORKER_SECRET", ""),
             trellis_secret_key=os.getenv("TRELLIS_SECRET_KEY", ""),
-            lthr=_int_env("TRELLIS_LTHR"),
-            max_hr=_int_env("TRELLIS_MAX_HR"),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
             guardian_api_key=os.getenv("GUARDIAN_API_KEY", ""),
             chat_ttl_hours=int(os.getenv("TRELLIS_CHAT_TTL_HOURS", "0") or 0),
             marker_hour=int(os.getenv("TRELLIS_MORNING_MARKER_HOUR", "-1") or -1),
-            github_token=os.getenv("GITHUB_TOKEN", ""),
         )
 
     def validate(self) -> None:
@@ -85,7 +79,3 @@ class Settings:
         if not self.trellis_secret_key.strip():
             raise ValueError("TRELLIS_SECRET_KEY is required for Garmin sync")
 
-
-def _int_env(key: str) -> int | None:
-    val = os.getenv(key, "").strip()
-    return int(val) if val else None

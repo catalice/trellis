@@ -158,7 +158,10 @@ class MoveService:
         clean = annotation.strip()
         if not clean:
             return workout
-        if clean.lower() in (workout.note or "").lower():
+        # Dedup against THEIR OWN words only — the composed note includes the
+        # Garmin activity name, so "running" as an annotation matched "Morning
+        # Running" and was silently dropped while the handler said "updated".
+        if clean.lower() in (workout.user_note or "").lower():
             return workout
         words = f"{workout.user_note} — {clean}" if workout.user_note else clean
         if not self._repo.set_user_note(user_id, workout.garmin_activity_id, words):
@@ -309,15 +312,6 @@ def _parse_float(value: str) -> float | None:
     except ValueError:
         return None
 
-
-def _activity_date(activity: Any, tz: tzinfo) -> date | None:
-    epoch = getattr(activity, "start_time_epoch_seconds", None)
-    if not epoch:
-        return None
-    try:
-        return datetime.fromtimestamp(int(epoch), tz=timezone.utc).astimezone(tz).date()
-    except (ValueError, OSError, OverflowError):
-        return None
 
 
 _MAX_SPLITS = 60

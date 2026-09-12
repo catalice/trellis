@@ -210,13 +210,15 @@ def main() -> None:
     # recall searches across the lot.
     memory = MemoryIndex(database, embedder)
 
-    summariser = None
+    # Summaries: Groq (free) when configured, Anthropic Haiku as fallback —
+    # a retired Groq model degrades to Haiku instead of silently stopping.
     transcriber = None
+    groq_client = None
     if settings.groq_api_key:
         from groq import Groq as GroqClient
         groq_client = GroqClient(api_key=settings.groq_api_key)
-        summariser = make_summariser(groq_client)
         transcriber = make_transcriber(groq_client)
+    summariser = make_summariser(groq_client, fallback_client=anthropic_client)
 
     history = PostgresConversationHistory(database, settings.timezone)
     preferences_repository = PostgresPreferencesRepository(database)
@@ -254,13 +256,13 @@ def main() -> None:
             if efforts:
                 bits.append("efforts: " + ", ".join(efforts[:10]))
         except Exception:
-            pass
+            logging.getLogger(__name__).warning("dump hints: efforts failed", exc_info=True)
         try:
             threads = [th.title for th in learn_service.list_threads(uid)]
             if threads:
                 bits.append("learning threads: " + ", ".join(threads[:10]))
         except Exception:
-            pass
+            logging.getLogger(__name__).warning("dump hints: threads failed", exc_info=True)
         return "; ".join(bits) or None
 
     brain_dump_service = BrainDumpService(

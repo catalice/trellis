@@ -181,7 +181,9 @@ class TestDiscoveryParsing(unittest.TestCase):
         self.assertIsNone(parsed[1][2])
 
     def test_garbage_yields_nothing(self):
-        self.assertEqual(_parse_hypotheses("not json"), [])
+        # None = the call/parse FAILED (cursor must not advance);
+        # [] = a genuine "nothing new" (cursor advances).
+        self.assertIsNone(_parse_hypotheses("not json"))
 
 
 class TestPatternResponse(unittest.TestCase):
@@ -208,10 +210,6 @@ class TestPatternResponse(unittest.TestCase):
             datetime.now(timezone.utc), watcher=self._FakeWatcher(),
         )
         self.assertIn("must be", reply)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestThemeRecurrence(unittest.TestCase):
@@ -326,3 +324,7 @@ class TestTrend(unittest.TestCase):
         verified, evidence, _ = verify(frame, {"type": "trend", "metric": "resting_hr"})
         self.assertFalse(verified)
         self.assertIn("keep gathering", evidence)
+
+
+if __name__ == "__main__":
+    unittest.main()

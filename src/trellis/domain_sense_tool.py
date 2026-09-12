@@ -166,7 +166,10 @@ def handle_sense_get(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
         except ValueError:
             return "since is required (YYYY-MM-DD)."
         until_raw = str(input_dict.get("until", "")).strip()
-        until = _date.fromisoformat(until_raw) if until_raw else now.astimezone(tz).date()
+        try:
+            until = _date.fromisoformat(until_raw) if until_raw else now.astimezone(tz).date()
+        except ValueError:
+            return f"until {until_raw!r} isn't a valid YYYY-MM-DD date."
         if (until - since).days > 120:
             since = until - timedelta(days=120)
         rows = sense_service.day_rows(user_id, since=since, until=until, now=now)
@@ -190,6 +193,23 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
     energy = input_dict.get("energy")
     mood = input_dict.get("mood")
     parts: list[str] = []
+
+    # Validate EVERYTHING refusable up front: state/meds/sleep from this same
+    # call used to be written before a bad period_date bailed out with
+    # "nothing was logged" — a lie that earned duplicate rows on the re-send.
+    period = input_dict.get("period")
+    period_occurred = now
+    period_when = ""
+    if period in ("started", "ended"):
+        period_date_str = str(input_dict.get("period_date", "")).strip()
+        if period_date_str:
+            try:
+                d = _date.fromisoformat(period_date_str)
+                period_occurred = datetime.combine(d, _time(10, 0), tzinfo=tz)
+                period_when = f" ({period_date_str})"
+            except ValueError:
+                return (f"period_date '{period_date_str}' isn't a valid "
+                        "YYYY-MM-DD date — nothing was logged.")
 
     # A state entry needs their words; pure events (period/meds/sleep) don't —
     # forcing a note here is how phantom state rows got fabricated (3 Aug).
@@ -251,24 +271,13 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
         )
         parts.append("Sleep logged.")
 
-    period = input_dict.get("period")
     if period in ("started", "ended"):
-        occurred = now
-        when = ""
-        period_date_str = str(input_dict.get("period_date", "")).strip()
-        if period_date_str:
-            try:
-                d = _date.fromisoformat(period_date_str)
-                occurred = datetime.combine(d, _time(10, 0), tzinfo=tz)
-                when = f" ({period_date_str})"
-            except ValueError:
-                return f"period_date '{period_date_str}' isn't a valid YYYY-MM-DD date — nothing was logged."
         sense_service.log_event(
             user_id,
             TrackingEventType.PERIOD_START if period == "started" else TrackingEventType.PERIOD_END,
-            occurred_at=occurred,
+            occurred_at=period_occurred,
         )
-        parts.append(f"Period {period}{when}.")
+        parts.append(f"Period {period}{period_when}.")
 
     if not parts:
         return "Nothing to log — pass their words (note) and/or meds, sleep, or period."

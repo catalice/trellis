@@ -62,6 +62,8 @@ class TelegramTrellis:
         self._watcher_task: asyncio.Task | None = None
         self._reminder_delivery_task: asyncio.Task | None = None
         self._garmin_sync_task: asyncio.Task | None = None
+        self._marker_task: asyncio.Task | None = None
+        self._chat_sweep_task: asyncio.Task | None = None
         # One lock per user: turns are processed strictly in arrival order, so a
         # rapid second message always sees the first exchange in history (and
         # replies can't interleave or land in scrambled order).
@@ -106,7 +108,8 @@ class TelegramTrellis:
             self._watcher_task = asyncio.create_task(self._watcher_loop())
 
     async def _post_shutdown(self, application: Application) -> None:
-        for attr in ("_reminder_delivery_task", "_garmin_sync_task", "_watcher_task"):
+        for attr in ("_reminder_delivery_task", "_garmin_sync_task", "_watcher_task",
+                     "_marker_task", "_chat_sweep_task"):
             task = getattr(self, attr)
             if task is None:
                 continue
@@ -156,17 +159,20 @@ class TelegramTrellis:
                 target += timedelta(days=1)
             await asyncio.sleep((target - now_local).total_seconds())
             try:
-                for user_id, tg_id in self.database.list_users():
+                users = await asyncio.to_thread(self.database.list_users)
+                for user_id, tg_id in users:
                     if (self.settings.telegram_allowed_users
                             and tg_id not in self.settings.telegram_allowed_users):
                         continue
-                    old = self._message_log.get_marker(tg_id)
+                    old = await asyncio.to_thread(self._message_log.get_marker, tg_id)
                     sent = await application.bot.send_message(
                         chat_id=tg_id,
                         text=("☀️ — everything below this I remember "
                               "word-for-word; older, ask me to look it up."),
                     )
-                    self._message_log.set_marker(tg_id, sent.message_id)
+                    await asyncio.to_thread(
+                        self._message_log.set_marker, tg_id, sent.message_id
+                    )
                     if old:
                         try:
                             await application.bot.delete_message(chat_id=tg_id, message_id=old)
@@ -186,14 +192,19 @@ class TelegramTrellis:
                 cutoff = datetime.now(timezone.utc) - timedelta(hours=self._chat_ttl_hours)
                 hard = datetime.now(timezone.utc) - timedelta(hours=47, minutes=30)
                 swept = 0
-                for chat_id, message_id, sent_at in self._message_log.sweepable_telegram_messages(older_than=cutoff):
+                sweepable = await asyncio.to_thread(
+                    self._message_log.sweepable_telegram_messages, older_than=cutoff
+                )
+                for chat_id, message_id, sent_at in sweepable:
                     if sent_at > hard:
                         try:
                             await application.bot.delete_message(chat_id=chat_id, message_id=message_id)
                             swept += 1
                         except Exception:
                             pass   # already gone, or refused — forget either way
-                    self._message_log.forget_telegram_message(chat_id, message_id)
+                    await asyncio.to_thread(
+                        self._message_log.forget_telegram_message, chat_id, message_id
+                    )
                 if swept:
                     self.logger.info("chat sweep: %d message(s) aged out", swept)
             except Exception:
@@ -213,22 +224,27 @@ class TelegramTrellis:
             return 0
         delivered = 0
         now = datetime.now(timezone.utc)
-        for user_id, telegram_user_id in self.database.list_users():
+        users = await asyncio.to_thread(self.database.list_users)
+        for user_id, telegram_user_id in users:
             if (
                 self.settings.telegram_allowed_users
                 and telegram_user_id not in self.settings.telegram_allowed_users
             ):
                 continue
-            due = self.reminders.upcoming(user_id, hours=0, now=now)
+            due = await asyncio.to_thread(
+                self.reminders.upcoming, user_id, hours=0, now=now
+            )
             for reminder in due:
                 sent = await application.bot.send_message(
                     chat_id=telegram_user_id,
                     text=f"Reminder: {reminder.label}",
                 )
                 self._record_msg(sent)
-                self.reminders.mark_sent(reminder.id)
+                await asyncio.to_thread(self.reminders.mark_sent, reminder.id)
                 if reminder.recurrence:
-                    self.reminders.reschedule(user_id, reminder, now=now)
+                    await asyncio.to_thread(
+                        self.reminders.reschedule, user_id, reminder, now=now
+                    )
                 delivered += 1
         return delivered
 
@@ -297,7 +313,11 @@ class TelegramTrellis:
                 )
             except Exception:
                 self.logger.exception("Oracle failed for user %s", user_id)
-                reply = "Something went wrong. Nothing was changed — please try again."
+                # NEVER claim "nothing was changed": tool calls from earlier in
+                # the turn may already have committed before the failure.
+                reply = ("Something went wrong mid-turn. Anything I'd already "
+                         "done before the error is saved — ask me what changed "
+                         "before redoing it.")
 
             final = reply or "Something went wrong — no response was generated. Please try again."
             await self._deliver(update, placeholder, final)
@@ -372,21 +392,30 @@ class TelegramTrellis:
 _TELEGRAM_LIMIT = 3900  # headroom under Telegram's hard 4096
 
 
+def _tg_len(text: str) -> int:
+    """Telegram's 4096 cap counts UTF-16 code units (astral chars count as
+    2), not Python code points — an emoji-dense reply near the limit would
+    otherwise still exceed the wire cap and be lost."""
+    return len(text.encode("utf-16-le")) // 2
+
+
 def _chunk_message(text: str, limit: int = _TELEGRAM_LIMIT) -> list[str]:
     """Split at paragraph boundaries, hard-splitting any monster paragraph."""
-    if len(text) <= limit:
+    if _tg_len(text) <= limit:
         return [text]
     chunks: list[str] = []
     current = ""
     for para in text.split("\n\n"):
-        while len(para) > limit:            # a single over-limit paragraph
+        while _tg_len(para) > limit:        # a single over-limit paragraph
             if current:
                 chunks.append(current)
                 current = ""
-            chunks.append(para[:limit])
-            para = para[limit:]
+            # limit//2 code points can never exceed `limit` UTF-16 units.
+            head_len = limit if _tg_len(para[:limit]) <= limit else limit // 2
+            chunks.append(para[:head_len])
+            para = para[head_len:]
         candidate = f"{current}\n\n{para}" if current else para
-        if len(candidate) > limit:
+        if _tg_len(candidate) > limit:
             chunks.append(current)
             current = para
         else:

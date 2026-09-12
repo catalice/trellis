@@ -17,7 +17,8 @@ cd "$REPO_DIR"
 docker compose exec -T postgres pg_dump -U trellis trellis | gzip > "$OUT"
 
 # Sanity check: a valid dump is never tiny
-if [ "$(stat -f%z "$OUT")" -lt 1024 ]; then
+SIZE=$(stat -f%z "$OUT" 2>/dev/null || stat -c%s "$OUT")
+if [ "$SIZE" -lt 1024 ]; then
     echo "backup suspiciously small: $OUT" >&2
     exit 1
 fi

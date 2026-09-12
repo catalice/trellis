@@ -190,11 +190,11 @@ Executive function — the recording house.
 - Brain dumps (raw text in, synthesised + triaged out)
 - Ideas (wild, half-formed, philosophical — all valid)
 - Tasks and reminders
-- Goals (ALL types — race, life, habit. Training goals are a subset, not separate)
+- Goals (a goal is just a goal — her call, 10 Sep 2026. `label` is an optional free-text tag she invents; 'race'/'aerobic'/'strength' labels feed the coach by convention, not constraint)
 - Captures (links, quotes, references) and Efforts (project pages built up over time)
 - Periodic cleanup sessions ("what have I got, let's organise it") — the inbox
   via `focus_get`, effort suggestions from the oracle's own judgment in-turn, and
-  filing via `save_to_effort(capture_id=…)`. No dedicated tool; ignored captures
+  filing via `focus_add what='effort_note'` with `capture_id`. No dedicated tool; ignored captures
   age out of the inbox by themselves after 30 days.
 
 **The synthesis pipeline** — the feature that makes this a second brain, not a notes dump:
@@ -208,7 +208,7 @@ Returns: BrainDumpResult
   - type: idea | task | goal | project_seed | question | reference | mixed
   - cleaned_text: coherent version, not garbled
   - action_items: list[str] — anything that implies a to-do
-  - project_hints: list[str] — anything that suggests a larger project
+  - effort_hints: list[str] — anything that suggests a larger effort
   - raw preserved alongside
        ↓
 Stored in DB. Claude responds with the cleaned version + any actions surfaced.
@@ -216,7 +216,7 @@ Stored in DB. Claude responds with the cleaned version + any actions surfaced.
 
 The original dump is always preserved. The synthesis sits alongside it.
 
-**Goals live here.** Move reads training-relevant goals (goal_type: race|aerobic|strength) cross-cutting when planning. Focus shows all goals.
+**Goals live here.** Move reads training-labelled goals (label: race|aerobic|strength — a naming convention on the free-text label, not an enum) cross-cutting when planning. Focus shows all goals.
 
 ---
 
@@ -255,7 +255,7 @@ are a filtered view (`recent_runs`) for baseline math; reviews read every sport
 (`recent_workouts`).
 
 **What it reads cross-cutting (never owns):**
-- Goals — from Focus's goals table, filtered by goal_type
+- Goals — from Focus's goals table, filtered by training label
 - Health/readiness — from Sense, to factor into planning
 
 Garmin sync runs two ways: automatically in the background daily, and via the `sync_garmin` tool when Claude judges data is stale for the question at hand.

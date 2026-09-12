@@ -46,6 +46,14 @@ UPDATE_CONTEXT_TOOL = {
 }
 
 
+def _clean_field(input_dict: dict, key: str) -> str | None:
+    """A JSON null must not become the literal string 'None'."""
+    value = input_dict.get(key)
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
 def handle_update_current_context(
     user_id: UUID,
     input_dict: dict,
@@ -53,9 +61,9 @@ def handle_update_current_context(
     *,
     context_service: CurrentContextService,
 ) -> str:
-    context_text = str(input_dict.get("context", "")).strip() or None
-    physical_notes = str(input_dict.get("physical_notes", "")).strip() or None
-    cognitive_notes = str(input_dict.get("cognitive_notes", "")).strip() or None
+    context_text = _clean_field(input_dict, "context")
+    physical_notes = _clean_field(input_dict, "physical_notes")
+    cognitive_notes = _clean_field(input_dict, "cognitive_notes")
 
     if not any([context_text, physical_notes, cognitive_notes]):
         return "Nothing to update."

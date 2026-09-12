@@ -50,15 +50,6 @@ class TaskEnergy(StrEnum):
     HIGH = "high"
 
 
-class GoalType(StrEnum):
-    RACE = "race"
-    AEROBIC = "aerobic"
-    STRENGTH = "strength"
-    LIFE = "life"
-    HABIT = "habit"
-    GENERAL = "general"
-
-
 class GoalStatus(StrEnum):
     ACTIVE = "active"
     ACHIEVED = "achieved"
@@ -225,15 +216,23 @@ class Reminder:
 
 
 # ---------------------------------------------------------------------------
-# Goal — all types; training module reads .is_training_goal() subset
+# Goal — a goal is just a goal; the coach reads the training-labelled subset
 # ---------------------------------------------------------------------------
+
+# The labels the running coach treats as training goals. A convention over a
+# free-text field, not an enum — any other label (or none) is equally valid.
+TRAINING_LABELS = ("race", "aerobic", "strength")
+
 
 @dataclass(frozen=True)
 class Goal:
     id: UUID
     user_id: UUID
     title: str
-    goal_type: GoalType
+    # OPTIONAL free-text tag the user invents when they want one ("race",
+    # "habit", "career") — no enum, no migration for a new kind. None is the
+    # normal case; the training labels above feed the coach.
+    label: str | None = None
     status: GoalStatus = GoalStatus.ACTIVE
     target_date: date | None = None
     is_fixed_date: bool = False
@@ -242,10 +241,10 @@ class Goal:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def is_training_goal(self) -> bool:
-        return self.goal_type in (GoalType.RACE, GoalType.AEROBIC, GoalType.STRENGTH)
+        return (self.label or "").strip().lower() in TRAINING_LABELS
 
     def summary(self) -> str:
-        parts = [f"{self.goal_type.value}: {self.title}"]
+        parts = [f"{self.label}: {self.title}" if self.label else self.title]
         if self.target_date:
             parts.append(
                 f"target {self.target_date.isoformat()}"

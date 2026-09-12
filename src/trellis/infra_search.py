@@ -67,7 +67,7 @@ class SearchGateway:
                 merged = guardian.results + tuple(
                     r for r in tavily.results if r.url not in seen)
                 return SearchResponse(query=query, answer=tavily.answer,
-                                      results=merged[:max_results * 2])
+                                      results=merged[:max_results])
             return guardian or tavily
         return self._tavily(query, max_results=max_results, source=source)
 

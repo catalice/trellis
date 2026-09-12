@@ -15,6 +15,7 @@ bot works offline at runtime.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -40,16 +41,19 @@ class LocalEmbedder:
     logs and returns None so callers degrade gracefully rather than crash."""
 
     _model = None  # class-level cache: the model loads once per process
+    _model_lock = threading.Lock()  # two threads must not double-load ~130MB
 
     def __init__(self, model_name: str = _MODEL_NAME) -> None:
         self._model_name = model_name
 
     def _ensure_model(self):
         if LocalEmbedder._model is None:
-            from fastembed import TextEmbedding  # imported lazily — heavy-ish
+            with LocalEmbedder._model_lock:
+                if LocalEmbedder._model is None:
+                    from fastembed import TextEmbedding  # imported lazily — heavy-ish
 
-            _log.info("Loading local embedding model %s", self._model_name)
-            LocalEmbedder._model = TextEmbedding(self._model_name)
+                    _log.info("Loading local embedding model %s", self._model_name)
+                    LocalEmbedder._model = TextEmbedding(self._model_name)
         return LocalEmbedder._model
 
     def embed(self, texts: Sequence[str]) -> list[list[float]] | None:

@@ -449,7 +449,9 @@ class ObsidianVault:
             for st in day_states:
                 t = st.felt_at.astimezone(self._tz).strftime("%H:%M")
                 retro = ""
-                if st.felt_at.date() != st.logged_at.date():
+                # Compare LOCAL dates — UTC dates flip at midnight UTC, not hers.
+                if (st.felt_at.astimezone(self._tz).date()
+                        != st.logged_at.astimezone(self._tz).date()):
                     retro = f" _(logged {st.logged_at.astimezone(self._tz).strftime('%d %b')})_"
                 parts.append(f"  - {t} — {st.note}{retro}")
             parts.append("")
@@ -587,9 +589,11 @@ class ObsidianVault:
         for key, val in props.items():
             if isinstance(val, list):
                 lines.append(f"{key}:")
-                lines.extend(f"  - {v}" for v in val)
+                # A stray newline in a value would corrupt the YAML block and
+                # mis-file user lines on the NEXT rewrite — flatten it.
+                lines.extend(f"  - {str(v).replace(chr(10), ' ')}" for v in val)
             else:
-                lines.append(f"{key}: {val}")
+                lines.append(f"{key}: {str(val).replace(chr(10), ' ')}")
         lines.append("---")
         block = "\n".join(lines) + "\n"
 
@@ -787,7 +791,7 @@ class ObsidianVault:
                 lines.append(f"- {k}")
             (folder / "Tracked kinds.md").write_text("\n".join(lines), encoding="utf-8")
         except Exception:
-            logger.warning("brain pages write failed", exc_info=True)
+            _log.warning("brain pages write failed", exc_info=True)
 
     def learn_map(self, title: str, body: str) -> None:
         """One map page per Learn thread (Atlas/Maps/<title>.md). The map is
@@ -801,7 +805,7 @@ class ObsidianVault:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"# {title}\n\n{body}", encoding="utf-8")
         except Exception:
-            logger.warning("learn map write failed", exc_info=True)
+            _log.warning("learn map write failed", exc_info=True)
 
     def watcher_page(self, body: str) -> None:
         """The window into the slow mind — everything the Watcher is thinking,
@@ -860,7 +864,11 @@ class ObsidianVault:
                 lines = body.splitlines()
                 if lines and lines[0].startswith("# "):
                     lines[0] = f"# {effort.title}"
-                new.write_text("\n".join(lines), encoding="utf-8")
+                # Temp + atomic replace: a failed write (disk full) leaves the
+                # old page intact and no truncated new one behind.
+                tmp = new.with_suffix(".md.tmp")
+                tmp.write_text("\n".join(lines), encoding="utf-8")
+                tmp.replace(new)
                 old.unlink()
             elif not new.exists():
                 self.effort_created(effort)

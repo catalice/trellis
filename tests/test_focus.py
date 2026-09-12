@@ -23,7 +23,6 @@ from trellis.domain_focus_models import (
     ExtractedTask,
     Goal,
     GoalStatus,
-    GoalType,
     Reminder,
     Task,
     TaskEnergy,
@@ -109,9 +108,12 @@ class FakeCaptureRepo:
         return [c for c in self.captures.values()
                 if c.effort_id is None and c.id not in self.archived]
 
-    def assign_to_effort(self, capture_id, effort_id):
+    def assign_to_effort(self, user_id, capture_id, effort_id):
         from dataclasses import replace
-        c = replace(self.captures[capture_id], effort_id=effort_id)
+        existing = self.captures.get(capture_id)
+        if existing is None or existing.user_id != user_id:
+            raise LookupError(capture_id)
+        c = replace(existing, effort_id=effort_id)
         self.captures[capture_id] = c
         return c
 
@@ -146,13 +148,20 @@ class FakeReminderRepo:
             key=lambda r: r.remind_at,
         )
 
-    def cancel(self, rid) -> None:
+    def cancel(self, rid) -> bool:
         from dataclasses import replace
-        self.reminders[rid] = replace(self.reminders[rid], status="cancelled")
+        r = self.reminders.get(rid)
+        if r is None or r.status != "scheduled":
+            return False
+        self.reminders[rid] = replace(r, status="cancelled")
+        return True
 
-    def mark_sent(self, rid) -> None:
+    def mark_sent(self, rid) -> bool:
         from dataclasses import replace
+        if rid not in self.reminders:
+            return False
         self.reminders[rid] = replace(self.reminders[rid], status="sent")
+        return True
 
     def list_recent(self, user_id, *, limit):
         return sorted(self.reminders.values(), key=lambda r: r.remind_at, reverse=True)[:limit]
@@ -484,8 +493,8 @@ class TestReminderService:
 class TestGoalService:
     def test_training_goal_filter(self):
         svc = GoalService(FakeGoalRepo())
-        svc.add(UID, "Half marathon", GoalType.RACE, now=NOW)
-        svc.add(UID, "Write more", GoalType.LIFE, now=NOW)
+        svc.add(UID, "Half marathon", label="race", now=NOW)
+        svc.add(UID, "Write more", now=NOW)
         training = svc.list_training_goals(UID)
         assert [g.title for g in training] == ["Half marathon"]
         assert len(svc.list_active(UID)) == 2
@@ -510,13 +519,15 @@ class TestModels:
         assert not replace(base, due_at=None).is_overdue(NOW)
 
     def test_goal_is_training_goal(self):
-        def goal(gt):
-            return Goal(id=uuid4(), user_id=UID, title="g", goal_type=gt)
-        assert goal(GoalType.RACE).is_training_goal()
-        assert goal(GoalType.AEROBIC).is_training_goal()
-        assert goal(GoalType.STRENGTH).is_training_goal()
-        assert not goal(GoalType.LIFE).is_training_goal()
-        assert not goal(GoalType.GENERAL).is_training_goal()
+        # Labels feed the coach by convention, not constraint.
+        def goal(label):
+            return Goal(id=uuid4(), user_id=UID, title="g", label=label)
+        assert goal("race").is_training_goal()
+        assert goal("Aerobic").is_training_goal()
+        assert goal("strength").is_training_goal()
+        assert not goal("life").is_training_goal()
+        assert not goal(None).is_training_goal()
+        assert not goal("career").is_training_goal()
 
 
 # ---------------------------------------------------------------------------
@@ -976,13 +987,13 @@ class TestDatedGoalCountdowns:
     def test_countdown_renders(self):
         from datetime import date as _d
         from trellis.domain_focus_tool import focus_snapshot
-        from trellis.domain_focus_models import Goal, GoalStatus, GoalType
+        from trellis.domain_focus_models import Goal, GoalStatus
         from uuid import uuid4
 
         class Goals:
             def list_active(self, uid):
                 return [Goal(id=uuid4(), user_id=uid, title="Get married",
-                             goal_type=GoalType.LIFE, status=GoalStatus.ACTIVE,
+                             status=GoalStatus.ACTIVE,
                              target_date=_d(2026, 10, 3), created_at=NOW,
                              updated_at=NOW)]
 
@@ -994,3 +1005,124 @@ class TestDatedGoalCountdowns:
         loader = focus_snapshot(Empty(), Empty(), Goals())
         snap = loader(UID, NOW.replace(month=9, day=3))
         assert "Get married in 4w2d (3 Oct)" in snap
+
+
+# ---------------------------------------------------------------------------
+# Sweep fixes (10 Sep 2026) — regressions locked
+# ---------------------------------------------------------------------------
+
+class TestBrainDumpDedup:
+    """The same dump sent twice must not create the same tasks twice."""
+
+    def test_duplicate_extracted_task_skipped(self):
+        task_repo = FakeTaskRepo()
+        result = BrainDumpResult(
+            cleaned_text="clean", capture_type=CaptureType.BRAIN_DUMP, summary="s",
+            extracted_tasks=(ExtractedTask(title="Email the venue"),),
+            questions=(), effort_hints=(),
+        )
+        svc = BrainDumpService(FakeCaptureRepo(), task_repo, FakeClaude(result), TZ)
+        first = svc.process(UID, "notes", NOW)
+        assert len(first.tasks_created) == 1
+        second = svc.process(UID, "same notes again", NOW)
+        assert second.tasks_created == ()
+        assert second.duplicates_skipped == ("Email the venue",)
+        assert len(task_repo.tasks) == 1
+
+    def test_seed_from_dump_never_gets_due(self):
+        from trellis.domain_focus_models import TaskKind
+        task_repo = FakeTaskRepo()
+        result = BrainDumpResult(
+            cleaned_text="clean", capture_type=CaptureType.BRAIN_DUMP, summary="s",
+            extracted_tasks=(ExtractedTask(title="Look into ceramics",
+                                           kind=TaskKind.SEED, due="2026-07-25"),),
+            questions=(), effort_hints=(),
+        )
+        svc = BrainDumpService(FakeCaptureRepo(), task_repo, FakeClaude(result), TZ)
+        processed = svc.process(UID, "notes", NOW)
+        assert processed.tasks_created[0].due_at is None
+
+
+class TestReminderGuards:
+    def test_past_reminder_refused(self):
+        from trellis.domain_focus_tool import handle_set_reminder
+        svc = ReminderService(FakeReminderRepo(), TZ)
+        reply = handle_set_reminder(
+            UID, {"label": "Too late", "remind_at": "2026-07-19T09:00"}, NOW,
+            reminder_service=svc, tz=TZ,
+        )
+        assert "already past" in reply
+        assert svc.all_scheduled(UID) == []
+
+    def test_cancel_unknown_id_says_so(self):
+        from trellis.domain_focus_tool import handle_cancel_reminder
+        svc = ReminderService(FakeReminderRepo(), TZ)
+        reply = handle_cancel_reminder(
+            UID, {"reminder_id": str(uuid4())}, NOW, reminder_service=svc,
+        )
+        assert "No scheduled reminder" in reply
+
+
+class TestTaskStatusGuard:
+    def test_invalid_status_refused_loudly(self):
+        from trellis.domain_focus_tool import handle_update_task
+        repo = FakeTaskRepo()
+        svc = TaskService(repo, TZ)
+        task = svc.create(UID, "Buy wine", now=NOW)
+        reply = handle_update_task(
+            UID, {"task_id": str(task.id), "status": "achieved"}, NOW, task_service=svc,
+        )
+        assert "Invalid task status" in reply
+        assert repo.get(task.id).status == TaskStatus.OPEN
+
+    def test_complete_is_idempotent(self):
+        repo = FakeTaskRepo()
+        svc = TaskService(repo, TZ)
+        task = svc.create(UID, "X", now=NOW)
+        svc.complete(UID, task.id, now=NOW)
+        svc.complete(UID, task.id, now=NOW + timedelta(hours=1))
+        assert len(repo.events) == 1
+        assert repo.get(task.id).completed_at == NOW
+
+
+class TestEffortTypoGuard:
+    def test_near_miss_title_warns(self):
+        from trellis.domain_focus_service import CaptureService, EffortService
+        from trellis.domain_focus_tool import handle_save_to_effort
+        cap_svc = CaptureService(FakeCaptureRepo())
+        eff_svc = EffortService(FakeEffortRepo())
+        task_svc = TaskService(FakeTaskRepo(), TZ)
+        handle_save_to_effort(
+            UID, {"effort_title": "Making Music", "content": "first"}, NOW,
+            effort_service=eff_svc, capture_service=cap_svc, task_service=task_svc,
+        )
+        reply = handle_save_to_effort(
+            UID, {"effort_title": "Making Musik", "content": "second"}, NOW,
+            effort_service=eff_svc, capture_service=cap_svc, task_service=task_svc,
+        )
+        assert "new effort created" in reply
+        assert "Making Music" in reply  # the near-miss warning names the original
+
+
+class TestGoalLabels:
+    """A goal is just a goal — label is optional, free text, theirs."""
+
+    def test_goal_without_label(self):
+        svc = GoalService(FakeGoalRepo())
+        g = svc.add(UID, "Get married", now=NOW)
+        assert g.label is None
+        assert g.summary().startswith("Get married")
+
+    def test_add_goal_handler_no_label_needed(self):
+        from trellis.domain_focus_tool import handle_add_goal
+        svc = GoalService(FakeGoalRepo())
+        reply = handle_add_goal(UID, {"title": "Ship the redesign"}, NOW, goal_service=svc)
+        assert "Goal added" in reply
+
+    def test_label_change_and_clear(self):
+        svc = GoalService(FakeGoalRepo())
+        g = svc.add(UID, "5k", label="race", now=NOW)
+        assert g.is_training_goal()
+        updated = svc.update(UID, g.id, label=None, now=NOW)
+        assert updated.label is None
+        assert not updated.is_training_goal()

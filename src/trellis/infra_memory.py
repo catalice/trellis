@@ -112,8 +112,10 @@ class MemoryIndex:
                         filed += 1
             return filed
         except Exception:
+            # The with-block rolled the transaction back: NOTHING persisted, so
+            # the honest count is zero (the loop count once inflated backfills).
             _log.warning("memory_index batch upsert failed", exc_info=True)
-            return filed
+            return 0
 
     def forget(self, entity_kind: str, entity_id: UUID) -> None:
         """Drop an entity's card — call when the underlying thing is deleted or
@@ -142,29 +144,40 @@ class MemoryIndex:
         if vector is None:
             return None
         literal = to_pgvector_literal(vector)
-        with self._db.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT entity_kind, entity_id, content,
-                           1 - (embedding <=> %s::vector) AS similarity
-                    FROM memory_index
-                    WHERE user_id = %s AND embedding IS NOT NULL
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT %s
-                    """,
-                    (literal, user_id, literal, limit),
-                )
-                return [
-                    SemanticMatch(kind=row[0], entity_id=row[1], content=row[2], similarity=float(row[3]))
-                    for row in cur.fetchall()
-                ]
+        try:
+            with self._db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT entity_kind, entity_id, content,
+                               1 - (embedding <=> %s::vector) AS similarity
+                        FROM memory_index
+                        WHERE user_id = %s AND embedding IS NOT NULL
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                        """,
+                        (literal, user_id, literal, limit),
+                    )
+                    return [
+                        SemanticMatch(kind=row[0], entity_id=row[1], content=row[2], similarity=float(row[3]))
+                        for row in cur.fetchall()
+                    ]
+        except Exception:
+            # The module contract is never-raise: a transient DB error reads
+            # as "recall unavailable", not a crash up the caller's stack.
+            _log.warning("memory_index recall failed", exc_info=True)
+            return None
 
     def theme_count(self, user_id: UUID, phrase: str, *, since: Any,
                     min_similarity: float = 0.5, limit: int = 12) -> tuple[int, list[str]]:
         """How often a THEME has recurred: cards filed since `since` whose meaning
         sits within `min_similarity` of the phrase. The Watcher's recurrence test
-        — deterministic given the frozen local embedder. Returns (count, examples)."""
+        — deterministic given the frozen local embedder. Returns (count, examples).
+        Never raises — a DB error reads as zero recurrences.
+
+        The 0.5 default was tuned for bge-small, whose floor for ANY two bits of
+        everyday English is ~0.5 (see infra_router's documented 0.635 routing
+        floor); recalibrate if the embedding model ever changes."""
         clean = (phrase or "").strip()
         if self._embedder is None or not clean:
             return 0, []
@@ -172,20 +185,24 @@ class MemoryIndex:
         if vector is None:
             return 0, []
         literal = to_pgvector_literal(vector)
-        with self._db.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT content, 1 - (embedding <=> %s::vector) AS similarity
-                    FROM memory_index
-                    WHERE user_id = %s AND embedding IS NOT NULL AND updated_at >= %s
-                      AND 1 - (embedding <=> %s::vector) >= %s
-                    ORDER BY similarity DESC
-                    LIMIT %s
-                    """,
-                    (literal, user_id, since, literal, min_similarity, limit),
-                )
-                rows = cur.fetchall()
+        try:
+            with self._db.connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT content, 1 - (embedding <=> %s::vector) AS similarity
+                        FROM memory_index
+                        WHERE user_id = %s AND embedding IS NOT NULL AND updated_at >= %s
+                          AND 1 - (embedding <=> %s::vector) >= %s
+                        ORDER BY similarity DESC
+                        LIMIT %s
+                        """,
+                        (literal, user_id, since, literal, min_similarity, limit),
+                    )
+                    rows = cur.fetchall()
+        except Exception:
+            _log.warning("memory_index theme_count failed", exc_info=True)
+            return 0, []
         return len(rows), [r[0][:60] for r in rows[:3]]
 
     # -- failure tracking (for the one-time repeat-failure alert) -------------

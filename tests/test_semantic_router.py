@@ -221,9 +221,9 @@ LIVE_CASES = [
     ("hey", "BIGBRAIN"),
     ("thanks, that's great", "BIGBRAIN"),
     ("morning!", "BIGBRAIN"),
-    ("teach me how central banks actually work", ["learn"]),
-    ("start a learning thread on geopolitics", ["learn"]),
-    ("test my knowledge on what we covered", ["learn"]),
+    ("teach me how central banks actually work", "learn"),
+    ("start a learning thread on geopolitics", "learn"),
+    ("test my knowledge on what we covered", "learn"),
     # borderline — sits on a line between houses with the current rooms.
     ("did I sleep ok for a run tomorrow?", "BORDERLINE"),
     ("what do we do this week?", "BORDERLINE"),
@@ -265,7 +265,7 @@ class TestLiveRouting(unittest.TestCase):
             # Assert the CLEAR cases: the expected house must be in the route,
             # and generic chat must route empty (big brain, no house).
             wrong = (
-                expected in ("move", "focus", "sense") and expected not in routed
+                expected in HOUSES and expected not in routed
             ) or (expected == "BIGBRAIN" and routed)
             if wrong:
                 mismatches.append(

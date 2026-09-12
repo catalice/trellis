@@ -79,5 +79,3 @@ class TrellisRegistry:
             result.extend(d.tools)
         return result
 
-    def domain_names(self) -> list[str]:
-        return list(self._domains.keys())

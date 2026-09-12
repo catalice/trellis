@@ -7,7 +7,7 @@ import os
 import queue
 import threading
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -260,7 +260,9 @@ def _normalize_activity(activity: dict[str, Any]) -> dict[str, Any]:
             or activity_type.get("displayValue")
             or "Unknown"
         ),
-        "startTimeInSeconds": _start_time_seconds(activity.get("startTimeLocal")),
+        "startTimeInSeconds": _start_time_seconds(
+            activity.get("startTimeGMT"), activity.get("startTimeLocal")
+        ),
         "duration": activity.get("duration"),
         "calories": activity.get("calories"),
         "avgHeartRate": activity.get("averageHeartRate"),
@@ -358,10 +360,25 @@ def _first_present(payload: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _start_time_seconds(value: Any) -> int | None:
-    if not isinstance(value, str) or not value:
-        return None
-    return int(datetime.fromisoformat(value.replace(".0", "")).timestamp())
+def _start_time_seconds(gmt_value: Any, local_value: Any = None) -> int | None:
+    """Epoch seconds for an activity start. Garmin sends startTimeGMT (UTC wall
+    clock) and startTimeLocal (user-local wall clock). Prefer GMT attached to
+    UTC — parsing the LOCAL string naive applied the CONTAINER's timezone and
+    shifted late-evening workouts onto the wrong day for any non-UTC user.
+    Fractional seconds are stripped properly (".replace('.0','')" once mangled
+    millisecond stamps like "…00.000" into unparseable strings)."""
+    for value, is_utc in ((gmt_value, True), (local_value, False)):
+        if not isinstance(value, str) or not value:
+            continue
+        clean = value.split(".")[0]
+        try:
+            parsed = datetime.fromisoformat(clean)
+        except ValueError:
+            continue
+        if is_utc and parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp())
+    return None
 
 
 def _redact(message: str, *secrets: Any) -> str:

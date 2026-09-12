@@ -139,8 +139,15 @@ class PostgresConversationHistory:
                 )
 
     def to_messages(self, turns: list[ConversationTurn]) -> list[dict[str, Any]]:
+        # The API needs the first message to be the user's; a window that opens
+        # on assistant turns (e.g. a delivered reminder) drops them — log it so
+        # the loss is visible.
+        dropped = 0
         while turns and turns[0].role == "assistant":
             turns = turns[1:]
+            dropped += 1
+        if dropped:
+            _log.debug("to_messages: dropped %d leading assistant turn(s)", dropped)
         result = []
         for t in turns:
             ts = t.created_at
