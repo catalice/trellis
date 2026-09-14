@@ -401,3 +401,50 @@ class TestMessageChunking:
         chunks = _chunk_message("y" * 9000)
         assert all(len(c) <= 3900 for c in chunks)
         assert sum(len(c) for c in chunks) == 9000
+
+
+class TestTurnFeedback:
+    """14 Sep: the "🧠 on it…" placeholder send timed out (5s default) and,
+    sitting outside any error handling, dropped the whole turn silently.
+    Feedback is now a best-effort typing keep-alive; the reply is sent fresh."""
+
+    @staticmethod
+    def _bot(reply="the reply"):
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        from trellis.core_telegram import TelegramTrellis
+        bot = TelegramTrellis.__new__(TelegramTrellis)
+        bot._turn_locks = {}
+        bot._message_log = None
+        bot.logger = MagicMock()
+        bot.assembler = MagicMock(handle_turn=MagicMock(return_value=reply))
+        bot._maybe_alert_embed_failures = AsyncMock()
+        update = MagicMock()
+        update.message.chat.send_action = AsyncMock()
+        update.message.reply_text = AsyncMock()
+        return bot, update
+
+    def test_reply_sent_fresh_with_typing_not_placeholder(self):
+        import asyncio
+        bot, update = self._bot()
+        asyncio.run(bot._respond(update, "u1", "hi"))
+        update.message.chat.send_action.assert_awaited_with("typing")
+        sent = [c.args[0] for c in update.message.reply_text.await_args_list]
+        assert sent == ["the reply"]           # no "on it…" bubble
+
+    def test_typing_failure_does_not_cost_the_turn(self):
+        import asyncio
+        bot, update = self._bot()
+        update.message.chat.send_action.side_effect = TimeoutError("Timed out")
+        asyncio.run(bot._respond(update, "u1", "hi"))
+        sent = [c.args[0] for c in update.message.reply_text.await_args_list]
+        assert sent == ["the reply"]
+
+    def test_markdown_failure_falls_back_to_plain(self):
+        import asyncio
+        bot, update = self._bot()
+        update.message.reply_text.side_effect = [ValueError("bad markdown"), None]
+        asyncio.run(bot._respond(update, "u1", "hi"))
+        calls = update.message.reply_text.await_args_list
+        assert calls[0].kwargs == {"parse_mode": "Markdown"}
+        assert calls[1].kwargs == {}

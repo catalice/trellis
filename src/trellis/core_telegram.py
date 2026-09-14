@@ -74,6 +74,12 @@ class TelegramTrellis:
         application = (
             Application.builder()
             .token(self.settings.telegram_bot_token)
+            # The library defaults to 5s for connect/read/write. A brief network
+            # stall (Docker on a laptop, a Wi-Fi blip) once timed out a reply
+            # send and the whole turn was dropped — 30s rides that out.
+            .connect_timeout(_TELEGRAM_TIMEOUT)
+            .read_timeout(_TELEGRAM_TIMEOUT)
+            .write_timeout(_TELEGRAM_TIMEOUT)
             .post_init(self._post_init)
             .post_shutdown(self._post_shutdown)
             .build()
@@ -303,10 +309,12 @@ class TelegramTrellis:
         lock = self._turn_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             self._record_msg(update.message)
-            # A real "working" message, not just the typing indicator — sent now and
-            # edited into the final reply, so there's visible feedback the whole turn.
-            placeholder = await update.message.reply_text("🧠 on it…")
-            self._record_msg(placeholder)
+            # Visible feedback for the whole turn: Telegram's typing indicator
+            # only lasts ~5s, so it's re-sent until the reply is ready. It is
+            # best-effort — a failed send costs nothing. (A "working…" message
+            # bubble used to do this job; sending it sat outside any error
+            # handling, and one 5s timeout on that send dropped the entire turn.)
+            typing = asyncio.create_task(self._typing_keepalive(update.message.chat))
             try:
                 reply = await asyncio.to_thread(
                     self.assembler.handle_turn, user_id, text
@@ -318,41 +326,37 @@ class TelegramTrellis:
                 reply = ("Something went wrong mid-turn. Anything I'd already "
                          "done before the error is saved — ask me what changed "
                          "before redoing it.")
+            finally:
+                typing.cancel()
+                try:
+                    await typing
+                except (asyncio.CancelledError, Exception):
+                    pass
 
             final = reply or "Something went wrong — no response was generated. Please try again."
-            await self._deliver(update, placeholder, final)
+            await self._deliver(update, final)
             await self._maybe_alert_embed_failures(update)
 
-    async def _deliver(self, update: Update, placeholder, text: str) -> None:
+    async def _typing_keepalive(self, chat, interval: float = 4.0) -> None:
+        """Keep the typing indicator alive until cancelled. Never raises."""
+        while True:
+            try:
+                await chat.send_action("typing")
+            except Exception:
+                pass
+            await asyncio.sleep(interval)
+
+    async def _deliver(self, update: Update, text: str) -> None:
         """Land the reply no matter what. Over-limit texts are CHUNKED at
         paragraph boundaries first (Telegram hard-caps messages at 4096 chars —
         a 6,439-char reply once vanished into Message_too_long with the user
         told nothing). Then: Markdown first; if Telegram can't parse it (an
-        unbalanced * or _) OR the edit fails, fall back to PLAIN text — so a
-        reply is never lost to a formatting quirk."""
-        chunks = _chunk_message(text)
-        if len(chunks) > 1:
-            await self._deliver_once(update, placeholder, chunks[0])
-            for chunk in chunks[1:]:
-                await self._deliver_once(update, None, chunk)
-            return
-        await self._deliver_once(update, placeholder, text)
+        unbalanced * or _) fall back to PLAIN text — so a reply is never lost
+        to a formatting quirk."""
+        for chunk in _chunk_message(text):
+            await self._deliver_once(update, chunk)
 
-    async def _deliver_once(self, update: Update, placeholder, text: str) -> None:
-        if placeholder is not None:
-            # 1. edit the placeholder, formatted.
-            try:
-                await placeholder.edit_text(text, parse_mode="Markdown")
-                return
-            except Exception:
-                pass
-            # 2. edit the placeholder, plain (handles the Markdown-parse case).
-            try:
-                await placeholder.edit_text(text)
-                return
-            except Exception:
-                self.logger.warning("Editing placeholder failed; sending fresh", exc_info=True)
-        # 3. edit impossible (e.g. too long) — send fresh, formatted then plain.
+    async def _deliver_once(self, update: Update, text: str) -> None:
         try:
             self._record_msg(await update.message.reply_text(text, parse_mode="Markdown"))
         except Exception:
@@ -390,6 +394,7 @@ class TelegramTrellis:
 
 
 _TELEGRAM_LIMIT = 3900  # headroom under Telegram's hard 4096
+_TELEGRAM_TIMEOUT = 30.0  # seconds; library default is 5
 
 
 def _tg_len(text: str) -> int:
