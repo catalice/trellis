@@ -1,7 +1,9 @@
 """
 Tools for the running coach — the coach's hands. The coaching itself happens in the
-oracle turn (persona in domain_move_claude); these just let it read context and
-persist the plan.
+oracle turn (role in domain_move_claude); these let it read context and persist
+the plan. Each description carries what the tool does, when to reach for it, and
+the one behaviour that would surprise you — and that fact lives HERE only, never
+repeated in the guidance.
 
 Handler signature: (user_id, input_dict, now) -> str
 Context loader: move_context_loader (Tier 1b — carries the coach persona)
@@ -29,7 +31,7 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 
 MOVE_GET_TOOL: dict = {
     "name": "move_get",
-    "description": "Read the running plan (or a recent workout's detail — any activity type) before telling the user what's on. Use this so you speak from what's actually stored, not memory.",
+    "description": "Read what's stored before saying what's on. Speak from the read, not memory.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -37,91 +39,93 @@ MOVE_GET_TOOL: dict = {
                 "type": "string",
                 "enum": ["plan", "week", "today", "baseline", "history", "run_detail", "watch"],
                 "description": (
-                    "plan: the arc + the stored week. "
-                    "week: this week's REAL dates (weekday->date) plus any stored sessions. "
+                    "plan: arc + stored week. "
+                    "week: this week's real dates + what's stored on each. "
                     "today: today's stored session. "
-                    "baseline: the stored fitness baseline. "
-                    "history: recent workouts, EVERY sport (runs, strength, HIIT, walks) — read before reviewing a week or planning the next. "
-                    "watch: the workouts actually in their Garmin library right now — CHECK this "
-                    "before claiming anything is or isn't on the watch. "
-                    "run_detail: one recent workout from Garmin — ANY activity type (0 = most recent, "
-                    "even if it's strength, not a run). THE review read: runs get the running portion "
-                    "(warm-up/cool-down excluded) plus the lap-by-lap breakdown (pace + HR per km or "
-                    "rep) — the history row's overall average blends the walks in, so never review a "
-                    "run from history alone. Other workouts get duration/HR/calories. Use 'which' to "
-                    "pick which recent workout. "
-                    "(Readiness/recovery — sleep, HRV, body battery — is in your context every turn; "
-                    "health lives in the Sense room, the coach borrows it.)"
+                    "baseline: stored fitness baseline. "
+                    "history: recent workouts, every sport. Overall averages only — the walks are blended in. "
+                    "run_detail: one workout from Garmin, any type. Runs: running portion (walks excluded) + laps with pace/HR. The review read. "
+                    "watch: what's actually in their Garmin workout library. Check before claiming what's on it. "
+                    "(Readiness is in context every turn — not here.)"
                 ),
             },
             "which": {
                 "type": "integer",
-                "description": "For run_detail only: which recent workout (0 = most recent of any type, default; 1 = the one before).",
+                "description": "run_detail only: 0 = most recent (default), 1 = the one before.",
             },
         },
         "required": ["what"],
     },
 }
 
-SAVE_TRAINING_PLAN_TOOL: dict = {
-    "name": "save_training_plan",
+MOVE_UPDATE_TOOL: dict = {
+    "name": "move_update",
     "description": (
-        "Persist the plan you've designed or adjusted. Author it from the REAL dates you "
-        "were given (never invent dates). Saves MERGE: days you send replace the same-dated "
-        "stored days; days you don't mention are KEPT — updating the arc or one session can "
-        "never destroy the rest of the week. Set replace_week=true ONLY when re-authoring "
-        "the entire week (the Sunday review). The result reports what's now stored — read it."
+        "Write to the training record. what=plan: store the plan — saves MERGE by date "
+        "(days sent replace same-dated days, days not sent survive; nothing is removed unless "
+        "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
+        "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
+        "Result reports what's now stored — read it."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
+            "what": {
+                "type": "string",
+                "enum": ["plan", "baseline", "workout"],
+            },
             "plan": {
                 "type": "object",
                 "description": (
-                    'The plan doc: {"arc": "<phases, weeks to goal, where they are now>", '
+                    'plan: {"arc": "<where they are, where this is going>", '
                     '"week": [{"date": "YYYY-MM-DD", '
                     '"type": "easy|long|intervals|tempo|recovery|strength|rest", '
-                    '"detail": "what to do"}, ...]} using this week\'s real dates. '
-                    'Strength days are type "strength", never "rest".'
+                    '"detail": "the session"}, ...]}. Real dates from move_get week. '
+                    'Strength days are "strength", never "rest".'
                 ),
-            },
-            "baseline": {
-                "type": "string",
-                "description": "Optional: a short fitness baseline summary to store/update.",
             },
             "replace_week": {
                 "type": "boolean",
                 "default": False,
-                "description": "True ONLY for a full week re-author (Sunday review) — the sole way stored days can be dropped.",
+                "description": "plan: True = the sent week IS the week; unsent days are dropped. Full re-author only.",
+            },
+            "baseline": {
+                "type": "string",
+                "description": "baseline: the fitness baseline. Result echoes what it overwrote.",
+            },
+            "date": {
+                "type": "string",
+                "description": "workout: YYYY-MM-DD (move_get history if unsure).",
+            },
+            "note": {
+                "type": "string",
+                "description": "workout: short, in their spirit: 'social run', 'cut short — knee'.",
             },
         },
-        "required": ["plan"],
+        "required": ["what"],
     },
 }
 
 PUSH_TO_WATCH_TOOL: dict = {
     "name": "push_to_watch",
     "description": (
-        "Push a STRUCTURED workout to the user's Garmin watch and schedule it on a real date. "
-        "Push only AFTER they've agreed ('shall I put these on your watch?' -> yes) — their "
-        "watch is theirs. A push REPLACES any same-named workout, so corrections update "
-        "rather than stack. Author the session as a spec; supports warmup/cooldown, "
-        "intervals/sprints, tempo, long runs, recovery, and repeat blocks, with pace or HR targets."
+        "Put a structured workout on their Garmin watch for a date. Their watch: agree first. "
+        "Replaces any same-named workout — corrections update, never stack."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "date": {"type": "string", "description": "The real date to schedule it on (YYYY-MM-DD) — use this week's real dates."},
+            "date": {"type": "string", "description": "YYYY-MM-DD, from this week's real dates."},
             "workout": {
                 "type": "object",
                 "description": (
-                    'The workout spec: {"name": "6x400m intervals", "steps": [ ... ]}. Each step has '
-                    '"kind" (warmup|cooldown|interval|run|recovery|rest|repeat) and EITHER "duration" '
-                    '("10min"/"90s"/"45:00") OR "distance" ("400m"/"5km") or neither (open, press lap). '
-                    'Optional "note", "pace" ("4:30-4:50" per km), "hr" ("140-150"). A "repeat" step needs '
-                    '"times" (int) and nested "steps". Example: {"name":"6x400m","steps":[{"kind":"warmup",'
-                    '"duration":"10min"},{"kind":"repeat","times":6,"steps":[{"kind":"interval","distance":'
-                    '"400m","pace":"4:20-4:40"},{"kind":"recovery","duration":"90s"}]},{"kind":"cooldown","duration":"10min"}]}'
+                    '{"name": "6x400m intervals", "steps": [ ... ]}. Step: "kind" '
+                    '(warmup|cooldown|interval|run|recovery|rest|repeat) + "duration" ("10min"/"90s"/"45:00") '
+                    'OR "distance" ("400m"/"5km") or neither (open, press lap). Optional "note", '
+                    '"pace" ("4:30-4:50" per km), "hr" ("140-150"). "repeat" takes "times" + nested "steps". '
+                    'Example: {"name":"6x400m","steps":[{"kind":"warmup","duration":"10min"},'
+                    '{"kind":"repeat","times":6,"steps":[{"kind":"interval","distance":"400m","pace":"4:20-4:40"},'
+                    '{"kind":"recovery","duration":"90s"}]},{"kind":"cooldown","duration":"10min"}]}'
                 ),
             },
         },
@@ -129,38 +133,11 @@ PUSH_TO_WATCH_TOOL: dict = {
     },
 }
 
-UPDATE_WORKOUT_TOOL: dict = {
-    "name": "update_workout",
-    "description": (
-        "Attach the user's account of a workout — any sport: run, strength, "
-        "HIIT, walk — to its recorded activity: 'that was a social run', "
-        "'trainer destroyed my legs', 'bailed early, knee'. Call it whenever "
-        "they tell you about a session (in a review or in passing), so future "
-        "reviews read the truth, not just the Garmin name. Appends to their "
-        "earlier words; never erases them."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "date": {
-                "type": "string",
-                "description": "The workout's date, YYYY-MM-DD (from move_get history if unsure).",
-            },
-            "note": {
-                "type": "string",
-                "description": "Their account, short and in their spirit: 'social run', 'cut short — knee'.",
-            },
-        },
-        "required": ["date", "note"],
-    },
-}
-
 SYNC_GARMIN_TOOL: dict = {
     "name": "sync_garmin",
     "description": (
-        "Refresh the user's Garmin data now: activities (every sport) and recent "
-        "health/readiness (sleep, HRV, body battery). This also runs automatically once a day — "
-        "use it when they want their latest data reflected right away ('sync my Garmin')."
+        "Pull Garmin now: activities + health. Runs daily by itself; call it when they want the latest. "
+        "Pulls Garmin's cloud — it can't make the watch upload. Fresh readiness rides back on the receipt."
     ),
     "input_schema": {"type": "object", "properties": {}},
 }
@@ -254,7 +231,23 @@ def handle_move_get(user_id: UUID, input_dict: dict, now: datetime, *, move_serv
     return "Unknown request. Use what: plan, week, today, baseline, history, run_detail, or watch."
 
 
-def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+    """One write door for the training record (her call, 15 Sep 2026 — the fold
+    that took Move from five tools to four). The proven handlers stay behind it."""
+    what = str(input_dict.get("what", "")).strip().lower()
+    if what == "plan":
+        return _update_plan(user_id, input_dict, move_service=move_service)
+    if what == "baseline":
+        if not str(input_dict.get("baseline", "")).strip():
+            return "baseline is required — the fitness baseline text."
+        return _update_plan(user_id, {"plan": {}, "baseline": input_dict["baseline"]},
+                            move_service=move_service)
+    if what == "workout":
+        return _update_workout(user_id, input_dict, move_service=move_service)
+    return "Unknown request. Use what: plan, baseline, or workout."
+
+
+def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
     plan = input_dict.get("plan")
     if isinstance(plan, str):
         try:
@@ -281,13 +274,16 @@ def handle_save_training_plan(user_id: UUID, input_dict: dict, now: datetime, *,
         saved = move_service.save_plan(user_id, plan=plan, baseline=baseline,
                                        goal_id=goal_id, replace_week=replace_week)
     except Exception:
-        _log.warning("save_training_plan failed", exc_info=True)
+        _log.warning("move_update plan failed", exc_info=True)
         return "Couldn't save the plan just now — try again in a moment."
     week = [s for s in saved.plan.get("week", []) if isinstance(s, dict) and s.get("date")]
     sent = len([s for s in plan.get("week", []) if isinstance(s, dict)])
     span = f" ({week[0]['date']} to {week[-1]['date']})" if week else ""
-    mode = "Replaced the stored week" if replace_week else f"Merged {sent} day(s) in"
-    result = f"{mode}. Stored week now holds {len(week)} session(s){span}."
+    if not plan and baseline is not None:
+        result = "Baseline stored."
+    else:
+        mode = "Replaced the stored week" if replace_week else f"Merged {sent} day(s) in"
+        result = f"{mode}. Stored week now holds {len(week)} session(s){span}."
     if baseline is not None and old_baseline and old_baseline != baseline:
         result += f'\nBaseline replaced — the old one said: "{old_baseline}"'
     return result
@@ -319,7 +315,7 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
     return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
 
 
-def handle_update_workout(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+def _update_workout(user_id: UUID, input_dict: dict, *, move_service) -> str:
     raw_date = str(input_dict.get("date", "")).strip()
     note = str(input_dict.get("note", "")).strip()
     if not note:
@@ -331,7 +327,7 @@ def handle_update_workout(user_id: UUID, input_dict: dict, now: datetime, *, mov
     try:
         workout = move_service.annotate_workout(user_id, on_date, note)
     except Exception:
-        _log.warning("update_workout failed", exc_info=True)
+        _log.warning("move_update workout failed", exc_info=True)
         return "Couldn't update that workout just now — try again in a moment."
     if workout is None:
         return f"Nothing recorded on {raw_date}. Check move_get history for the right date."
@@ -435,8 +431,8 @@ def _fmt_run_detail(detail: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def move_context_loader(move_service, goal_reader) -> ContextLoader:
-    """Loaded only when training is routed. Carries the coach persona + the goal +
-    the stored plan + THIS WEEK's real dates, so the coach speaks from reality and
+    """Loaded only when training is routed. Carries the role + the goal + the
+    stored plan + THIS WEEK's real dates, so the coach speaks from reality and
     never invents dates."""
     def loader(user_id: UUID, now: datetime) -> str | None:
         parts: list[str] = [MOVE_COACH_GUIDANCE]
@@ -467,7 +463,7 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
         # and factors it into how hard to push.
 
         # Always give the real calendar so runs land on real days — and use it to
-        # catch a stored week left entirely in the past (Sunday review skipped):
+        # catch a stored week left entirely in the past (weekly review skipped):
         # surface that loudly so the coach reviews + re-authors before anything else.
         try:
             week = move_service.current_week(now)
@@ -479,10 +475,8 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
             stored = [str(s.get("date", "")) for s in move_service.week_sessions(user_id) if s.get("date")]
             if stored and all(d < monday for d in stored):
                 parts.append(
-                    "THE STORED WEEK HAS PASSED (last planned day "
-                    + max(stored)
-                    + "). Hold the weekly review NOW: look at what was actually run, "
-                    "then author this week fresh from what you learned — before anything else."
+                    "THE STORED WEEK HAS PASSED (last planned day " + max(stored)
+                    + "). Review what was run, then author this week — before anything else."
                 )
         except Exception:
             _log.warning("training_context: week dates failed", exc_info=True)
@@ -544,15 +538,13 @@ def move_tools(move_service, sense_service=None) -> list[tuple[dict, Any]]:
     return [
         (MOVE_GET_TOOL,
          lambda uid, inp, now: handle_move_get(uid, inp, now, move_service=move_service)),
-        (SAVE_TRAINING_PLAN_TOOL,
-         lambda uid, inp, now: handle_save_training_plan(uid, inp, now, move_service=move_service)),
+        (MOVE_UPDATE_TOOL,
+         lambda uid, inp, now: handle_move_update(uid, inp, now, move_service=move_service)),
         (PUSH_TO_WATCH_TOOL,
          lambda uid, inp, now: handle_push_to_watch(uid, inp, now, move_service=move_service)),
         (SYNC_GARMIN_TOOL,
          lambda uid, inp, now: handle_sync_garmin(
              uid, inp, now, move_service=move_service, sense_service=sense_service)),
-        (UPDATE_WORKOUT_TOOL,
-         lambda uid, inp, now: handle_update_workout(uid, inp, now, move_service=move_service)),
     ]
 
 

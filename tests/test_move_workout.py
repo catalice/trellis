@@ -642,3 +642,77 @@ class TestSyncReportsReadiness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMoveUpdateFold(unittest.TestCase):
+    """15 Sep 2026: save_training_plan + update_workout folded into one write
+    door, move_update(what=plan|baseline|workout). The dispatcher must reach the
+    proven handlers and a bare baseline write must not touch the stored week."""
+
+    def _service(self):
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        from trellis.domain_move_service import MoveService
+        from trellis.domain_move_models import RunLog, TrainingPlan
+        from uuid import uuid4
+
+        w = RunLog(id=uuid4(), user_id=uuid4(), ran_on=dt.date(2026, 9, 14),
+                   note="Morning Running", distance_km=5.0, garmin_activity_id="a1",
+                   activity_type="running", user_note=None)
+
+        class _Repo:
+            def __init__(self):
+                self.plan = None
+                self.workouts = [w]
+            def get(self, user_id): return self.plan
+            def upsert(self, record):
+                self.plan = record
+                return record
+            def recent_workouts(self, user_id, *, limit): return self.workouts
+            def recent_runs(self, user_id, *, limit): return self.workouts
+            def set_user_note(self, user_id, activity_id, note):
+                import dataclasses
+                for i, x in enumerate(self.workouts):
+                    if x.garmin_activity_id == activity_id:
+                        self.workouts[i] = dataclasses.replace(x, user_note=note, note=f"{x.note} — {note}")
+                        return True
+                return False
+
+        class _Goals:
+            def list_training_goals(self, uid): return []
+
+        self.repo = _Repo()
+        self.user = w.user_id
+        return MoveService(self.repo, _Goals(), ZoneInfo("Europe/Madrid"))
+
+    def test_plan_then_baseline_keeps_week(self):
+        from datetime import datetime, timezone
+        from trellis.domain_move_tool import handle_move_update
+        svc = self._service()
+        now = datetime.now(timezone.utc)
+        out = handle_move_update(self.user, {"what": "plan", "plan": {
+            "arc": "base", "week": [{"date": "2026-09-15", "type": "easy", "detail": "5k"}]}},
+            now, move_service=svc)
+        self.assertIn("Merged 1 day(s) in", out)
+        out = handle_move_update(self.user, {"what": "baseline", "baseline": "Z2 ~7:00/km"},
+                                 now, move_service=svc)
+        self.assertEqual(out, "Baseline stored.")
+        self.assertEqual(self.repo.plan.baseline, "Z2 ~7:00/km")
+        self.assertEqual(len(self.repo.plan.plan["week"]), 1)
+
+    def test_workout_note_appends(self):
+        from datetime import datetime, timezone
+        from trellis.domain_move_tool import handle_move_update
+        svc = self._service()
+        out = handle_move_update(self.user, {"what": "workout", "date": "2026-09-14",
+                                             "note": "social run"},
+                                 datetime.now(timezone.utc), move_service=svc)
+        self.assertIn("social run", out)
+
+    def test_unknown_what(self):
+        from datetime import datetime, timezone
+        from trellis.domain_move_tool import handle_move_update
+        out = handle_move_update(self.user if hasattr(self, "user") else uuid.uuid4(),
+                                 {"what": "race"}, datetime.now(timezone.utc),
+                                 move_service=self._service())
+        self.assertIn("plan, baseline, or workout", out)

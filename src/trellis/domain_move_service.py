@@ -100,7 +100,7 @@ class MoveService:
         arc-note save wiped six days of stored week; the tool obeyed. Never
         again — in code, not in a prompt). arc replaces arc only when sent;
         incoming week days replace SAME-DATED days, all other stored days
-        survive. replace_week=True is the only way to drop days (the Sunday
+        survive. replace_week=True is the only way to drop days (the weekly
         full re-author)."""
         existing = self._repo.get(user_id)
         stored = dict(existing.plan) if existing and existing.plan else {}

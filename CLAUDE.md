@@ -243,13 +243,13 @@ Health and wellbeing tracking — the monitoring house (Mind).
 The running coach — a lean module (Claude + tools; coaching happens in the turn).
 
 **What it owns:**
-- Weekly training plans and sessions (`save_training_plan`, `move_get`)
+- Weekly training plans and sessions (`move_update`, `move_get`)
 - Garmin activities: push workouts to watch, read recent workouts, on-demand sync
 - Coaching judgment: what kind of week, how much load — Claude's, never hardcoded
 
 **The logbook (migration 017):** the watch's record IS the record. There is no
 separate runs table — `garmin_activities` holds every sport, and the user's words
-live in its `user_note` column (`update_workout` appends there). Sync's upsert
+live in its `user_note` column (`move_update what='workout'` appends there). Sync's upsert
 never names that column, so a resync structurally cannot touch their words. Runs
 are a filtered view (`recent_runs`) for baseline math; reviews read every sport
 (`recent_workouts`).
@@ -314,15 +314,15 @@ Two patterns, chosen by risk profile:
 |---|---|---|
 | **Dispatch read** `{house}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
 | **Dispatch write** `{house}_add` / `{house}_update` | Create/change verbs repeated across a house's entities | One door per verb (her call, 30 Aug — "we can always regress"). Detail lives in PER-FIELD descriptions tagged by entity, never one prose wall. The proven per-entity handlers stay behind the dispatch. log_state was the precedent: a union write that works. |
-| **Specific named write** `save_training_plan`, `push_to_watch`, `delete_entry` | Distinct acts and destructive acts | An act with its own risk profile keeps its own name — deletion must never be reachable by enum typo. |
+| **Specific named write** `push_to_watch`, `delete_entry` | Distinct acts and destructive acts | An act with its own risk profile keeps its own name — deletion must never be reachable by enum typo. |
 
-**All tools are always available** — routing never gates them. The current 19:
+**All tools are always available** — routing never gates them. The current 18:
 
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`, `pattern_response`
 - **Focus:** `focus_get`, `focus_add`, `focus_update`, `delete_entry`, `web_search`
 - **Sense:** `log_state`, `sense_get` (reads-are-context was the law until 9 months of data made history invisible — sense_get is the seeing-all door, reusing the Watcher's day-frame view)
 - **Learn:** `learn_get`, `learn_add` (dispatch pair; retrieval tests are conversation + one write)
-- **Move:** `move_get`, `save_training_plan`, `push_to_watch`, `sync_garmin`, `update_workout`
+- **Move:** `move_get`, `move_update`, `push_to_watch`, `sync_garmin`
 
 (Onboarding mode additionally wires `save_identity`.)
 
@@ -335,7 +335,7 @@ logs, propose the global fold.** If the middle rung misbehaves instead, fix or
 regress it first. Candidate riding the same review: `update_current_context` +
 `save_preferences` → one meta pair.
 
-**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 19 (sense_get added 5 Sep — her cycle history was invisible five weeks before her wedding; the fast mind now borrows the Watcher's eyes on demand. Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 18 (move folded 15 Sep — save_training_plan + update_workout → `move_update what=plan|baseline|workout`, her call; push_to_watch keeps its name as the act with its own risk. sense_get added 5 Sep — her cycle history was invisible five weeks before her wedding; the fast mind now borrows the Watcher's eyes on demand. Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 
@@ -395,7 +395,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - **Content belongs to Claude.** Never hardcode session content, coaching rules, or synthesis logic in Python.
 - **max_tokens too low truncates JSON silently.** Always set 16000+ for structured responses (on Sonnet 5, thinking shares the max_tokens cap).
 - **Preferences are rows.** One rule, one row, one id (migration 021) — add/list/update/remove individually; a new rule can never touch an old one. They project to Atlas/Brain/Preferences.md, where the user reviews them.
-- **Exactness ≠ permanence.** One exact prescription per session, but every prescription is re-chosen in the Sunday weekly review — never carried forward by default.
+- **Exactness ≠ permanence.** One exact prescription per session (her preference row, not prompt text — given options she'll overreach or always take the easy one), but every prescription is re-chosen in the weekly review — never carried forward by default. When the review happens is hers too (the check-in reminder), not the coach's.
 - **Don't revert a commit by amending.** Create a new commit.
 - **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.
 - **Never gate tools by routing.** Routing shapes context only.
