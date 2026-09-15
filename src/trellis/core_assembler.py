@@ -10,7 +10,7 @@ To add a domain: edit main.py only — nothing here changes.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 from uuid import UUID
 
@@ -201,7 +201,6 @@ class Assembler:
 
         tool_schemas, bound_handlers = self._build_tools(user_id, now, domains)
 
-        from datetime import timedelta
         turns = self._history.recent_window(
             user_id, since=now - timedelta(hours=_WINDOW_HOURS), cap=_WINDOW_CAP,
         )

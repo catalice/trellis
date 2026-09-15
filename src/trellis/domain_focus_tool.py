@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
@@ -309,6 +310,133 @@ def handle_brain_dump(
     return "\n".join(parts)
 
 
+@dataclass(frozen=True)
+class _FocusReads:
+    """Everything a read-view formatter may need — ONE shape for all views,
+    so the dispatch table stays a table and formatters stay swappable
+    (branch inputs aren't uniform: 'effort' needs a name, views use
+    different service subsets — the shared context absorbs that)."""
+    task_service: Any
+    goal_service: Any
+    capture_service: Any
+    effort_service: Any
+    reminder_service: Any
+    tz: Any
+
+
+def _view_tasks(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    tasks = ctx.task_service.list_open(user_id)
+    parked = ctx.task_service.list_parked(user_id)
+    if not tasks and not parked:
+        return "No open tasks."
+    overdue = [t for t in tasks if t.is_overdue(now)]
+    rest = [t for t in tasks if not t.is_overdue(now)]
+    lines = []
+    if overdue:
+        lines.append("OVERDUE:")
+        for t in overdue:
+            lines.append(f"  [{t.id}] {t.title} — due {_fmt_datetime(t.due_at, ctx.tz)} | {t.priority}/{t.energy}")
+    if rest:
+        lines.append("Open:")
+        for t in rest:
+            due = f" — due {_fmt_datetime(t.due_at, ctx.tz)}" if t.due_at else ""
+            lines.append(f"  [{t.id}] {t.title}{due} | {t.priority}/{t.energy}")
+    if parked:
+        lines.append("Parked (not now, on the shelf):")
+        for t in parked:
+            lines.append(f"  [{t.id}] {t.title}")
+    return "\n".join(lines)
+
+
+def _view_seeds(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    seeds = ctx.task_service.list_seeds(user_id)
+    if not seeds:
+        return "No seeds planted yet."
+    lines = ["Seeds (no obligation, pick what sparks):"]
+    for t in seeds:
+        lines.append(f"  [{t.id}] {t.title} | energy {t.energy}")
+    return "\n".join(lines)
+
+
+def _view_goals(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    goals = ctx.goal_service.list_active(user_id)
+    if not goals:
+        return "No active goals."
+    return "\n".join(f"  [{g.id}] {g.summary()}" for g in goals)
+
+
+def _view_inbox(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    captures = ctx.capture_service.list_unassigned(user_id)
+    if not captures:
+        return "Inbox is clear — no unassigned captures."
+    lines = [f"Unassigned captures ({len(captures)}):"]
+    for c in captures:
+        date_str = c.created_at.astimezone(ctx.tz).strftime("%d %b")
+        summary = c.summary or c.raw[:60]
+        lines.append(f"  [{c.id}] {date_str} — {summary}")
+    return "\n".join(lines)
+
+
+def _view_efforts(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    efforts = ctx.effort_service.list_all(user_id)
+    if not efforts:
+        return "No efforts yet. They grow from saved research and graduated seeds."
+    lines = []
+    for e in efforts:
+        lines.append(f"  [{e.id}] {e.title} ({e.intensity.value})")
+    return "\n".join(lines)
+
+
+def _view_effort(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    title = str(input_dict.get("name", "")).strip()
+    if not title:
+        return "name is required for what='effort'."
+    page = ctx.effort_service.page(user_id, title, ctx.capture_service)
+    if page is None:
+        return f"No effort called '{title}'. focus_get what='efforts' lists them."
+    effort, captures = page
+    lines = [f"Effort: {effort.title} ({effort.intensity.value}) [{effort.id}]"]
+    if effort.notes:
+        lines.append(effort.notes)
+    if not captures:
+        lines.append("Nothing filed on it yet.")
+    for c in captures:
+        when = c.created_at.astimezone(ctx.tz).strftime("%d %b")
+        body = (c.synthesis or c.raw or "").strip()
+        lines.append(f"  [{c.id}] {when} — {body[:300]}")
+    return "\n".join(lines)
+
+
+def _view_reminders(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    upcoming = ctx.reminder_service.all_scheduled(user_id)
+    recent = [r for r in ctx.reminder_service.recent(user_id, limit=10) if r.status != "scheduled"]
+    lines = []
+    if upcoming:
+        lines.append("Scheduled:")
+        lines.extend(
+            f"  [{r.id}] {r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)}"
+            + (f" (repeats {r.recurrence})" if r.recurrence else "")
+            for r in upcoming
+        )
+    if recent:
+        lines.append("Recent (delivery status):")
+        lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)} — {r.status}" for r in recent)
+    return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
+
+
+# The read views, one formatter per option. The unknown-option message derives
+# from these keys, so it can never drift from what actually exists.
+_GET_VIEWS: dict[str, Callable[[UUID, dict, datetime, _FocusReads], str]] = {
+    "tasks": _view_tasks,
+    "seeds": _view_seeds,
+    "goals": _view_goals,
+    "inbox": _view_inbox,
+    "efforts": _view_efforts,
+    "effort": _view_effort,
+    "reminders": _view_reminders,
+}
+
+
 def handle_focus_get(
     user_id: UUID,
     input_dict: dict,
@@ -321,102 +449,19 @@ def handle_focus_get(
     reminder_service,
     tz,
 ) -> str:
+    ctx = _FocusReads(
+        task_service=task_service,
+        goal_service=goal_service,
+        capture_service=capture_service,
+        effort_service=effort_service,
+        reminder_service=reminder_service,
+        tz=tz,
+    )
     what = str(input_dict.get("what", ""))
-
-    if what == "tasks":
-        tasks = task_service.list_open(user_id)
-        parked = task_service.list_parked(user_id)
-        if not tasks and not parked:
-            return "No open tasks."
-        overdue = [t for t in tasks if t.is_overdue(now)]
-        rest = [t for t in tasks if not t.is_overdue(now)]
-        lines = []
-        if overdue:
-            lines.append("OVERDUE:")
-            for t in overdue:
-                lines.append(f"  [{t.id}] {t.title} — due {_fmt_datetime(t.due_at, tz)} | {t.priority}/{t.energy}")
-        if rest:
-            lines.append("Open:")
-            for t in rest:
-                due = f" — due {_fmt_datetime(t.due_at, tz)}" if t.due_at else ""
-                lines.append(f"  [{t.id}] {t.title}{due} | {t.priority}/{t.energy}")
-        if parked:
-            lines.append("Parked (not now, on the shelf):")
-            for t in parked:
-                lines.append(f"  [{t.id}] {t.title}")
-        return "\n".join(lines)
-
-    if what == "seeds":
-        seeds = task_service.list_seeds(user_id)
-        if not seeds:
-            return "No seeds planted yet."
-        lines = ["Seeds (no obligation, pick what sparks):"]
-        for t in seeds:
-            lines.append(f"  [{t.id}] {t.title} | energy {t.energy}")
-        return "\n".join(lines)
-
-    if what == "goals":
-        goals = goal_service.list_active(user_id)
-        if not goals:
-            return "No active goals."
-        return "\n".join(f"  [{g.id}] {g.summary()}" for g in goals)
-
-    if what == "inbox":
-        captures = capture_service.list_unassigned(user_id)
-        if not captures:
-            return "Inbox is clear — no unassigned captures."
-        lines = [f"Unassigned captures ({len(captures)}):"]
-        for c in captures:
-            date_str = c.created_at.astimezone(tz).strftime("%d %b")
-            summary = c.summary or c.raw[:60]
-            lines.append(f"  [{c.id}] {date_str} — {summary}")
-        return "\n".join(lines)
-
-    if what == "efforts":
-        efforts = effort_service.list_all(user_id)
-        if not efforts:
-            return "No efforts yet. They grow from saved research and graduated seeds."
-        lines = []
-        for e in efforts:
-            lines.append(f"  [{e.id}] {e.title} ({e.intensity.value})")
-        return "\n".join(lines)
-
-    if what == "effort":
-        title = str(input_dict.get("name", "")).strip()
-        if not title:
-            return "name is required for what='effort'."
-        page = effort_service.page(user_id, title, capture_service)
-        if page is None:
-            return f"No effort called '{title}'. focus_get what='efforts' lists them."
-        effort, captures = page
-        lines = [f"Effort: {effort.title} ({effort.intensity.value}) [{effort.id}]"]
-        if effort.notes:
-            lines.append(effort.notes)
-        if not captures:
-            lines.append("Nothing filed on it yet.")
-        for c in captures:
-            when = c.created_at.astimezone(tz).strftime("%d %b")
-            body = (c.synthesis or c.raw or "").strip()
-            lines.append(f"  [{c.id}] {when} — {body[:300]}")
-        return "\n".join(lines)
-
-    if what == "reminders":
-        upcoming = reminder_service.all_scheduled(user_id)
-        recent = [r for r in reminder_service.recent(user_id, limit=10) if r.status != "scheduled"]
-        lines = []
-        if upcoming:
-            lines.append("Scheduled:")
-            lines.extend(
-                f"  [{r.id}] {r.label} @ {_fmt_datetime(r.remind_at, tz)}"
-                + (f" (repeats {r.recurrence})" if r.recurrence else "")
-                for r in upcoming
-            )
-        if recent:
-            lines.append("Recent (delivery status):")
-            lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at, tz)} — {r.status}" for r in recent)
-        return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
-
-    return f"Unknown option: {what!r}. Use: tasks, seeds, goals, inbox, efforts, effort, reminders."
+    view = _GET_VIEWS.get(what)
+    if view is None:
+        return f"Unknown option: {what!r}. Use: " + ", ".join(_GET_VIEWS) + "."
+    return view(user_id, input_dict, now, ctx)
 
 
 def handle_create_task(
@@ -468,7 +513,9 @@ def handle_create_task(
                 "If that makes this a duplicate, ask them which to drop."
             )
     except Exception:
-        pass
+        # Best-effort by design, but never mute: a persistently failing dup
+        # check would otherwise vanish without trace.
+        _log.debug("duplicate check failed", exc_info=True)
     return result
 
 
@@ -664,7 +711,9 @@ def handle_add_goal(
                 "If that makes this a duplicate, ask them which to drop."
             )
     except Exception:
-        pass
+        # Best-effort by design, but never mute: a persistently failing dup
+        # check would otherwise vanish without trace.
+        _log.debug("duplicate check failed", exc_info=True)
     return result
 
 
