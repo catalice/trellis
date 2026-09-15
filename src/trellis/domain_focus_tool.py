@@ -46,7 +46,8 @@ FOCUS_ADD_TOOL: dict = {
                 "enum": ["task", "goal", "reminder", "effort_note"],
                 "description": (
                     "task: todo or seed (kind field). goal: any goal. "
-                    "reminder: a timed nudge, one-off or recurring. "
+                    "reminder: a timed nudge, one-off or recurring — or a check-in "
+                    "Trellis runs itself (check_in=true). "
                     "effort_note: keep content on an effort page (or file an "
                     "existing capture there via capture_id)."
                 ),
@@ -91,6 +92,17 @@ FOCUS_ADD_TOOL: dict = {
                 ),
             },
             "task_id": {"type": "string", "description": "reminder: optionally link to an existing task."},
+            "check_in": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "reminder: false = their words posted back to them at that time. "
+                    "true = Trellis wakes at that time and runs a turn with the label as ITS "
+                    "instruction, then speaks first — 'check in with me about the week ahead', "
+                    "'ask me how the run went'. Anything phrased as something Trellis should DO "
+                    "at that time is a check-in; 'remind me to…' is not."
+                ),
+            },
             "recurrence": {
                 "type": "string", "enum": ["daily", "weekly", "monthly", "yearly"],
                 "description": "reminder: how it repeats ('every Sunday evening' -> weekly with remind_at on the next Sunday). Omit for a one-off.",
@@ -414,7 +426,7 @@ def _view_reminders(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusR
     if upcoming:
         lines.append("Scheduled:")
         lines.extend(
-            f"  [{r.id}] {r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)}"
+            f"  [{r.id}] {'check-in: ' if r.kind == 'check_in' else ''}{r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)}"
             + (f" (repeats {r.recurrence})" if r.recurrence else "")
             for r in upcoming
         )
@@ -638,9 +650,12 @@ def handle_set_reminder(
         )
     except Exception:
         dup = None
-    reminder = reminder_service.set(user_id, label, remind_at, task_id=task_id, recurrence=recurrence, now=now)
+    kind = "check_in" if input_dict.get("check_in") else "remind"
+    reminder = reminder_service.set(user_id, label, remind_at, task_id=task_id,
+                                    recurrence=recurrence, kind=kind, now=now)
     repeats = f", repeats {reminder.recurrence}" if reminder.recurrence else ""
-    result = f"Reminder set: {reminder.label} @ {_fmt_datetime(reminder.remind_at, tz)}{repeats} [{reminder.id}]"
+    noun = "Check-in" if reminder.kind == "check_in" else "Reminder"
+    result = f"{noun} set: {reminder.label} @ {_fmt_datetime(reminder.remind_at, tz)}{repeats} [{reminder.id}]"
     if dup is not None:
         dup_repeats = f", repeats {dup.recurrence}" if dup.recurrence else ""
         result += (

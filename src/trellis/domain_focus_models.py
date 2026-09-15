@@ -212,6 +212,7 @@ class Reminder:
     status: str                           # scheduled | sent | cancelled
     task_id: UUID | None = None
     recurrence: str | None = None         # daily | weekly | monthly | yearly; None = one-off
+    kind: str = "remind"                  # remind = label posted verbatim | check_in = wakes the oracle
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

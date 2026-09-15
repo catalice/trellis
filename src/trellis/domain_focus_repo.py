@@ -377,14 +377,14 @@ class PostgresReminderRepository:
                     """
                     INSERT INTO reminders (
                         id, user_id, label, remind_at, status,
-                        task_id, recurrence, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        task_id, recurrence, kind, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         reminder.id, reminder.user_id, reminder.label,
                         reminder.remind_at, reminder.status,
                         reminder.task_id, reminder.recurrence,
-                        reminder.created_at,
+                        reminder.kind, reminder.created_at,
                     ),
                 )
         return reminder
@@ -589,6 +589,7 @@ def _reminder(row: dict) -> Reminder:
         status=row["status"],
         task_id=row.get("task_id"),
         recurrence=row.get("recurrence"),
+        kind=row.get("kind") or "remind",
         created_at=row["created_at"],
     )
 

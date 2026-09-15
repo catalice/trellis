@@ -19,10 +19,35 @@ Transcriber = Callable[[bytes], str]
 
 # NOTE: check-ins are NOT hardcoded here. When the user wants a morning/evening
 # check-in or a weekly review, the oracle creates a real recurring reminder
-# (set_reminder with recurrence daily/weekly/monthly/yearly)
+# (focus_add what='reminder', recurrence daily/weekly/monthly/yearly)
 # — persisted, user-owned, editable, and surviving restarts. There is deliberately
 # no baked-in ping schedule; that was removed because it wasn't tied to the user's
 # choice and silently died on restart.
+#
+# Two kinds fire from the same loop (her design, 15 Sep 2026): kind='remind'
+# posts the label back verbatim, no model; kind='check_in' runs a full oracle
+# turn with the label as Trellis's own instruction and sends what it writes —
+# the first time Trellis speaks unprompted with generated words. It speaks
+# once; then it's their turn. No follow-up nagging.
+
+
+def _check_in_message(label: str) -> str:
+    """What the oracle receives when a check-in fires. It arrives on the user
+    side of the conversation, so it says plainly that it isn't them speaking."""
+    return (
+        "[Scheduled check-in. This is the instruction they set for you to run "
+        f"at this time, not a message from them: \"{label}\". "
+        "Read what you need, then speak to them first — as if you'd walked in.]"
+    )
+
+
+class _ChatShim:
+    """Just enough of a Chat for the typing keepalive when there's no Update."""
+    def __init__(self, bot, chat_id) -> None:
+        self._bot, self._chat_id = bot, chat_id
+
+    async def send_action(self, action: str) -> None:
+        await self._bot.send_chat_action(chat_id=self._chat_id, action=action)
 
 
 def make_transcriber(groq_client, model: str = "whisper-large-v3-turbo") -> Transcriber:
@@ -241,18 +266,62 @@ class TelegramTrellis:
                 self.reminders.upcoming, user_id, hours=0, now=now
             )
             for reminder in due:
-                sent = await application.bot.send_message(
-                    chat_id=telegram_user_id,
-                    text=f"Reminder: {reminder.label}",
-                )
-                self._record_msg(sent)
+                # Marked sent BEFORE delivery for both kinds: a check-in that
+                # fails mid-turn must not re-fire every 15s, one oracle call
+                # a time, until it succeeds.
                 await asyncio.to_thread(self.reminders.mark_sent, reminder.id)
                 if reminder.recurrence:
                     await asyncio.to_thread(
                         self.reminders.reschedule, user_id, reminder, now=now
                     )
+                if reminder.kind == "check_in":
+                    await self._run_check_in(application, user_id, telegram_user_id, reminder.label)
+                else:
+                    sent = await application.bot.send_message(
+                        chat_id=telegram_user_id,
+                        text=f"Reminder: {reminder.label}",
+                    )
+                    self._record_msg(sent)
                 delivered += 1
         return delivered
+
+    async def _run_check_in(self, application: Application, user_id, telegram_user_id, label: str) -> None:
+        """A reminder that wakes Trellis instead of the user: one ordinary
+        oracle turn, the label as its instruction, the reply sent as-is. Takes
+        the user's turn lock so it can't interleave with a message they're
+        mid-sending. Lands in history like any turn — the user side is marked
+        as the scheduled instruction, so the next turn knows who spoke first."""
+        lock = self._turn_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            typing = asyncio.create_task(self._typing_keepalive(
+                _ChatShim(application.bot, telegram_user_id)
+            ))
+            try:
+                reply = await asyncio.to_thread(
+                    self.assembler.handle_turn, user_id, _check_in_message(label)
+                )
+            except Exception:
+                self.logger.exception("Check-in turn failed for user %s", user_id)
+                reply = (f"I was going to check in ({label}) but something went wrong "
+                         "on my side — say the word and I'll do it now.")
+            finally:
+                typing.cancel()
+                try:
+                    await typing
+                except (asyncio.CancelledError, Exception):
+                    pass
+            for chunk in _chunk_message(reply or ""):
+                if not chunk.strip():
+                    continue
+                try:
+                    self._record_msg(await application.bot.send_message(
+                        chat_id=telegram_user_id, text=chunk, parse_mode="Markdown"))
+                except Exception:
+                    try:
+                        self._record_msg(await application.bot.send_message(
+                            chat_id=telegram_user_id, text=chunk))
+                    except Exception:
+                        self.logger.warning("Failed to deliver check-in", exc_info=True)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(

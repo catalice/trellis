@@ -189,7 +189,10 @@ Executive function — the recording house.
 **What it owns:**
 - Brain dumps (raw text in, synthesised + triaged out)
 - Ideas (wild, half-formed, philosophical — all valid)
-- Tasks and reminders
+- Tasks and reminders. A reminder has a `kind` (migration 025, her design 15 Sep 2026):
+  `remind` posts the label back verbatim, no model; `check_in` wakes the oracle at that
+  time — the label is Trellis's own instruction, it runs an ordinary turn and speaks
+  first. What a check-in covers and when is NEVER coded; the user words the reminder.
 - Goals (a goal is just a goal — her call, 10 Sep 2026. `label` is an optional free-text tag she invents; 'race'/'aerobic'/'strength' labels feed the coach by convention, not constraint)
 - Captures (links, quotes, references) and Efforts (project pages built up over time)
 - Periodic cleanup sessions ("what have I got, let's organise it") — the inbox

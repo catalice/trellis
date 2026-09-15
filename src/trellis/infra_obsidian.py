@@ -235,7 +235,8 @@ class ObsidianVault:
                 parts.append("## Reminders\n")
                 for r in upcoming_reminders:
                     recur = f" ({r.recurrence})" if r.recurrence else ""
-                    parts.append(f"- 🔔 {r.label} — {self._fmt(r.remind_at)}{recur}")
+                    icon = "🗣️" if getattr(r, "kind", "remind") == "check_in" else "🔔"
+                    parts.append(f"- {icon} {r.label} — {self._fmt(r.remind_at)}{recur}")
                 parts.append("")
             if completed:
                 parts.append("## Recently completed\n")

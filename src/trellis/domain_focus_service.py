@@ -556,6 +556,7 @@ class ReminderService:
         *,
         task_id: UUID | None = None,
         recurrence: str | None = None,
+        kind: str = "remind",
         now: datetime,
     ) -> Reminder:
         reminder = self._repo.save(Reminder(
@@ -566,6 +567,7 @@ class ReminderService:
             status="scheduled",
             task_id=task_id,
             recurrence=recurrence,
+            kind=kind,
             created_at=now,
         ))
         self._vault_refresh(user_id)
@@ -607,6 +609,7 @@ class ReminderService:
             _next_occurrence(reminder.remind_at, reminder.recurrence or "daily", now),
             task_id=reminder.task_id,
             recurrence=reminder.recurrence,
+            kind=reminder.kind,
             now=now,
         )
 
