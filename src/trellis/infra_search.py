@@ -14,6 +14,8 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 
 _log = logging.getLogger(__name__)
@@ -165,13 +167,24 @@ def pubmed_search(query: str, *, max_results: int = 5) -> SearchResponse | None:
     return SearchResponse(query=query, answer=None, results=tuple(results))
 
 
-def guardian_search(query: str, api_key: str, *, max_results: int = 5) -> SearchResponse | None:
-    """The Guardian Open Platform — quality journalism, structured, citable."""
+_GUARDIAN_NEWS_DAYS = 3  # news means NOW: today's stories, not the archive
+
+
+def guardian_search(query: str, api_key: str, *, max_results: int = 5,
+                    days: int = _GUARDIAN_NEWS_DAYS, now: datetime | None = None) -> SearchResponse | None:
+    """The Guardian Open Platform — quality journalism, structured, citable.
+
+    Newest-first within the last `days`. With a query the API's default order
+    is RELEVANCE over the whole archive — "UK news today" surfaced June pieces
+    about the Today programme (15 Sep 2026) and the model concluded the
+    source was broken."""
+    since = ((now or datetime.now(timezone.utc)) - timedelta(days=days)).date().isoformat()
     try:
         resp = httpx.get(
             "https://content.guardianapis.com/search",
             params={"q": query[:300], "api-key": api_key,
                     "page-size": max(1, min(10, max_results)),
+                    "order-by": "newest", "from-date": since,
                     "show-fields": "trailText"},
             timeout=_TIMEOUT,
         )

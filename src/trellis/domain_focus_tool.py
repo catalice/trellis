@@ -840,7 +840,12 @@ WEB_SEARCH_TOOL: dict = {
             "query": {"type": "string", "description": "What to search for. Be specific. For pubmed, use topic terms (\"lisdexamfetamine menstrual cycle\"), not sentences."},
             "source": {
                 "type": "string", "enum": ["web", "news", "pubmed", "scholar", "trials"],
-                "description": "Where to look. Default web.",
+                "description": (
+                    "Where to look. Default web. Use news for anything happening now: "
+                    "headlines, today's stories, \"what's going on in X\". News is "
+                    "newest-first from the last few days; for background older than "
+                    "that, use web."
+                ),
             },
         },
         "required": ["query"],
