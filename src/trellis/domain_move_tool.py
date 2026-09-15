@@ -45,9 +45,11 @@ MOVE_GET_TOOL: dict = {
                     "watch: the workouts actually in their Garmin library right now — CHECK this "
                     "before claiming anything is or isn't on the watch. "
                     "run_detail: one recent workout from Garmin — ANY activity type (0 = most recent, "
-                    "even if it's strength, not a run). Runs get a per-split/lap breakdown (pace + HR "
-                    "per rep) so you can see how the intervals/pacing actually went; other workouts "
-                    "get duration/HR/calories. Use the 'which' field to pick which recent workout. "
+                    "even if it's strength, not a run). THE review read: runs get the running portion "
+                    "(warm-up/cool-down excluded) plus the lap-by-lap breakdown (pace + HR per km or "
+                    "rep) — the history row's overall average blends the walks in, so never review a "
+                    "run from history alone. Other workouts get duration/HR/calories. Use 'which' to "
+                    "pick which recent workout. "
                     "(Readiness/recovery — sleep, HRV, body battery — is in your context every turn; "
                     "health lives in the Sense room, the coach borrows it.)"
                 ),
@@ -336,7 +338,9 @@ def handle_update_workout(user_id: UUID, input_dict: dict, now: datetime, *, mov
     return f"Workout on {raw_date} updated: {workout.note}"
 
 
-def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+def handle_sync_garmin(
+    user_id: UUID, input_dict: dict, now: datetime, *, move_service, sense_service=None,
+) -> str:
     try:
         result = move_service.sync_garmin(user_id, now=now)
     except RuntimeError as exc:
@@ -351,7 +355,20 @@ def handle_sync_garmin(user_id: UUID, input_dict: dict, now: datetime, *, move_s
     if result.get("health_through"):
         days = result.get("health_records")
         bits.append(f"health up to {result['health_through']}" + (f" ({days} day(s))" if days else ""))
-    return "Synced Garmin — " + (", ".join(bits) if bits else "done") + "."
+    out = "Synced Garmin — " + (", ".join(bits) if bits else "done") + "."
+    # The fresh numbers ride back on the receipt: a sync that reports "done"
+    # without them left the model quoting the pre-sync figure (15 Sep, body
+    # battery 17 vs the 71 that had just landed). Sense owns the data; Move
+    # borrows it — same _fmt_health as the context line, so one truth path.
+    if sense_service is not None:
+        try:
+            from trellis.domain_sense_tool import _fmt_health
+            line = _fmt_health(sense_service.recent_health(user_id, now=now))
+            if line:
+                out += f"\nReadiness now: {line}"
+        except Exception:
+            _log.warning("sync_garmin: readiness readout failed", exc_info=True)
+    return out
 
 
 
@@ -370,6 +387,14 @@ def _fmt_run_detail(detail: dict) -> str:
     if o.get("max_hr"):
         bits.append(f"max HR {o['max_hr']}")
     lines = [f"{head} — " + ", ".join(bits) if bits else head]
+    running = detail.get("running")
+    if running:
+        r = [f"Running portion (warm-up/cool-down excluded): {running['time']}"]
+        if running.get("distance_km") is not None:
+            r.append(f"{running['distance_km']}km")
+        if running.get("avg_hr"):
+            r.append(f"avg HR {running['avg_hr']}")
+        lines.append(", ".join(r) + " — judge the run on this, not the overall average")
     splits = detail.get("splits") or []
     if splits:
         aggregated = any(s.get("count") for s in splits)
@@ -515,7 +540,7 @@ MOVE_ROOMS: list[str] = [
 # Registration factory
 # ---------------------------------------------------------------------------
 
-def move_tools(move_service) -> list[tuple[dict, Any]]:
+def move_tools(move_service, sense_service=None) -> list[tuple[dict, Any]]:
     return [
         (MOVE_GET_TOOL,
          lambda uid, inp, now: handle_move_get(uid, inp, now, move_service=move_service)),
@@ -524,7 +549,8 @@ def move_tools(move_service) -> list[tuple[dict, Any]]:
         (PUSH_TO_WATCH_TOOL,
          lambda uid, inp, now: handle_push_to_watch(uid, inp, now, move_service=move_service)),
         (SYNC_GARMIN_TOOL,
-         lambda uid, inp, now: handle_sync_garmin(uid, inp, now, move_service=move_service)),
+         lambda uid, inp, now: handle_sync_garmin(
+             uid, inp, now, move_service=move_service, sense_service=sense_service)),
         (UPDATE_WORKOUT_TOOL,
          lambda uid, inp, now: handle_update_workout(uid, inp, now, move_service=move_service)),
     ]

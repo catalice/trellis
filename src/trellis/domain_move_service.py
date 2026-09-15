@@ -258,7 +258,11 @@ class MoveService:
                 splits = _extract_splits(detail)
         except Exception:
             _log.warning("review_run: detail fetch/parse failed", exc_info=True)
-        return {"overall": overall, "splits": splits}
+        running = running_portion(splits) if splits else None
+        for e in splits:
+            e.pop("_secs", None)
+            e.pop("_dist_m", None)
+        return {"overall": overall, "splits": splits, "running": running}
 
     def watch_workouts(self, user_id: UUID, *, limit: int = 15) -> list[dict]:
         """What's actually in their Garmin workout library (newest first) — so
@@ -338,6 +342,15 @@ def _extract_splits(detail: Any) -> list[dict]:
     ]
     if structured:
         rows = structured
+        # A single-step workout (one INTERVAL_ACTIVE spanning the whole run —
+        # every easy/long run pushed to the watch) is one row: right for
+        # intervals, blind for a steady run. The per-km laps carry the story
+        # there (14 Sep: 141/160/155/158 on a zone-2 run, invisible as "work
+        # 30:00 HR 153"). Use the laps whenever the structure holds ≤1 effort.
+        efforts = [r for r in structured if _split_label(r.get("type") or r.get("splitType")) == "work"]
+        laps = _lap_rows(detail)
+        if len(efforts) <= 1 and len(laps) > len(structured):
+            rows = laps
     out: list[dict] = []
     for i, row in enumerate(rows[:_MAX_SPLITS], start=1):
         if not isinstance(row, dict):
@@ -351,6 +364,11 @@ def _extract_splits(detail: Any) -> list[dict]:
         raw_type = row.get("type") or row.get("splitType")
         if raw_type:
             entry["type"] = _split_label(raw_type)
+        elif row.get("intensityType"):
+            # Plain lap payloads (lapDTOs) carry their label here — WARMUP /
+            # ACTIVE / COOLDOWN / REST. Unread until 15 Sep: every lap reached
+            # the coach untyped, so a warm-up walk and a run looked the same.
+            entry["type"] = _intensity_label(row["intensityType"])
         count = _num(row, "noOfSplits")
         if count and count > 1:
             entry["count"] = int(count)
@@ -371,6 +389,8 @@ def _extract_splits(detail: Any) -> list[dict]:
             entry["max_hr"] = int(max_hr)
         if secs:
             entry["_secs"] = secs
+        if dist_m:
+            entry["_dist_m"] = dist_m
         # A type label alone isn't a split — keep only rows carrying a metric.
         if any(k in entry for k in ("distance_km", "time", "pace", "avg_hr", "max_hr")):
             out.append(entry)
@@ -381,9 +401,46 @@ def _extract_splits(detail: Any) -> list[dict]:
     if len(out) > 3 and total:
         out = [e for e in out if e.get("_secs", 0) < 0.9 * (total - e.get("_secs", 0))]
     for n, e in enumerate(out, start=1):
-        e.pop("_secs", None)
         e["i"] = n
     return out
+
+
+_NOT_RUNNING = {"warmup", "cooldown", "warm up", "cool down"}
+
+
+def running_portion(splits: list[dict]) -> dict | None:
+    """The run WITHOUT its warm-up and cool-down: distance, time, and a
+    duration-weighted average HR over the running segments. A fact, so it's
+    Python's: the overall average blends the walks in, and "your HR was 152"
+    for a session that was mostly in zone 3 came from exactly that blend.
+    None if the splits carry no usable labels or HR."""
+    def _is_walk(r: dict) -> bool:
+        return (r.get("type") or "").lower() in _NOT_RUNNING
+    if not any(_is_walk(r) for r in splits):
+        # No warm-up/cool-down labelled at all — nothing to strip, no claim to make.
+        return None
+    rows = [r for r in splits if r.get("_secs") and not _is_walk(r)]
+    if not rows:
+        return None
+    secs = sum(r["_secs"] for r in rows)
+    dist = sum(r.get("_dist_m", 0) for r in rows)
+    hr_rows = [r for r in rows if r.get("avg_hr")]
+    out: dict[str, Any] = {"segments": len(rows), "time": _mmss(secs)}
+    if dist:
+        out["distance_km"] = round(dist / 1000, 2)
+    if hr_rows:
+        out["avg_hr"] = int(round(
+            sum(r["avg_hr"] * r["_secs"] for r in hr_rows) / sum(r["_secs"] for r in hr_rows)
+        ))
+    return out
+
+
+def _intensity_label(raw: Any) -> str:
+    t = str(raw).upper()
+    return {
+        "ACTIVE": "run", "INTERVAL": "work", "WARMUP": "warmup",
+        "COOLDOWN": "cooldown", "REST": "recovery", "RECOVERY": "recovery",
+    }.get(t, t.lower().replace("_", " "))
 
 
 def _split_label(raw_type: Any) -> str:
@@ -412,6 +469,14 @@ def _split_rows(detail: Any) -> list:
         rows = _as_split_list(val)
         if rows:
             return rows
+    return []
+
+
+def _lap_rows(detail: Any) -> list:
+    """The plain lap list (lapDTOs) specifically — the km-by-km timeline."""
+    for val in (getattr(detail, "splits", None), (getattr(detail, "raw", None) or {}).get("splits")):
+        if isinstance(val, dict) and isinstance(val.get("lapDTOs"), list):
+            return [r for r in val["lapDTOs"] if isinstance(r, dict)]
     return []
 
 

@@ -230,6 +230,19 @@ class TestHealthStaleness:
         health = svc.recent_health(UID)
         assert "stale_days" not in health
 
+    def test_body_battery_is_the_level_not_the_days_max(self):
+        """15 Sep: the line quoted the day's MAXIMUM as 'body battery' — 99 on an
+        evening she was at 15. The level is the last reading; the peak is context."""
+        from trellis.domain_sense_tool import _fmt_health
+        line = _fmt_health({"date": "2026-09-14", "body_battery_end": 15, "body_battery_high": 99})
+        assert "body battery 15 as of last watch sync, peaked at 99" in line
+        assert "body battery 99 as" not in line
+
+    def test_body_battery_falls_back_to_max_when_no_end(self):
+        from trellis.domain_sense_tool import _fmt_health
+        line = _fmt_health({"date": "2026-09-14", "body_battery_high": 85})
+        assert "body battery 85 as of last watch sync" in line and "peaked" not in line
+
 
 class TestCycleSummary:
     """5 Sep: nine months of cycle history was invisible to the fast mind five

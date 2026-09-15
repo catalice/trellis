@@ -245,6 +245,71 @@ class TestOracleSilentFinish:
         assert result.text == "All done!"
 
 
+class TestOracleDeliversEveryStep:
+    """The 15 Sep 'in the message I sent above' bug: the model answered in FULL
+    and called log_state in the same step; only the final step's text shipped,
+    so the answer existed in the model's history and never reached the user —
+    the follow-up then read 'as I laid out above'. Every step's text ships."""
+
+    _Resp = TestOracleSilentFinish._Resp
+    _Block = TestOracleSilentFinish._Block
+    _oracle = TestOracleSilentFinish._oracle
+
+    def _tool(self):
+        return self._Block(type="tool_use", name="log_state", id="t1", input={"text": "anxious"})
+
+    def test_pre_tool_text_is_delivered_before_final_text(self):
+        oracle = self._oracle([
+            self._Resp("tool_use", [self._Block(type="text", text="Well done for running."), self._tool()]),
+            self._Resp("end_turn", [self._Block(type="text", text="Logged the mood too.")]),
+        ])
+        result = oracle.run("sys", [{"role": "user", "content": "I ran! mood anxious"}],
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+        assert result.text == "Well done for running.\n\nLogged the mood too."
+
+    def test_exact_restatement_after_tool_is_not_doubled(self):
+        oracle = self._oracle([
+            self._Resp("tool_use", [self._Block(type="text", text="Well done."), self._tool()]),
+            self._Resp("end_turn", [self._Block(type="text", text="Well done.")]),
+        ])
+        result = oracle.run("sys", [{"role": "user", "content": "I ran!"}],
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+        assert result.text == "Well done."
+
+    def test_pre_tool_text_then_silence_needs_no_nudge(self):
+        """The model spoke, then called a tool, then ended silently: the user
+        already has the words — no nudge call, the spoken text ships."""
+        oracle = self._oracle([
+            self._Resp("tool_use", [self._Block(type="text", text="Logged, and well done."), self._tool()]),
+            self._Resp("end_turn", []),
+        ])
+        result = oracle.run("sys", [{"role": "user", "content": "I ran!"}],
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+        assert result.text == "Logged, and well done."
+
+    def test_rider_tells_the_model_its_earlier_text_ships(self):
+        seen: list[dict] = []
+
+        class Msgs:
+            def __init__(self, resps): self._r = list(resps)
+            def create(self, **kw):
+                seen.append(kw)
+                return self._r.pop(0)
+
+        class Client:
+            def __init__(self, resps): self.messages = Msgs(resps)
+
+        from trellis.core_oracle import Oracle
+        oracle = Oracle(client=Client([
+            self._Resp("tool_use", [self._Block(type="text", text="Answer."), self._tool()]),
+            self._Resp("end_turn", [self._Block(type="text", text="More.")]),
+        ]), model="test")
+        oracle.run("sys", [{"role": "user", "content": "q"}],
+                   tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "ok"})
+        rider = seen[1]["messages"][-1]["content"][-1]["text"]
+        assert "WILL reach them" in rider and "don't point them at it" in rider
+
+
 class TestAnswerCheckRetired:
     """Item 29's gate was RETIRED 2 Sep 2026: near-silent for weeks, then it
     degraded replies (leaked its ACTIONS/DRAFT scaffold to the user, invented

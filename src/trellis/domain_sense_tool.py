@@ -362,12 +362,16 @@ def _fmt_health(health: "dict | None") -> "str | None":
         if health.get("hrv_status"):
             h += f" ({health['hrv_status']})"
         bits.append(h)
-    if health.get("body_battery_high") is not None:
-        # "was … as of" is deliberate: the wire between watch and Garmin can lag
-        # invisibly, so the number must never be phrasable as the current level.
-        bits.append(
-            f"body battery was {health['body_battery_high']} as of last watch sync"
-        )
+    bb_now, bb_high = health.get("body_battery_end"), health.get("body_battery_high")
+    if bb_now is not None or bb_high is not None:
+        # The LEVEL is the last reading of the day (body_battery_end) — the day's
+        # maximum is what they woke with, not where they are. Quoting the max as
+        # "your body battery" read 99 on an evening they were at 15 (15 Sep).
+        # "as of last watch sync" is deliberate: the wire between watch and
+        # Garmin can lag invisibly, so it must never be phrasable as "now".
+        level = bb_now if bb_now is not None else bb_high
+        peak = f", peaked at {bb_high}" if bb_high is not None and bb_high != level else ""
+        bits.append(f"body battery {level} as of last watch sync{peak}")
     if health.get("resting_hr") is not None:
         bits.append(f"RHR {health['resting_hr']}")
     if health.get("avg_stress") is not None:

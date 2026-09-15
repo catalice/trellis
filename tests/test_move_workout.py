@@ -523,5 +523,122 @@ class TestStructuredSplitFilter(unittest.TestCase):
         self.assertEqual(len(rows), 2)
 
 
+class TestSteadyRunReadsLaps(unittest.TestCase):
+    """15 Sep: 'it says my HR was X overall but I was walking'. Two causes —
+    plain laps carry their label in intensityType (unread: every lap reached
+    the coach untyped), and a single-step workout's structured view is ONE
+    30-minute 'work' row, hiding the per-km story. Now: laps are labelled, a
+    single-effort structure yields to the km laps, and Python states the
+    running portion (warm-up/cool-down excluded) as a fact."""
+
+    class _Detail:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    def _easy_run(self):
+        laps = [
+            {"intensityType": "WARMUP", "distance": 5.0, "duration": 3.0, "averageHR": 83.0},
+            {"intensityType": "ACTIVE", "distance": 1000.0, "duration": 490.0, "averageHR": 141.0},
+            {"intensityType": "ACTIVE", "distance": 1000.0, "duration": 456.0, "averageHR": 160.0},
+            {"intensityType": "ACTIVE", "distance": 1000.0, "duration": 495.0, "averageHR": 155.0},
+            {"intensityType": "ACTIVE", "distance": 733.0, "duration": 359.0, "averageHR": 158.0},
+            {"intensityType": "COOLDOWN", "distance": 2.0, "duration": 1.0, "averageHR": 159.0},
+        ]
+        return self._Detail(
+            splits={"lapDTOs": laps}, split_summaries={},
+            typed_splits={"splits": [
+                {"type": "INTERVAL_WARMUP", "distance": 5.0, "duration": 3.0, "averageHR": 83.0},
+                {"type": "INTERVAL_ACTIVE", "distance": 3733.0, "duration": 1800.0, "averageHR": 153.0},
+            ]},
+        )
+
+    def test_lap_intensity_type_is_read(self):
+        from trellis.domain_move_service import _extract_splits
+        rows = _extract_splits(self._Detail(
+            splits={"lapDTOs": [
+                {"intensityType": "WARMUP", "distance": 400.0, "duration": 240.0},
+                {"intensityType": "ACTIVE", "distance": 1000.0, "duration": 480.0},
+                {"intensityType": "COOLDOWN", "distance": 300.0, "duration": 200.0},
+            ]}, split_summaries={}, typed_splits={},
+        ))
+        self.assertEqual([r["type"] for r in rows], ["warmup", "run", "cooldown"])
+
+    def test_single_effort_structure_yields_to_km_laps(self):
+        from trellis.domain_move_service import _extract_splits
+        rows = _extract_splits(self._easy_run())
+        self.assertEqual(len(rows), 6)
+        self.assertEqual([r["avg_hr"] for r in rows if r["type"] == "run"], [141, 160, 155, 158])
+
+    def test_multi_effort_structure_still_wins(self):
+        from trellis.domain_move_service import _extract_splits
+        detail = self._Detail(
+            splits={"lapDTOs": [{"intensityType": "ACTIVE", "distance": 1000.0, "duration": 400.0}] * 8},
+            split_summaries={},
+            typed_splits={"splits": [
+                {"type": "INTERVAL_ACTIVE", "distance": 500.0, "duration": 180.0},
+                {"type": "INTERVAL_RECOVERY", "distance": 200.0, "duration": 120.0},
+            ] * 4},
+        )
+        rows = _extract_splits(detail)
+        self.assertEqual(sum(1 for r in rows if r["type"] == "work"), 4)
+
+    def test_running_portion_excludes_the_walks(self):
+        from trellis.domain_move_service import _extract_splits, running_portion
+        running = running_portion(_extract_splits(self._easy_run()))
+        self.assertEqual(running["segments"], 4)
+        self.assertEqual(running["distance_km"], 3.73)
+        self.assertEqual(running["time"], "30:00")
+        self.assertEqual(running["avg_hr"], 153)   # duration-weighted, walks out
+
+    def test_running_portion_is_none_without_labels(self):
+        from trellis.domain_move_service import running_portion
+        self.assertIsNone(running_portion([{"i": 1, "type": "run", "_secs": 300.0, "avg_hr": 150}]))
+
+    def test_run_detail_states_the_running_portion(self):
+        from trellis.domain_move_tool import _fmt_run_detail
+        text = _fmt_run_detail({
+            "overall": {"name": "Easy run", "avg_hr": 152},
+            "splits": [{"i": 1, "type": "run", "time": "30:00", "avg_hr": 153}],
+            "running": {"segments": 4, "time": "30:00", "distance_km": 3.73, "avg_hr": 153},
+        })
+        self.assertIn("Running portion (warm-up/cool-down excluded): 30:00, 3.73km, avg HR 153", text)
+        self.assertIn("not the overall average", text)
+
+
+class TestSyncReportsReadiness(unittest.TestCase):
+    """15 Sep: sync_garmin said 'done' and the model kept quoting the pre-sync
+    body battery (17, when 71 had just landed). The fresh numbers ride the receipt."""
+
+    def test_sync_receipt_carries_fresh_readiness(self):
+        from datetime import datetime, timezone
+        from trellis.domain_move_tool import handle_sync_garmin
+
+        class Move:
+            def sync_garmin(self, uid, *, now):
+                return {"activities": 1, "health_records": 3, "health_through": "2026-09-15"}
+
+        class Sense:
+            def recent_health(self, uid, now=None):
+                return {"date": "2026-09-15", "stale_days": 0, "synced_at": "07:17",
+                        "body_battery_end": 71, "body_battery_high": 71, "resting_hr": 49}
+
+        out = handle_sync_garmin(uuid.uuid4(), {}, datetime.now(timezone.utc),
+                                 move_service=Move(), sense_service=Sense())
+        self.assertIn("Synced Garmin — 1 activity refreshed, health up to 2026-09-15 (3 day(s)).", out)
+        self.assertIn("Readiness now:", out)
+        self.assertIn("body battery 71", out)
+
+    def test_sync_without_sense_is_unchanged(self):
+        from datetime import datetime, timezone
+        from trellis.domain_move_tool import handle_sync_garmin
+
+        class Move:
+            def sync_garmin(self, uid, *, now):
+                return {"activities": 0}
+
+        out = handle_sync_garmin(uuid.uuid4(), {}, datetime.now(timezone.utc), move_service=Move())
+        self.assertEqual(out, "Synced Garmin — 0 activities refreshed.")
+
+
 if __name__ == "__main__":
     unittest.main()

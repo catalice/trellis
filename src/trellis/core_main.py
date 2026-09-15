@@ -349,7 +349,7 @@ def main() -> None:
     registry.add_domain(
         "move",
         move_context_loader(move_service, goal_service),
-        move_tools(move_service),
+        move_tools(move_service, sense_service),
         MOVE_SIGNALS,
         rooms=MOVE_ROOMS,
     )

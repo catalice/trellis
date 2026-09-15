@@ -14,13 +14,11 @@ _MAX_TOOL_ITERATIONS = 8
 _RETRY_DELAYS = (1.0, 3.0)  # two retries, exponential-ish
 _TRACE_RESULT_CHARS = 200  # must fit a confirmation label + its 36-char id (120 chopped ids — audit item 25)
 
-# The ANSWER CHECK (audit item 29): prompt lines reliably lose to tool-momentum
-# on this model — three live failures of "did the work, ignored the questions".
-# So it's a gate, not an instruction: when a turn used tools AND their message
-# asked a question, the draft doesn't ship until one tiny standalone call
-# confirms every question is answered (or rewrites so it is). A few hundred
-# tokens, no tools, only on the turn-shape that keeps failing. Scaffolding
-# around a model weakness — remove it the day a model holds the instruction.
+# DELIVERY CONTRACT: everything the model writes in a turn reaches the user.
+# The model often answers FIRST and calls a tool second, in the same step. That
+# text used to be dropped — only the final step's text shipped — so the model
+# saw its answer in history, the user never got it, and the follow-up read
+# "as I laid out above". Every step's text is collected and delivered, in order.
 @dataclass(frozen=True)
 class ToolCall:
     name: str
@@ -89,6 +87,7 @@ class Oracle:
             kwargs["tools"] = tools
 
         calls: list[ToolCall] = []
+        spoken: list[str] = []   # text from every step, in order — all of it ships
         response = None
         nudged = False
         logged_cache = False
@@ -110,7 +109,7 @@ class Oracle:
                 # decided the results speak for themselves — they don't (tool
                 # results never reach the user). ONE follow-up call asks it to
                 # speak; the deterministic fallback in _finish stays as backstop.
-                if calls and not nudged and not self._extract_text(response):
+                if calls and not nudged and not spoken and not self._extract_text(response):
                     nudged = True
                     _log.warning("oracle: silent end_turn after tools — nudging")
                     followup: list[dict] = list(kwargs["messages"])
@@ -127,9 +126,12 @@ class Oracle:
                     })
                     kwargs["messages"] = followup
                     continue
-                return self._finish(response, calls)
+                return self._finish(response, calls, spoken)
 
             if response.stop_reason == "tool_use":
+                step_text = self._extract_text(response)
+                if step_text:
+                    spoken.append(step_text)
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
@@ -156,7 +158,10 @@ class Oracle:
                         "type": "text",
                         "text": (
                             "[reminder — their message this turn, answer every "
-                            f"part of it when you reply: \"{user_message}\"]"
+                            f"part of it when you reply: \"{user_message}\". "
+                            "Anything you wrote before calling tools WILL reach "
+                            "them together with what you write now: don't repeat "
+                            "it and don't point them at it — continue from it.]"
                         ),
                     })
                 kwargs["messages"] = [
@@ -166,17 +171,25 @@ class Oracle:
                 ]
                 continue
 
-            return self._finish(response, calls)
+            return self._finish(response, calls, spoken)
 
         _log.warning("oracle hit iteration cap")
-        return self._finish(response, calls)
+        return self._finish(response, calls, spoken)
 
-    def _finish(self, response, calls: list[ToolCall]) -> OracleResult:
-        """Final result for the turn. The model occasionally ends its turn with
-        no text after tool calls (deciding the results speak for themselves);
-        the tools DID run, so that must never surface as a failure. Fall back
-        to the tool results — handlers return user-facing confirmations."""
-        text = self._extract_text(response) if response else ""
+    def _finish(
+        self, response, calls: list[ToolCall], spoken: list[str] | None = None,
+    ) -> OracleResult:
+        """Final result for the turn: every earlier step's text, in order, then
+        the final step's. An exact repeat of an earlier step is dropped (the
+        model occasionally restates itself after a tool). The model sometimes
+        ends with no text at all after tool calls (deciding the results speak
+        for themselves); the tools DID run, so that must never surface as a
+        failure. Fall back to the tool results — handlers return confirmations."""
+        parts: list[str] = list(spoken or [])
+        final = self._extract_text(response) if response else ""
+        if final and final not in parts:
+            parts.append(final)
+        text = "\n\n".join(parts)
         if not text and calls:
             text = " ".join(c.result_summary for c in calls if c.result_summary)
             _log.warning(
