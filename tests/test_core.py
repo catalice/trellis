@@ -518,10 +518,9 @@ class TestTurnFeedback:
 class TestGuardianNews:
     """15 Sep: with a query the Guardian API defaults to RELEVANCE over the
     whole archive — 'UK news today' returned June pieces about the Today
-    programme. News means now: newest-first, last few days."""
+    programme. A news source is newest-first."""
 
-    def test_guardian_asks_newest_within_window(self, monkeypatch):
-        from datetime import datetime, timezone
+    def test_guardian_asks_newest(self, monkeypatch):
         from unittest.mock import MagicMock
         import trellis.infra_search as m
         captured = {}
@@ -533,8 +532,7 @@ class TestGuardianNews:
                  "webPublicationDate": "2026-09-15T08:00:00Z", "fields": {"trailText": "t"}}]}}
             return resp
         monkeypatch.setattr(m.httpx, "get", fake_get)
-        out = m.guardian_search("UK news today", "key",
-                                now=datetime(2026, 9, 15, 22, 0, tzinfo=timezone.utc))
+        out = m.guardian_search("UK news today", "key")
         assert captured["order-by"] == "newest"
-        assert captured["from-date"] == "2026-09-12"
+        assert "from-date" not in captured          # no hidden window — the model decides scope
         assert out.results[0].snippet.startswith("UK news · 2026-09-15")
