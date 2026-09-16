@@ -21,25 +21,16 @@ _log = logging.getLogger(__name__)
 UPDATE_CONTEXT_TOOL = {
     "name": "update_current_context",
     "description": (
-        "Update current context — what's going on in the user's life right now "
-        "that Trellis should know about. Use any combination of fields."
+        "Record what's going on in their life right now. It expires on its "
+        "own; refresh it when they tell you something that changes the picture."
     ),
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "context": {
-                "type": "string",
-                "description": "General notes about what's going on right now.",
-            },
-            "physical_notes": {
-                "type": "string",
-                "description": "Physical state — injuries, illness, energy, body feels.",
-            },
-            "cognitive_notes": {
-                "type": "string",
-                "description": "Cognitive/exec state — stress, focus, life load, overwhelm.",
-            },
+            "context": {"type": "string", "description": "What's going on."},
+            "physical_notes": {"type": "string", "description": "Body: injuries, illness, energy."},
+            "cognitive_notes": {"type": "string", "description": "Mind: stress, focus, load."},
         },
         "required": [],
     },
@@ -86,12 +77,10 @@ def handle_update_current_context(
 SAVE_PREFERENCES_TOOL = {
     "name": "save_preferences",
     "description": (
-        "The user's standing preference RULES — one rule per row, each with an "
-        "id. action='add': save a new rule (domain='global' applies every turn; "
-        "a house domain loads with that house). action='list': every rule with "
-        "its id — read before updating or removing. action='update'/'remove': "
-        "change or delete ONE rule by rule_id. Rules also appear in the vault "
-        "(Atlas/Brain/Preferences.md) where the user reviews them."
+        "Their standing rules for you, one per row with an id. add: a new rule "
+        "(global = every turn; a house domain = with that house). list: every "
+        "rule with its id — read before update or remove. update/remove: one "
+        "rule by rule_id. They review the rows in the vault."
     ),
     "input_schema": {
         "type": "object",
@@ -105,16 +94,10 @@ SAVE_PREFERENCES_TOOL = {
             "domain": {
                 "type": "string",
                 "enum": ["global", "focus", "sense", "move", "learn"],
-                "description": "add: where the rule applies. 'global' when in doubt.",
+                "description": "add: where it applies. global when in doubt.",
             },
-            "text": {
-                "type": "string",
-                "description": (
-                    "add/update: the rule, second person, one sentence or two — "
-                    "e.g. 'You never use tables; they don't render in Telegram.'"
-                ),
-            },
-            "rule_id": {"type": "string", "description": "update/remove: the rule's id (from action='list')."},
+            "text": {"type": "string", "description": "add/update: the rule, second person, a sentence or two."},
+            "rule_id": {"type": "string", "description": "update/remove: from list."},
         },
         "required": ["action"],
     },

@@ -41,32 +41,15 @@ Don't ask if there's anything else — just close cleanly.
 _SAVE_IDENTITY_TOOL = {
     "name": "save_identity",
     "description": (
-        "Save the user's name and life context. Call once you have their name "
-        "and a clear enough picture of who they are. Can be called again later "
-        "to update notes."
+        "Save their name and what you've learned of who they are. Call once "
+        "you have the name; call again to add to the notes."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "name": {
-                "type": "string",
-                "description": "The user's name or preferred name.",
-            },
-            "physical_notes": {
-                "type": "string",
-                "description": (
-                    "Physical or practical life context worth holding, if any "
-                    "came up naturally."
-                ),
-            },
-            "cognitive_notes": {
-                "type": "string",
-                "description": (
-                    "How their mind works: neurodivergence, what tends to slip, "
-                    "how they want things held or reflected back — anything that "
-                    "shapes how Trellis should behave with them."
-                ),
-            },
+            "name": {"type": "string", "description": "What they want to be called."},
+            "physical_notes": {"type": "string", "description": "Practical life context, if it came up."},
+            "cognitive_notes": {"type": "string", "description": "How their mind works and how they want things held."},
         },
         "required": ["name"],
     },
