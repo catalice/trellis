@@ -34,9 +34,9 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 FOCUS_ADD_TOOL: dict = {
     "name": "focus_add",
     "description": (
-        "Create one Focus record: a task, seed, goal, reminder, or a note onto "
-        "an effort. Pick 'what', then send only that entity's fields (marked "
-        "per-field below). Results warn about same-named duplicates — read them."
+        "Create one Focus record: a task, a goal, a reminder, or a note on an "
+        "effort. Pick 'what', send only that entity's fields. Result warns about "
+        "same-named duplicates — read it."
     ),
     "input_schema": {
         "type": "object",
@@ -45,75 +45,70 @@ FOCUS_ADD_TOOL: dict = {
                 "type": "string",
                 "enum": ["task", "goal", "reminder", "effort_note"],
                 "description": (
-                    "task: todo or seed (kind field). goal: any goal. "
-                    "reminder: a timed nudge, one-off or recurring — or a check-in "
-                    "Trellis runs itself (check_in=true). "
-                    "effort_note: keep content on an effort page (or file an "
-                    "existing capture there via capture_id)."
+                    "task: todo or seed. goal. reminder: their words posted back "
+                    "at a time — or a check-in Trellis runs itself (check_in). "
+                    "effort_note: content kept on an effort page, or an existing "
+                    "capture filed there (capture_id)."
                 ),
             },
-            "title": {"type": "string", "description": "task/goal: what it is. Required for both."},
+            "title": {"type": "string", "description": "task/goal: what it is. Required."},
             "kind": {
                 "type": "string", "enum": ["todo", "seed"], "default": "todo",
-                "description": "task: todo = obligation. seed = exploration, no due date, never nags.",
+                "description": "task: todo = owed. seed = curiosity — no due date, never nags.",
             },
             "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "task: default medium."},
             "energy": {
                 "type": "string", "enum": ["low", "medium", "high"],
-                "description": "task: mental/physical energy needed. low=routine, high=deep focus. Default medium.",
+                "description": "task: low = routine, high = full focus. Default medium.",
             },
             "description": {"type": "string", "description": "task: optional detail."},
             "due": {
                 "type": "string",
                 "description": (
-                    "task: due date/time in the USER'S LOCAL time (YYYY-MM-DDTHH:MM "
-                    "or YYYY-MM-DD). Resolve relative phrases from context. No "
-                    "timezone conversion. Omit if no deadline."
+                    "task: user-local YYYY-MM-DDTHH:MM or YYYY-MM-DD, as they mean "
+                    "it — no timezone conversion. Omit if no deadline."
                 ),
             },
             "target_date": {"type": "string", "description": "goal: YYYY-MM-DD. Omit if open-ended."},
-            "is_fixed_date": {"type": "boolean", "description": "goal: true if the date cannot move (race day)."},
+            "is_fixed_date": {"type": "boolean", "description": "goal: true if the date cannot move."},
             "notes": {"type": "string", "description": "goal: optional notes."},
             "label": {
                 "type": "string",
                 "description": (
-                    "reminder: what it's for — required for reminders. "
-                    "goal: OPTIONAL free-text tag, only if they name one — "
-                    "'race'/'aerobic'/'strength' feed the training module; "
-                    "anything else is just a tag; reuse their existing labels "
-                    "before inventing one; omit by default, a goal is just a goal."
+                    "reminder: what it's for — required. "
+                    "goal: optional tag, only if they name one; reuse their "
+                    "existing labels. 'race'/'aerobic'/'strength' reach the coach."
                 ),
             },
             "remind_at": {
                 "type": "string",
                 "description": (
-                    "reminder: USER-LOCAL YYYY-MM-DDTHH:MM, exactly the time they "
-                    "said — no timezone conversion. Required for reminders."
+                    "reminder: user-local YYYY-MM-DDTHH:MM, exactly the time they "
+                    "said. Required."
                 ),
             },
-            "task_id": {"type": "string", "description": "reminder: optionally link to an existing task."},
+            "task_id": {"type": "string", "description": "reminder: link to an existing task, if any."},
             "check_in": {
                 "type": "boolean",
                 "default": False,
                 "description": (
-                    "reminder: false = their words posted back to them at that time. "
-                    "true = Trellis wakes at that time and runs a turn with the label as ITS "
-                    "instruction, then speaks first — 'check in with me about the week ahead', "
-                    "'ask me how the run went'. Anything phrased as something Trellis should DO "
-                    "at that time is a check-in; 'remind me to…' is not."
+                    "reminder: true = Trellis wakes at that time and runs a turn "
+                    "with the label as ITS instruction, speaking first. Anything "
+                    "phrased as something Trellis should DO then is a check-in; "
+                    "'remind me to…' is not."
                 ),
             },
             "recurrence": {
                 "type": "string", "enum": ["daily", "weekly", "monthly", "yearly"],
-                "description": "reminder: how it repeats ('every Sunday evening' -> weekly with remind_at on the next Sunday). Omit for a one-off.",
+                "description": "reminder: how it repeats; remind_at is the first firing. Omit for a one-off.",
             },
             "effort_title": {
                 "type": "string",
-                "description": "effort_note: short evocative area name, e.g. 'Making Music'. Reuse the exact name to add to an existing effort. Required for effort_note.",
+                "description": "effort_note: the effort's name. Same exact name = same page. Required.",
             },
-            "content": {"type": "string", "description": "effort_note: the research/notes to keep — full digest, links and all."},
-            "graduated_seed_id": {"type": "string", "description": "effort_note: seed this grew from, if any — it gets retired."},
-            "capture_id": {"type": "string", "description": "effort_note: an existing capture (focus_get inbox) to file into the effort instead of content."},
+            "content": {"type": "string", "description": "effort_note: what to keep — full, links and all."},
+            "graduated_seed_id": {"type": "string", "description": "effort_note: the seed this grew from — it gets retired."},
+            "capture_id": {"type": "string", "description": "effort_note: an inbox capture to file here instead of content."},
         },
         "required": ["what"],
         "additionalProperties": False,
@@ -123,20 +118,16 @@ FOCUS_ADD_TOOL: dict = {
 FOCUS_UPDATE_TOOL: dict = {
     "name": "focus_update",
     "description": (
-        "Change one existing Focus record by id: a task/seed, a goal, or a "
-        "reminder. Pick 'what' + id, then send only the fields that change. "
-        "Task: done -> status='done'; delete/remove -> status='dropped' (gone "
-        "forever); shelve -> status='parked'; reclassify todo<->seed with kind. "
-        "Goal: achieved -> status='achieved'. Reminder: the ONLY change is "
-        "status='cancelled' (to move one, cancel it and focus_add a new one). "
-        "Effort: the ONLY change is title (rename — its vault page moves with it)."
+        "Change one existing Focus record by id; send only what changes. "
+        "Reminder: cancelled is the only change — to move one, cancel it and "
+        "add anew. Effort: title only (its page moves with it)."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "what": {"type": "string", "enum": ["task", "goal", "reminder", "effort"]},
             "id": {"type": "string", "description": "UUID of the record (from focus_get)."},
-            "title": {"type": "string", "description": "task/goal: new title."},
+            "title": {"type": "string", "description": "task/goal/effort: new title."},
             "priority": {"type": "string", "enum": ["low", "medium", "high"], "description": "task."},
             "energy": {"type": "string", "enum": ["low", "medium", "high"], "description": "task."},
             "kind": {"type": "string", "enum": ["todo", "seed"], "description": "task: reclassify."},
@@ -144,8 +135,9 @@ FOCUS_UPDATE_TOOL: dict = {
                 "type": "string",
                 "enum": ["open", "done", "dropped", "parked", "active", "achieved", "paused", "cancelled"],
                 "description": (
-                    "task: open/done/dropped/parked. goal: active/achieved/paused/dropped. "
-                    "reminder: cancelled only."
+                    "task: open/done/dropped/parked — dropped is gone for good, "
+                    "parked is shelved. goal: active/achieved/paused/dropped. "
+                    "reminder: cancelled."
                 ),
             },
             "due": {"type": "string", "description": "task: user-local YYYY-MM-DDTHH:MM or YYYY-MM-DD."},
@@ -153,7 +145,7 @@ FOCUS_UPDATE_TOOL: dict = {
             "target_date": {"type": "string", "description": "goal: YYYY-MM-DD."},
             "is_fixed_date": {"type": "boolean", "description": "goal."},
             "notes": {"type": "string", "description": "goal: REPLACES stored notes — the result echoes what was overwritten."},
-            "label": {"type": "string", "description": "goal: change its free-text tag ('race'/'aerobic'/'strength' feed the coach); empty string clears it."},
+            "label": {"type": "string", "description": "goal: change its tag; empty string clears it."},
         },
         "required": ["what", "id"],
         "additionalProperties": False,
@@ -163,18 +155,17 @@ FOCUS_UPDATE_TOOL: dict = {
 BRAIN_DUMP_TOOL: dict = {
     "name": "brain_dump",
     "description": (
-        "Capture anything the user wants to offload from their working memory — "
-        "ideas, tasks, questions, things they want to remember, half-formed thoughts. "
-        "Always available, regardless of what else is happening. "
-        "Raw text is preserved exactly. Claude will synthesise, surface tasks, "
-        "and return the cleaned version."
+        "Capture what they want out of their head — ideas, tasks, questions, "
+        "half-formed thoughts — in their exact words. The raw text is kept whole; "
+        "synthesis sits beside it and extracts tasks. Result lists what was "
+        "created and what was skipped as a duplicate — read it."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The raw dump — exactly what the user said or wrote. Don't clean it up before sending.",
+                "description": "Exactly what they said. Don't clean it up.",
             }
         },
         "required": ["text"],
@@ -184,7 +175,10 @@ BRAIN_DUMP_TOOL: dict = {
 
 FOCUS_GET_TOOL: dict = {
     "name": "focus_get",
-    "description": "Retrieve your organised data (tasks, goals, captures, efforts, reminders). Use this before presenting tasks, goals, inbox captures, efforts, or reminders.",
+    "description": (
+        "Read the Focus stores. Call before presenting tasks, goals, inbox, "
+        "efforts or reminders — never from memory."
+    ),
     "input_schema": {
         "type": "object",
         "properties": {
@@ -192,15 +186,14 @@ FOCUS_GET_TOOL: dict = {
                 "type": "string",
                 "enum": ["tasks", "seeds", "goals", "inbox", "efforts", "effort", "reminders"],
                 "description": (
-                    "tasks: open todos ordered by urgency, plus parked. "
-                    "seeds: the exploration menu — for 'what could I explore'. "
-                    "goals: all active goals. "
-                    "inbox: unassigned captures for cleanup. "
-                    "efforts: all efforts by intensity. "
-                    "effort: ONE effort's full page — every note filed on it, with ids "
-                    "(pass name). Read it before advising on or reorganising a project. "
-                    "reminders: ALL scheduled reminders (with ids + recurrence) + recent delivery status. "
-                    "(wellbeing/tracking lives in the Sense room, in context there — not here.)"
+                    "tasks: open todos by urgency, plus parked. "
+                    "seeds: the exploration menu. "
+                    "goals: active goals. "
+                    "inbox: captures not yet homed. "
+                    "efforts: all, by intensity. "
+                    "effort: one effort's full page with note ids (pass name) — "
+                    "read it before advising on a project. "
+                    "reminders: everything scheduled, with ids and recurrence, plus recent deliveries."
                 ),
             },
             "name": {"type": "string", "description": "effort: the effort's title."},
@@ -210,12 +203,12 @@ FOCUS_GET_TOOL: dict = {
 }
 
 # (The per-entity write schemas were folded into FOCUS_ADD/FOCUS_UPDATE — the
-# handlers survive behind the dispatch; only ADD_GOAL_TOOL keeps a schema, for
-# onboarding.)
+# handlers survive behind the dispatch. ADD_GOAL_TOOL keeps a schema for
+# onboarding only; it is not in the main registry.)
 
 ADD_GOAL_TOOL: dict = {
     "name": "add_goal",
-    "description": "Add a new goal. All goal types live here — training goals are a subset.",
+    "description": "Save a goal they name.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -223,18 +216,17 @@ ADD_GOAL_TOOL: dict = {
             "label": {
                 "type": "string",
                 "description": (
-                    "OPTIONAL free-text tag, only if they name one. "
-                    "'race'/'aerobic'/'strength' feed the training module; "
-                    "omit by default — a goal is just a goal."
+                    "Optional tag, only if they name one. "
+                    "'race'/'aerobic'/'strength' reach the coach."
                 ),
             },
             "target_date": {
                 "type": "string",
-                "description": "ISO date string YYYY-MM-DD. Omit if open-ended.",
+                "description": "YYYY-MM-DD. Omit if open-ended.",
             },
             "is_fixed_date": {
                 "type": "boolean",
-                "description": "True if date cannot move (race day). False = aspirational.",
+                "description": "true if the date cannot move.",
                 "default": False,
             },
             "notes": {"type": "string"},
@@ -247,15 +239,12 @@ ADD_GOAL_TOOL: dict = {
 DELETE_ENTRY_TOOL: dict = {
     "name": "delete_entry",
     "description": (
-        "Erase a record that should never have existed: a duplicate task, a wrong "
-        "tracking entry (state or meds/sleep/period event), a test or mis-capture. "
-        "Completely removes it — use ONLY for mistakes, never for decisions: "
-        "a task the user decided against gets update_task status='dropped' instead. "
-        "Corrections are delete + re-log. Get IDs from focus_get first. "
-        "Erasing a capture does NOT erase tasks extracted from it — erase those "
-        "by their own ids. Deleting a task also deletes reminders attached to it. "
-        "An EMPTY duplicate effort can be erased too (its page is removed); one "
-        "with notes still on it is refused — move them first."
+        "Erase a record that should never have existed — a duplicate, a wrong "
+        "tracking entry, a mis-capture. Gone completely. A decision is not a "
+        "mistake: a task they decided against is focus_update status='dropped'. "
+        "Corrections are erase + re-log. Erasing a capture leaves the tasks "
+        "extracted from it; erasing a task takes its reminders with it; an "
+        "effort erases only while empty. Ids come from focus_get."
     ),
     "input_schema": {
         "type": "object",
@@ -824,23 +813,19 @@ def handle_delete_entry(
 WEB_SEARCH_TOOL: dict = {
     "name": "web_search",
     "description": (
-        "Search the outside world. source='web' (default): general search — "
-        "research a seed, answer a factual question, find classes or prices. "
-        "source='news': current events (the Guardian first when configured, "
-        "then web news). source='pubmed': peer-reviewed medicine (NCBI). "
-        "source='scholar': scholarly work across every field (OpenAlex). "
-        "source='trials': registered clinical trials (ClinicalTrials.gov). "
-        "All citation sources return REAL papers — title, venue, date, link — "
-        "save keepers to a Learn map as kind='source'. Read-only — it fetches, it can't act. Present results "
-        "as a short digest with the links, not a wall of text."
+        "Search outside their brain. web: general. news: current events, newest "
+        "first. pubmed: peer-reviewed medicine. scholar: scholarly work, every "
+        "field. trials: registered clinical trials. Citation sources return "
+        "real papers with links — keepers go to a Learn map as kind='source'. "
+        "Read-only."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "What to search for. Be specific. For pubmed, use topic terms (\"lisdexamfetamine menstrual cycle\"), not sentences."},
+            "query": {"type": "string", "description": "What to search for. Specific. pubmed takes topic terms, not sentences."},
             "source": {
                 "type": "string", "enum": ["web", "news", "pubmed", "scholar", "trials"],
-                "description": "Default web. news: newest-first (Guardian, then web news). pubmed/scholar/trials: citations.",
+                "description": "Default web.",
             },
         },
         "required": ["query"],
@@ -850,18 +835,17 @@ WEB_SEARCH_TOOL: dict = {
 RECALL_TOOL: dict = {
     "name": "recall",
     "description": (
-        "Search the user's OWN second brain by MEANING, not keywords — surfaces past "
-        "captures, efforts and seeds related to a query even when they share no words. "
-        "Use when they ask 'what have I noted about X', 'have I thought about this "
-        "before', 'what relates to this', or when a new idea might echo an existing "
-        "effort or seed worth connecting. This is memory recall, not web_search."
+        "Search their own brain by meaning — captures, efforts and seeds that "
+        "relate to a query without sharing its words. For 'have I thought about "
+        "this before', or when a new idea might echo a thread they already hold. "
+        "Memory, not the web."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "The idea or topic to find related notes for. A phrase or sentence works better than a single word.",
+                "description": "The idea to find relatives of. A phrase beats a single word.",
             },
         },
         "required": ["query"],

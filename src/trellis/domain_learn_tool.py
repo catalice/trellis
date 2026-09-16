@@ -29,10 +29,10 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 LEARN_GET_TOOL: dict = {
     "name": "learn_get",
     "description": (
-        "Read the user's knowledge maps. what='threads': every thread with its "
-        "'you are here'. what='map': one thread's full map — regions, entries, "
-        "sources, test history — read it before teaching or testing so you "
-        "build on what's actually there."
+        "Read a map before teaching or testing on it. Their positions are already "
+        "in context; the map itself is not.\n"
+        "threads: every thread and its 'you are here'.\n"
+        "map: one thread in full — regions, pieces, sources, test history."
     ),
     "input_schema": {
         "type": "object",
@@ -47,26 +47,27 @@ LEARN_GET_TOOL: dict = {
 LEARN_ADD_TOOL: dict = {
     "name": "learn_add",
     "description": (
-        "Write to a knowledge map. what='thread': start a new topic they've "
-        "chosen to build. what='entry': place a piece on the map — kind="
-        "'material' (something learned, their words or your digest), kind="
-        "'source' (a kept reference — source_url REQUIRED, fetched never "
-        "recalled), kind='test' (a retrieval-practice outcome: question, their "
-        "answer's gist, verdict). what='position': update 'you are here'. "
-        "The region is THEIR label — ask where it fits; don't file it for them."
+        "Write to a map. A piece with no region lands unplaced — the receipt says "
+        "so; the region is theirs to give.\n"
+        "thread: open a topic they've chosen to build.\n"
+        "entry: place a piece. material = learned, their words or your digest. "
+        "source = a kept reference; refused without a fetched source_url. "
+        "test = a retrieval outcome — the test itself is conversation, this is "
+        "its one write.\n"
+        "position: move 'you are here'."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "what": {"type": "string", "enum": ["thread", "entry", "position"]},
-            "thread": {"type": "string", "description": "The thread's title (created if what='thread', found otherwise)."},
+            "thread": {"type": "string", "description": "The thread's title. Created for thread, found otherwise."},
             "kind": {
                 "type": "string", "enum": ["material", "source", "test"],
-                "description": "entry: what this piece is. Default material.",
+                "description": "entry: material | source | test. Default material.",
             },
-            "content": {"type": "string", "description": "entry: the piece itself. Required for entries."},
-            "region": {"type": "string", "description": "entry: where THEY placed it on the map — their label, their call."},
-            "source_url": {"type": "string", "description": "entry kind=source: the fetched URL. Required for sources."},
+            "content": {"type": "string", "description": "entry: the piece. Test: question, their gist, verdict."},
+            "region": {"type": "string", "description": "entry: their label for where it sits."},
+            "source_url": {"type": "string", "description": "entry kind=source: the fetched URL."},
             "source_title": {"type": "string", "description": "entry kind=source: the source's name."},
             "position": {"type": "string", "description": "position: the new 'you are here', plain words."},
         },
@@ -150,9 +151,8 @@ def handle_learn_add(user_id: UUID, input_dict: dict, now: datetime, *, learn_se
                 now=now,
             )
         except SourceRequiredError:
-            return ("A kept reference must carry its source_url — fetch it "
-                    "(web_search), don't recall it. Save as kind='material' only "
-                    "if it's their own words, not a fact claim.")
+            return ("Refused: a kept reference needs its fetched source_url. "
+                    "Their own words can go as material; a recalled fact can't.")
         placed = f" in '{entry.region}'" if entry.region else " (unplaced — ask them where it fits)"
         return f"Placed on '{thread.title}'{placed}."
 

@@ -282,6 +282,7 @@ Deliberate understanding — a different cognitive mode from Focus (registered 3
 - Parse failures **log a warning and return None** — callers handle gracefully, never crash
 - `max_tokens` must be set generously for calls that return full JSON (8192+)
 - **Guidance lines are short.** One rule, one or two sentences, plain. Long lines burn tokens and blur — if a rule needs a paragraph, it's two rules or it's unclear.
+- **The prompt register (applied everywhere 16 Sep 2026).** House guidance = the ROLE in that room + what the data means, nothing else. Tool description = what it does, when to reach for it, the one behaviour that would surprise you — each mechanic stated ONCE, only there. Anything about the person → a preference row (theirs to edit). Tactics and worked examples in a prompt became the ceiling (15 Sep: "the only real slot is Friday") — don't put them back.
 - Never call Claude for something Python can calculate deterministically
 
 ---

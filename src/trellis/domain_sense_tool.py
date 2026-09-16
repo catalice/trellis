@@ -34,83 +34,67 @@ ContextLoader = Callable[[UUID, datetime], "str | None"]
 LOG_STATE_TOOL: dict = {
     "name": "log_state",
     "description": (
-        "Log how the user is doing right now — energy, mood, and body/context events. "
-        "Call whenever they describe their state (answering a check-in or spontaneously), "
-        "or mention taking meds, sleep, or their period. Multiple logs per day are "
-        "expected; the within-day curve is the point. Derive scores from their words; "
-        "never ask them to rate themselves."
+        "Write how they are to the tracking log: their words plus the facts those "
+        "words carry — energy, mood, meds, sleep, period, any tracked kind. Call when "
+        "they say how they are, in a check-in or in passing, or mention meds, sleep or "
+        "their period. One row per state: several states at different times in one "
+        "message = one call each with its own felt_at. A state row needs their words; "
+        "meds, sleep and period log without one. A period start begins the cycle-day "
+        "count. Result reports today's log — read it."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "note": {
                 "type": "string",
-                "description": (
-                    "Their words about how they're doing, first person, verbatim — "
-                    "never paraphrase into third person ('feeling flat', not "
-                    "'they feel flat'). Voice notes: transcript as they said it."
-                ),
+                "description": "State: their words, first person, verbatim. Voice: the transcript as said.",
             },
             "felt_at": {
                 "type": "string",
-                "description": (
-                    "When this state was FELT, if different from now: user-local "
-                    "YYYY-MM-DDTHH:MM. 'This morning I was shit' said at noon → today ~09:00; "
-                    "'yesterday I crashed after work' → yesterday ~17:00. Omit for right now. "
-                    "If one message describes several states at different times, call this "
-                    "tool once per state with its own felt_at."
-                ),
+                "description": "State: when it was felt, if not now — local YYYY-MM-DDTHH:MM. Omit for now.",
             },
             "energy": {
                 "type": "integer", "minimum": 1, "maximum": 5,
-                "description": "Energy derived from their words: 1 empty/shutdown, 3 okay, 5 on top of the world. Omit if they said nothing about energy.",
+                "description": "State: 1 empty – 5 on top of the world, from their words. Omit if unsaid.",
             },
             "mood": {
                 "type": "integer", "minimum": 1, "maximum": 5,
-                "description": "Mood derived from their words: 1 awful, 3 neutral, 5 great. Omit if unclear. Mood and energy are independent — 'good mood, sleepy' is mood 4, energy 2.",
+                "description": "State: 1 awful – 5 great, from their words; independent of energy. Omit if unsaid.",
             },
             "meds": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "e.g. 'ibuprofen'"},
-                        "time": {"type": "string", "description": "Local HH:MM if they said when; omit otherwise."},
+                        "name": {"type": "string", "description": "As they said it."},
+                        "time": {"type": "string", "description": "Local HH:MM, if said."},
                     },
                     "required": ["name"],
                 },
-                "description": "Medication they mention taking.",
+                "description": "Meds: what they took.",
             },
             "sleep_hours": {
                 "type": "number",
-                "description": "Hours slept last night, if mentioned.",
+                "description": "Sleep: hours last night, if said.",
             },
             "sleep_quality": {
                 "type": "string",
-                "description": "Their description of sleep quality, if mentioned: 'badly', 'great', etc.",
+                "description": "Sleep: their word for it, if said.",
             },
             "period": {
                 "type": "string", "enum": ["started", "ended"],
-                "description": "If they say their period started or ended.",
+                "description": "Period: started or ended, if said.",
             },
             "extra": {
                 "type": "object",
                 "description": (
-                    "Any OTHER tracked dimensions their words carry, as "
-                    "kind: value pairs — e.g. {\"anxiety\": 2} (1-5 from their "
-                    "words), {\"restless_legs\": true}, {\"cramps\": true}. "
-                    "REUSE the kind names listed in your context before minting "
-                    "a new one (snake_case). A new kind costs nothing — track "
-                    "what they actually talk about."
+                    "State: other kinds their words carry, {kind: value} — 1-5 or true. "
+                    "Reuse the kind names in your context; a new name is a new kind, snake_case."
                 ),
             },
             "period_date": {
                 "type": "string",
-                "description": (
-                    "YYYY-MM-DD — ONLY when the period event was on a PAST date "
-                    "(e.g. logging history from another app). Omit for today. "
-                    "For several past cycles, call once per event with its date."
-                ),
+                "description": "Period: YYYY-MM-DD only when the event was on a past date. Omit for today. One call per past event.",
             },
         },
         "required": [],
@@ -120,19 +104,18 @@ LOG_STATE_TOOL: dict = {
 SENSE_GET_TOOL: dict = {
     "name": "sense_get",
     "description": (
-        "Read their tracked history — the same day-by-day view the Watcher "
-        "sees. what='days': one line per day over a date range (mood, energy, "
-        "meds, sleep, and any tracked kind) — use it for reviews, comparisons, "
-        "and experiments ('dose days vs not'). what='cycle': full cycle maths — "
-        "every period start, average length, next expected window. Recent days "
-        "already ride your context; this is for looking FURTHER back."
+        "Read the tracked history beyond what context carries. what=days: one line "
+        "per day over a range — mood, energy, meds, sleep, every tracked kind. "
+        "what=cycle: every period start, average length, next expected window — "
+        "Python's maths. The last 7 days already ride your context; reach for this "
+        "when the question is further back."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "what": {"type": "string", "enum": ["days", "cycle"]},
-            "since": {"type": "string", "description": "days: start date YYYY-MM-DD (max 120 days back)."},
-            "until": {"type": "string", "description": "days: end date, default today."},
+            "since": {"type": "string", "description": "days: start YYYY-MM-DD. Ranges over 120 days are cut to the last 120."},
+            "until": {"type": "string", "description": "days: end YYYY-MM-DD, default today."},
         },
         "required": ["what"],
     },
@@ -324,29 +307,21 @@ def _fmt_health(health: "dict | None") -> "str | None":
 
     Staleness is stated loudly, not as a discoverable date: yesterday's numbers
     presented as "your readiness" is exactly the honesty failure Trellis exists
-    to avoid. Python computed stale_days; here it becomes an instruction."""
+    to avoid. Python computed stale_days; here it becomes a label. What the
+    numbers MEAN (day-level aggregates, watch→cloud lag) lives once, in the
+    Sense/Move guidance — this line carries the facts and the day, not prose."""
     if not health:
         return None
     bits = []
     stale = health.get("stale_days")
     if stale == 0:
         synced = health.get("synced_at")
-        if synced:
-            bits.append(
-                f"TODAY, synced {synced} — sleep/HRV are fixed at wake, but "
-                "body battery and steps move all day, and Garmin only holds "
-                "what the watch last uploaded: they're as-of the last watch "
-                "sync, never 'now'. If one looks odd or old, say so — "
-                "sync_garmin refreshes from Garmin but can't make the watch upload"
-            )
-        else:
-            bits.append("TODAY")
+        bits.append(f"TODAY, synced {synced}" if synced else "TODAY")
     elif stale is not None:
         ago = "YESTERDAY" if stale == 1 else f"{stale} DAYS AGO"
         bits.append(
-            f"STALE — from {ago} ({health.get('date', '?')}), NOT today's. "
-            "Today's sleep/HRV haven't synced yet: call sync_garmin before advising "
-            "on readiness, or clearly say which day the numbers are from"
+            f"STALE — from {ago} ({health.get('date', '?')}), not today's: "
+            "sync_garmin, or name the day"
         )
     elif health.get("date"):
         bits.append(f"as of {health['date']}")
@@ -403,10 +378,7 @@ def sense_context_loader(sense_service, tz) -> ContextLoader:
         try:
             kinds = sense_service.tracked_kinds(user_id)
             if kinds:
-                parts.append(
-                    "[Tracked kinds — reuse these names in log_state extra, "
-                    "don't mint synonyms]: " + ", ".join(kinds)
-                )
+                parts.append("[Tracked kinds]: " + ", ".join(kinds))
         except Exception:
             _log.warning("tracked kinds failed", exc_info=True)
         try:
