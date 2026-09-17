@@ -421,7 +421,10 @@ def _view_reminders(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusR
         )
     if recent:
         lines.append("Recent (delivery status):")
-        lines.extend(f"  {r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)} — {r.status}" for r in recent)
+        lines.extend(
+            f"  {'check-in: ' if r.kind == 'check_in' else ''}{r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)} — {r.status}"
+            for r in recent
+        )
     return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
 
 
@@ -630,16 +633,16 @@ def handle_set_reminder(
         recurrence = None
     # Duplicate guard: warn, never block — a same-label reminder is usually a
     # re-ask that already exists, and silent duplicates fire twice.
+    kind = "check_in" if input_dict.get("check_in") else "remind"
     dup = None
     try:
         dup = next(
             (r for r in reminder_service.all_scheduled(user_id)
-             if r.label.strip().lower() == label.lower()),
+             if r.label.strip().lower() == label.lower() and r.kind == kind),
             None,
         )
     except Exception:
         dup = None
-    kind = "check_in" if input_dict.get("check_in") else "remind"
     reminder = reminder_service.set(user_id, label, remind_at, task_id=task_id,
                                     recurrence=recurrence, kind=kind, now=now)
     repeats = f", repeats {reminder.recurrence}" if reminder.recurrence else ""
@@ -648,7 +651,7 @@ def handle_set_reminder(
     if dup is not None:
         dup_repeats = f", repeats {dup.recurrence}" if dup.recurrence else ""
         result += (
-            f"\nHeads up: a scheduled reminder with this label already existed — "
+            f"\nHeads up: a scheduled {'check-in' if kind == 'check_in' else 'reminder'} with this label already existed — "
             f"@ {_fmt_datetime(dup.remind_at, tz)}{dup_repeats} [{dup.id}]. "
             "If that makes this a duplicate, ask them which to cancel."
         )

@@ -137,3 +137,49 @@ class TestFocusAddCheckIn(unittest.TestCase):
                                   now, reminder_service=_Svc(), tz=ZoneInfo("Europe/Madrid"))
         self.assertTrue(out.startswith("Reminder set:"))
         self.assertEqual(saved[1].kind, "remind")
+
+
+class TestCheckInIsItsOwnKind(unittest.TestCase):
+    """Review 17 Sep: a check-in and a plain reminder sharing a label are not
+    duplicates of each other, and a fired check-in reads as one."""
+
+    def _svc(self, existing):
+        class _Svc:
+            saved = []
+            def all_scheduled(self, uid):
+                return existing
+            def set(self, uid, label, remind_at, *, task_id=None, recurrence=None, kind="remind", now):
+                r = Reminder(id=uuid4(), user_id=uid, label=label, remind_at=remind_at,
+                             status="scheduled", recurrence=recurrence, kind=kind)
+                self.saved.append(r)
+                return r
+            def recent(self, uid, *, limit=10):
+                return existing
+        return _Svc()
+
+    def test_dup_guard_is_per_kind(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_tool import handle_set_reminder
+        tz = ZoneInfo("Europe/Madrid")
+        now = datetime.now(timezone.utc)
+        at = (now + timedelta(hours=2)).astimezone(tz).strftime("%Y-%m-%dT%H:%M")
+        plain = _reminder("look at the week", "remind")
+        svc = self._svc([plain])
+        reply = handle_set_reminder(uuid4(), {"label": "look at the week", "remind_at": at, "check_in": True},
+                                    now, reminder_service=svc, tz=tz)
+        self.assertNotIn("already existed", reply)
+        reply = handle_set_reminder(uuid4(), {"label": "look at the week", "remind_at": at},
+                                    now, reminder_service=svc, tz=tz)
+        self.assertIn("reminder with this label already existed", reply)
+
+    def test_recent_list_names_the_kind(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_tool import _view_reminders, _FocusReads
+        fired = _reminder("ask me how the run went", "check_in")
+        fired = Reminder(**{**fired.__dict__, "status": "sent"})
+        svc = self._svc([fired])
+        svc.all_scheduled = lambda uid: []
+        ctx = _FocusReads(task_service=None, goal_service=None, capture_service=None,
+                          effort_service=None, reminder_service=svc, tz=ZoneInfo("Europe/Madrid"))
+        out = _view_reminders(uuid4(), {}, datetime.now(timezone.utc), ctx)
+        self.assertIn("check-in: ask me how the run went", out)
