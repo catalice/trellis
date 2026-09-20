@@ -24,7 +24,7 @@ Transcriber = Callable[[bytes], str]
 # no baked-in ping schedule; that was removed because it wasn't tied to the user's
 # choice and silently died on restart.
 #
-# Two kinds fire from the same loop (her design, 15 Sep 2026): kind='remind'
+# Two kinds fire from the same loop (the user's design, 15 Sep 2026): kind='remind'
 # posts the label back verbatim, no model; kind='check_in' runs a full oracle
 # turn with the label as Trellis's own instruction and sends what it writes —
 # the first time Trellis speaks unprompted with generated words. It speaks
@@ -178,7 +178,7 @@ class TelegramTrellis:
             await asyncio.sleep(24 * 3600)
 
     async def _marker_loop(self, application: Application) -> None:
-        """The memory-horizon marker (her design): one line each morning —
+        """The memory-horizon marker (the user's design): one line each morning —
         everything below it is verbatim memory; older lives in the records.
         Yesterday's marker is deleted so they never pile up."""
         from datetime import timedelta
@@ -192,8 +192,7 @@ class TelegramTrellis:
             try:
                 users = await asyncio.to_thread(self.database.list_users)
                 for user_id, tg_id in users:
-                    if (self.settings.telegram_allowed_users
-                            and tg_id not in self.settings.telegram_allowed_users):
+                    if not self._is_allowed(tg_id):
                         continue
                     old = await asyncio.to_thread(self._message_log.get_marker, tg_id)
                     sent = await application.bot.send_message(
@@ -213,7 +212,7 @@ class TelegramTrellis:
                 self.logger.exception("marker loop failed")
 
     async def _chat_sweep_loop(self, application: Application) -> None:
-        """Her design: the visible chat matches the verbatim window. Messages
+        """The user's design: the visible chat matches the verbatim window. Messages
         older than the TTL are deleted (Telegram allows deletion only within
         48h, so undeletable stragglers are forgotten, not retried)."""
         from datetime import timedelta
@@ -257,10 +256,7 @@ class TelegramTrellis:
         now = datetime.now(timezone.utc)
         users = await asyncio.to_thread(self.database.list_users)
         for user_id, telegram_user_id in users:
-            if (
-                self.settings.telegram_allowed_users
-                and telegram_user_id not in self.settings.telegram_allowed_users
-            ):
+            if not self._is_allowed(telegram_user_id):
                 continue
             due = await asyncio.to_thread(
                 self.reminders.upcoming, user_id, hours=0, now=now
@@ -324,6 +320,16 @@ class TelegramTrellis:
                         self.logger.warning("Failed to deliver check-in", exc_info=True)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if self._user(update) is None:
+            chat = update.effective_chat
+            if chat is not None and chat.type == "private":
+                # Setup help, nothing private: their own id is what the
+                # allowlist needs.
+                await update.message.reply_text(
+                    f"This Trellis isn't set up for you. Your Telegram id is "
+                    f"{update.effective_user.id} — its owner adds it to TELEGRAM_ALLOWED_USERS."
+                )
+            return
         await update.message.reply_text(
             "Trellis is ready. Send tasks, ideas, questions or a full brain dump. "
             "I'll preserve the original and organise what's useful."
@@ -449,12 +455,19 @@ class TelegramTrellis:
         except Exception:
             self.logger.warning("Failed to send embed-failure alert", exc_info=True)
 
+    def _is_allowed(self, telegram_user_id: int) -> bool:
+        """Only ids named in TELEGRAM_ALLOWED_USERS. An empty list admits
+        nobody — an unconfigured bot must not be an open one."""
+        return telegram_user_id in self.settings.telegram_allowed_users
+
     def _user(self, update: Update):
+        # A private chat with an allowed person, or nothing. In a group the
+        # reply — built from their private context — would be read by everyone.
+        chat = update.effective_chat
+        if chat is None or chat.type != "private":
+            return None
         telegram_user_id = update.effective_user.id
-        if (
-            self.settings.telegram_allowed_users
-            and telegram_user_id not in self.settings.telegram_allowed_users
-        ):
+        if not self._is_allowed(telegram_user_id):
             return None
         return self.database.ensure_user(
             telegram_user_id,

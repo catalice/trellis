@@ -1,4 +1,4 @@
--- A goal is just a goal (her call, 10 Sep 2026): the goal_type enum becomes
+-- A goal is just a goal (the user's call, 10 Sep 2026): the goal_type enum becomes
 -- an OPTIONAL free-text label. Existing values ('race', 'life', ...) survive
 -- as labels; 'race'/'aerobic'/'strength' still feed the coach, by convention
 -- instead of constraint.

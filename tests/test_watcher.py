@@ -2,7 +2,7 @@
 verdict handling. Pure Python, no DB, no API calls.
 
 The core contract under test: silent below evidence (thin data verifies
-nothing), deterministic verification (same frame, same verdict), her verdict
+nothing), deterministic verification (same frame, same verdict), their verdict
 outranks the stats, dismissed never resurrects.
 """
 from __future__ import annotations

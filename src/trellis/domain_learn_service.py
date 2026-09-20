@@ -16,7 +16,7 @@ _log = logging.getLogger(__name__)
 
 class MapProjection(Protocol):
     """Write-only vault view: one map page per thread. Must never raise."""
-    def learn_map(self, title: str, body: str) -> None: ...
+    def learn_map(self, title: str, body: str, thread_id=None) -> None: ...
 
 
 class SourceRequiredError(ValueError):
@@ -84,13 +84,23 @@ class LearnService:
 
     # -- vault map page (write-only, never raises) ----------------------------
 
+    def project_all(self, user_id: UUID) -> int:
+        """Re-project every map page. Returns how many threads were projected.
+        Run after an upgrade (scripts/backfill_vault.py) so pages written before
+        a format change convert while they still match what Trellis wrote."""
+        threads = self._repo.list_threads(user_id)
+        for thread in threads:
+            self._project(user_id, thread)
+        return len(threads)
+
     def _project(self, user_id: UUID, thread: LearnThread) -> None:
         if self._projection is None:
             return
         try:
             fresh = self._repo.get_thread_by_title(user_id, thread.title) or thread
             entries = self._repo.list_entries(user_id, thread.id)
-            self._projection.learn_map(thread.title, _map_body(fresh, entries, self._tz))
+            self._projection.learn_map(thread.title, _map_body(fresh, entries, self._tz),
+                                       thread_id=thread.id)
         except Exception:
             _log.warning("learn map projection failed", exc_info=True)
 

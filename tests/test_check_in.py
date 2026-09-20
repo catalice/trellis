@@ -50,7 +50,7 @@ class _Assembler:
 
 
 def _handler(reminders, assembler):
-    settings = SimpleNamespace(telegram_allowed_users=(), timezone=timezone.utc, chat_ttl_hours=0)
+    settings = SimpleNamespace(telegram_allowed_users=frozenset({12345}), timezone=timezone.utc, chat_ttl_hours=0)
     uid = uuid4()
     database = SimpleNamespace(list_users=lambda: [(uid, 12345)])
     h = TelegramTrellis.__new__(TelegramTrellis)

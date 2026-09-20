@@ -973,16 +973,16 @@ class TestEffortOperations:
 
     def test_rename_moves_path(self):
         svc = self._svc()
-        e = self._effort(svc, "Neurodivergence Writing")
+        e = self._effort(svc, "Garden Planning Notes")
         renamed = svc.rename(UID, e.id, "Writing")
         assert renamed.title == "Writing"
         assert "Writing" in renamed.obsidian_path
-        assert "Neurodivergence" not in renamed.obsidian_path
+        assert "Garden" not in renamed.obsidian_path
 
 
 class TestDatedGoalCountdowns:
     """3 Sep: facts from data — a dated goal becomes a computed countdown in
-    the snapshot, staleness-impossible (the wedding can't quietly expire again)."""
+    the snapshot, staleness-impossible (a dated goal can't quietly expire)."""
 
     def test_countdown_renders(self):
         from datetime import date as _d
@@ -992,9 +992,9 @@ class TestDatedGoalCountdowns:
 
         class Goals:
             def list_active(self, uid):
-                return [Goal(id=uuid4(), user_id=uid, title="Get married",
+                return [Goal(id=uuid4(), user_id=uid, title="Run a 10k",
                              status=GoalStatus.ACTIVE,
-                             target_date=_d(2026, 10, 3), created_at=NOW,
+                             target_date=_d(2026, 11, 1), created_at=NOW,
                              updated_at=NOW)]
 
         class Empty:
@@ -1004,7 +1004,7 @@ class TestDatedGoalCountdowns:
 
         loader = focus_snapshot(Empty(), Empty(), Goals())
         snap = loader(UID, NOW.replace(month=9, day=3))
-        assert "Get married in 4w2d (3 Oct)" in snap
+        assert "Run a 10k in 8w3d (1 Nov)" in snap
 
 
 # ---------------------------------------------------------------------------
@@ -1109,9 +1109,9 @@ class TestGoalLabels:
 
     def test_goal_without_label(self):
         svc = GoalService(FakeGoalRepo())
-        g = svc.add(UID, "Get married", now=NOW)
+        g = svc.add(UID, "Run a 10k", now=NOW)
         assert g.label is None
-        assert g.summary().startswith("Get married")
+        assert g.summary().startswith("Run a 10k")
 
     def test_add_goal_handler_no_label_needed(self):
         from trellis.domain_focus_tool import handle_add_goal

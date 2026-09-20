@@ -26,6 +26,7 @@ break the bot.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from uuid import UUID
@@ -113,6 +114,69 @@ views:
       - property: file.name
         direction: DESC
 """
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    """Write the whole page beside its destination, then swap it in. Opening a
+    file for writing truncates it first, so a write that dies half-way (disk
+    full) would otherwise take the page — and any handwriting on it — with it.
+    On failure the original is untouched and nothing is left behind."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+_MAP_BEGIN = "<!-- trellis:map:{}:begin — generated; your own notes go outside these markers -->"
+_MAP_END = "<!-- trellis:map:{}:end -->"
+
+
+def _merge_map_page(existing: str, region: str, title: str, body: str, tag: str) -> str | None:
+    """The page text with this thread's generated region refreshed, everything
+    else untouched. None when the page isn't this thread's to write."""
+    begin, end = _MAP_BEGIN.format(tag), _MAP_END.format(tag)
+    if begin in existing and end in existing:
+        head, rest = existing.split(begin, 1)
+        _, tail = rest.split(end, 1)
+        return head + region + tail
+    if "<!-- trellis:map:" in existing:
+        return None                      # another thread's page
+    if not (existing.startswith(f"# {title}\n") and "*Updated " in existing):
+        return None                      # not a page Trellis generated
+    # A page from before markers existed. If it is exactly what Trellis would
+    # have written (the dated line aside), it converts cleanly. Anything else
+    # may hold writing done by hand, so all of it is kept below the new region.
+    def undated(text: str) -> str:
+        return "\n".join(ln for ln in text.strip().splitlines() if not ln.startswith("*Updated "))
+    if undated(existing) == undated(f"# {title}\n\n{body}"):
+        return region + "\n"
+    return (region + "\n\n---\n*The page as it was before Trellis began marking its own part. "
+            "Anything you wrote is in here; delete what you don't need.*\n\n" + existing)
+
+
+def _has_authored_content(page: str) -> bool:
+    """True when an effort page holds anything beyond what effort_created wrote:
+    its title line, the intensity line, the section heading. Only the FIRST
+    heading is the generated title — a later one is someone's note. Effort notes
+    and filed captures count as content; when in doubt, the page is kept."""
+    seen_title = False
+    for line in page.splitlines():
+        line = line.strip()
+        if not line or line == "## Research & notes":
+            continue
+        if line.startswith("# ") and not seen_title:
+            seen_title = True
+            continue
+        if line.startswith("_Intensity:") and line.endswith("_"):
+            continue
+        return True
+    return False
 
 
 class ObsidianVault:
@@ -450,7 +514,7 @@ class ObsidianVault:
             for st in day_states:
                 t = st.felt_at.astimezone(self._tz).strftime("%H:%M")
                 retro = ""
-                # Compare LOCAL dates — UTC dates flip at midnight UTC, not hers.
+                # Compare LOCAL dates — UTC dates flip at midnight UTC, not theirs.
                 if (st.felt_at.astimezone(self._tz).date()
                         != st.logged_at.astimezone(self._tz).date()):
                     retro = f" _(logged {st.logged_at.astimezone(self._tz).strftime('%d %b')})_"
@@ -738,7 +802,7 @@ class ObsidianVault:
 
     def brain_changed(self, user_id, profile=None, context=None,
                       pref_rules=None, kinds=None) -> None:
-        """The window into what's saved about THEM (her ask, 2 Sep: 'I should
+        """The window into what's saved about THEM (the user's ask, 2 Sep: 'I should
         be able to see everything rather than it going into a black hole').
         Atlas/Brain/: Profile, Context, Preferences (with rule ids), Tracked
         kinds. Caller supplies the data; write-only, never raises."""
@@ -790,17 +854,32 @@ class ObsidianVault:
         except Exception:
             _log.warning("brain pages write failed", exc_info=True)
 
-    def learn_map(self, title: str, body: str) -> None:
+    def learn_map(self, title: str, body: str, thread_id=None) -> None:
         """One map page per Learn thread (Atlas/Maps/<title>.md). The map is
         drawn by the user in conversation; this is its window. Same write-only
-        never-raise contract as every projection."""
+        never-raise contract as every projection.
+
+        Only the GENERATED REGION is ever replaced — the text between this
+        thread's begin/end markers. Anything written above or below it by hand
+        stays. A name taken by another thread, or by a page Trellis didn't
+        generate, sends this map to '<title> (<id>).md' instead."""
         try:
             if not self._vault.exists():
                 return
             safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Untitled"
-            path = self._vault / "Atlas" / "Maps" / f"{safe}.md"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"# {title}\n\n{body}", encoding="utf-8")
+            folder = self._vault / "Atlas" / "Maps"
+            folder.mkdir(parents=True, exist_ok=True)
+            tag = str(thread_id) if thread_id else "map"
+            region = (f"{_MAP_BEGIN.format(tag)}\n# {title}\n\n{body}\n{_MAP_END.format(tag)}")
+            for path in (folder / f"{safe}.md", folder / f"{safe} ({tag[:8]}).md"):
+                if not path.exists():
+                    _write_atomically(path, region + "\n")
+                    return
+                merged = _merge_map_page(path.read_text(encoding="utf-8"), region, title, body, tag)
+                if merged is not None:
+                    _write_atomically(path, merged)
+                    return
+            _log.warning("learn map: no free page name for %r — not written", title)
         except Exception:
             _log.warning("learn map write failed", exc_info=True)
 
@@ -837,25 +916,42 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: effort page write failed", exc_info=True)
 
-    def effort_page_removed(self, obsidian_path: str) -> None:
-        """Delete an erased (empty) effort's page — the one projection that
-        removes a file, and only for a record the user chose to erase."""
+    def page_exists(self, obsidian_path: str) -> bool:
+        """Is this vault path already taken — by any page, whoever wrote it?"""
+        try:
+            return (self._vault / obsidian_path).exists()
+        except Exception:
+            return False
+
+    def effort_page_removed(self, obsidian_path: str) -> str:
+        """Remove an erased (empty) effort's page — only if nothing was written
+        on it by hand. 'removed' | 'kept' | 'missing'. The database knows the
+        effort had no captures; it cannot know what was typed into the page."""
         try:
             path = self._vault / obsidian_path
-            if path.exists():
-                path.unlink()
+            if not path.exists():
+                return "missing"
+            if _has_authored_content(path.read_text(encoding="utf-8")):
+                return "kept"
+            path.unlink()
+            return "removed"
         except Exception:
             _log.warning("obsidian: effort page removal failed", exc_info=True)
+            return "kept"
 
-    def effort_page_moved(self, old_path: str | None, effort: Effort) -> None:
+    def effort_page_moved(self, old_path: str | None, effort: Effort, keep_old: bool = False) -> str:
         """Rename = move the page: write under the new name, remove the old.
-        Content is preserved; a ghost is never left behind."""
+        Content is preserved; a ghost is never left behind; a page already at
+        the destination is never overwritten. 'moved' | 'created' | 'collision'
+        | 'unchanged'."""
         try:
             new = self._effort_path(effort)
             if new is None:
-                return
+                return "unchanged"
             old = (self._vault / old_path) if old_path else None
             if old is not None and old.exists() and old != new:
+                if new.exists():
+                    return "collision"
                 new.parent.mkdir(parents=True, exist_ok=True)
                 body = old.read_text(encoding="utf-8")
                 lines = body.splitlines()
@@ -863,14 +959,17 @@ class ObsidianVault:
                     lines[0] = f"# {effort.title}"
                 # Temp + atomic replace: a failed write (disk full) leaves the
                 # old page intact and no truncated new one behind.
-                tmp = new.with_suffix(".md.tmp")
-                tmp.write_text("\n".join(lines), encoding="utf-8")
-                tmp.replace(new)
-                old.unlink()
-            elif not new.exists():
+                _write_atomically(new, "\n".join(lines))
+                if not keep_old:        # a page another effort still uses is copied, not moved
+                    old.unlink()
+                return "moved"
+            if not new.exists():
                 self.effort_created(effort)
+                return "created"
+            return "unchanged"
         except Exception:
             _log.warning("obsidian: effort page move failed", exc_info=True)
+            return "unchanged"
 
     def capture_assigned(self, capture: Capture) -> None:
         if capture.effort_id is None:

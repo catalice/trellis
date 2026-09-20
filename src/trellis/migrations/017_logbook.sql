@@ -8,7 +8,8 @@
 -- composed as "<garmin name>[ (avg HR n)][ — <their words>]"; only the words
 -- that aren't derivable from the activity row are carried over. Rows were
 -- matched to activities by garmin id (or by date for pre-link rows) before
--- this migration ships; the table is then dropped.
+-- this migration ships; the table is then dropped — unless it still holds a
+-- note that couldn't be carried (see the end).
 
 ALTER TABLE garmin_activities ADD COLUMN IF NOT EXISTS user_note TEXT;
 
@@ -48,4 +49,26 @@ WHERE tr.user_id = ga.user_id
   AND tr.note IS NOT NULL
   AND ga.user_note IS NULL;
 
-DROP TABLE IF EXISTS training_runs;
+-- The old table goes only when every note in it was carried by activity id.
+-- A note with no matching activity, or one matched by date alone (two runs on
+-- one day can't be told apart), stays readable in training_runs_legacy —
+-- an upgrade never deletes what it could not account for.
+DO $$
+BEGIN
+    IF to_regclass('training_runs') IS NULL THEN
+        RETURN;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM training_runs tr
+        WHERE tr.note IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM garmin_activities ga
+              WHERE ga.user_id = tr.user_id
+                AND ga.activity_id = tr.garmin_activity_id)
+    ) THEN
+        ALTER TABLE training_runs RENAME TO training_runs_legacy;
+        RAISE NOTICE 'training_runs kept as training_runs_legacy: some notes had no activity to move to';
+    ELSE
+        DROP TABLE training_runs;
+    END IF;
+END $$;

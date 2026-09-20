@@ -1,4 +1,4 @@
--- Life context becomes a short dated log (her design, 20 Sep 2026): one line per
+-- Life context becomes a short dated log (the user's design, 20 Sep 2026): one line per
 -- entry, each with the day it was said and its own expiry. The old three-field
 -- blob was rewritten wholesale by the model and loaded every turn as if true.
 -- Python stamps the date and enforces the shape; the model only supplies the line.

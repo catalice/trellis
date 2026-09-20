@@ -716,3 +716,109 @@ class TestMoveUpdateFold(unittest.TestCase):
                                  {"what": "race"}, datetime.now(timezone.utc),
                                  move_service=self._service())
         self.assertIn("plan, baseline, or workout", out)
+
+
+from datetime import datetime as _dt, timezone as _tz
+
+_NOON = _dt(2026, 3, 10, 12, 0, tzinfo=_tz.utc)
+
+
+class TestPartialSyncReceipt:
+    """A sync where a Garmin request failed is reported as partial, naming what
+    wasn't refreshed — never a plain 'Synced'."""
+
+    class _Move:
+        def __init__(self, unavailable):
+            self._unavailable = unavailable
+
+        def sync_garmin(self, user_id, *, now):
+            return {"activities": 1, "health_records": 3, "health_through": "2026-03-10",
+                    "unavailable": self._unavailable}
+
+    def test_partial_names_the_day_and_the_groups(self):
+        from trellis.domain_move_tool import handle_sync_garmin
+        out = handle_sync_garmin(uuid.uuid4(), {}, _NOON,
+                                 move_service=self._Move({"2026-03-10": ("sleep", "hrv")}))
+        assert out.startswith("Partly synced Garmin")
+        assert "2026-03-10: sleep, hrv" in out
+
+    def test_complete_sync_reads_as_before(self):
+        from trellis.domain_move_tool import handle_sync_garmin
+        out = handle_sync_garmin(uuid.uuid4(), {}, _NOON,
+                                 move_service=self._Move({}))
+        assert out.startswith("Synced Garmin") and "Not refreshed" not in out
+
+
+class TestWholeSessionContainer:
+    """A container row duplicates the whole session and must go; a long real
+    effort must never be mistaken for one."""
+
+    @staticmethod
+    def _detail(rows):
+        from trellis.infra_garmin import GarminActivityDetail
+        return GarminActivityDetail(activity_id="x", raw={"typedSplits": {"splits": rows}})
+
+    def test_a_dominant_real_effort_is_kept(self):
+        from trellis.domain_move_service import _extract_splits
+        rows = [{"type": "RWD_WALK", "duration": 300.0, "distance": 400.0},
+                {"type": "RWD_RUN", "duration": 1800.0, "distance": 5000.0},
+                {"type": "RWD_STAND", "duration": 120.0, "distance": 5.0},
+                {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0}]
+        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "30:00", "2:00", "5:00"]
+
+    def test_a_row_enclosing_the_others_in_time_is_dropped(self):
+        from trellis.domain_move_service import _extract_splits
+        def row(kind, start, secs):
+            h, m = divmod(start // 60, 60)
+            eh, em = divmod((start + secs) // 60, 60)
+            return {"type": kind, "duration": float(secs), "distance": 100.0,
+                    "startTimeGMT": f"2026-03-10T{8 + h:02d}:{m:02d}:00.0",
+                    "endTimeGMT": f"2026-03-10T{8 + eh:02d}:{em:02d}:00.0"}
+        rows = [row("RWD_RUN", 0, 2520), row("RWD_WALK", 0, 300), row("RWD_RUN", 300, 1800),
+                row("RWD_STAND", 2100, 120), row("RWD_WALK", 2220, 300)]
+        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "30:00", "2:00", "5:00"]
+
+    def test_without_times_nothing_is_dropped_on_duration(self):
+        """5 + 15 + 5 + 5: the 15 equals the rest combined and is the actual run.
+        Duration is never evidence of a container."""
+        from trellis.domain_move_service import _extract_splits
+        rows = [{"type": "RWD_WALK", "duration": 300.0, "distance": 400.0},
+                {"type": "RWD_RUN", "duration": 900.0, "distance": 2500.0},
+                {"type": "RWD_STAND", "duration": 300.0, "distance": 5.0},
+                {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0}]
+        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "15:00", "5:00", "5:00"]
+
+
+class TestFirstReviewOfAnActivitySaysWhatFailed:
+    """The first review fetches from Garmin and stores. A section that failed in
+    that fetch must be named there and then — not only on a later, cached read."""
+
+    def test_a_failed_lap_fetch_is_named_on_the_first_review(self):
+        from types import SimpleNamespace
+        from zoneinfo import ZoneInfo
+        from trellis.domain_move_service import MoveService
+        from trellis.domain_move_tool import _fmt_run_detail
+        from trellis.infra_garmin import GarminActivityDetail
+
+        act = SimpleNamespace(garmin_activity_id="g1", name="Morning Run", ran_on=_NOON.date(),
+                              distance_km=5.0, duration_min=30.0, avg_hr=150, max_hr=165,
+                              note=None, user_note=None, activity_type="running")
+
+        class Health:
+            stored = None
+            def get_activity_detail(self, uid, aid):
+                return None                                  # never fetched before
+            def upsert_activity_detail(self, *, user_id, activity_id, raw_data, sync_run_id):
+                Health.stored = raw_data
+                return ("splits",)                           # the repository's normalised verdict
+
+        class Reader:
+            def activity_detail(self, uid, aid):
+                return GarminActivityDetail(activity_id=aid, raw={"splitsError": "upstream timeout"})
+
+        svc = MoveService.__new__(MoveService)
+        svc._health, svc._garmin_read = Health(), Reader()
+        svc._repo = SimpleNamespace(recent_workouts=lambda uid, limit: [act])
+        detail = svc.review_run(uuid.uuid4())
+        assert detail["not_fetched"] == ["splits"]
+        assert "Not fetched from Garmin" in _fmt_run_detail(detail)

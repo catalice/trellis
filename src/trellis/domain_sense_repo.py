@@ -1,5 +1,5 @@
 """
-Sense storage — ONE tracking log (migration 020, her design): a row is one
+Sense storage — ONE tracking log (migration 020, the user's design): a row is one
 entry — when, their words, and a FACTS map ({"mood": 3, "energy": 2},
 {"meds": "..."}, {"sleep_hours": 7.5}, {"anxiety": 2}, ...). A new trackable
 dimension is a new key: data, never schema.

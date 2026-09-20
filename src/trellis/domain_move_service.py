@@ -210,6 +210,8 @@ class MoveService:
             "activities": getattr(summary, "activity_records", None),
             "health_records": getattr(summary, "daily_health_records", None),
             "health_through": end.isoformat() if end is not None else None,
+            # ISO date -> groups a failed Garmin request left un-refreshed.
+            "unavailable": dict(getattr(summary, "unavailable", None) or {}),
         }
 
     def review_run(self, user_id: UUID, *, which: int = 0) -> dict | None:
@@ -233,6 +235,7 @@ class MoveService:
             "their_words": act.user_note,
         }
         splits: list[dict] = []
+        first_fetch_failed: list[str] = []
         try:
             detail = None
             stored = (
@@ -248,10 +251,13 @@ class MoveService:
                 detail = self._garmin_read.activity_detail(user_id, act.garmin_activity_id)
                 if self._health is not None and getattr(detail, "raw", None):
                     try:
-                        self._health.upsert_activity_detail(
+                        # The repository normalises the worker's failures. Its
+                        # verdict is what this review reports — the same one a
+                        # later, cached review will read back.
+                        first_fetch_failed = list(self._health.upsert_activity_detail(
                             user_id=user_id, activity_id=act.garmin_activity_id,
                             raw_data=detail.raw, sync_run_id=None,
-                        )
+                        ) or ())
                     except Exception:
                         _log.warning("review_run: detail store failed", exc_info=True)
             if detail is not None:
@@ -262,7 +268,9 @@ class MoveService:
         for e in splits:
             e.pop("_secs", None)
             e.pop("_dist_m", None)
-        return {"overall": overall, "splits": splits, "running": running}
+        not_fetched = first_fetch_failed or (
+            list((getattr(detail, "raw", None) or {}).get("unavailable") or []) if detail else [])
+        return {"overall": overall, "splits": splits, "running": running, "not_fetched": not_fetched}
 
     def watch_workouts(self, user_id: UUID, *, limit: int = 15) -> list[dict]:
         """What's actually in their Garmin workout library (newest first) — so
@@ -333,7 +341,7 @@ def _extract_splits(detail: Any) -> list[dict]:
     # A STRUCTURED workout (INTERVAL_* segments present) is described by those
     # segments ALONE: warmup, work, recovery, cooldown. Garmin's run-walk
     # auto-detection interleaves dozens of RWD_* micro-segments around them,
-    # and feeding that noise to the model made it miscount her intervals
+    # and feeding that noise to the model made it miscount their intervals
     # (30 Aug: "7 rounds" for a 5-interval session). Counting is Python's job.
     structured = [
         r for r in rows
@@ -391,18 +399,53 @@ def _extract_splits(detail: Any) -> list[dict]:
             entry["_secs"] = secs
         if dist_m:
             entry["_dist_m"] = dist_m
+        span = _time_span(row, secs)
+        if span:
+            entry["_span"] = span
         # A type label alone isn't a split — keep only rows carrying a metric.
         if any(k in entry for k in ("distance_km", "time", "pace", "avg_hr", "max_hr")):
             out.append(entry)
-    # Typed payloads wrap the real segments in a whole-session container row
-    # (e.g. one INTERVAL_ACTIVE spanning everything) — it duplicates the overall
-    # line and wrecks the timeline. Drop any row covering ~the whole duration.
-    total = sum(e.get("_secs", 0) for e in out)
-    if len(out) > 3 and total:
-        out = [e for e in out if e.get("_secs", 0) < 0.9 * (total - e.get("_secs", 0))]
+    # Typed payloads can wrap the real segments in a whole-session container row
+    # (one INTERVAL_ACTIVE spanning everything) — it duplicates the overall line
+    # and wrecks the timeline. A container is known by STRUCTURE: its time range
+    # encloses other rows. Duration can't tell it from a long real effort, so
+    # without timestamps nothing is dropped.
+    if len(out) > 3:
+        out = [e for e in out if not _is_container(e, out)]
+    for e in out:
+        e.pop("_span", None)
     for n, e in enumerate(out, start=1):
         e["i"] = n
     return out
+
+
+def _time_span(row: dict, secs: float | None) -> tuple[float, float] | None:
+    """(start, end) in epoch seconds from Garmin's GMT stamps, else None."""
+    def _at(key: str) -> float | None:
+        raw = row.get(key)
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(str(raw).replace("Z", "")).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            return None
+    start, end = _at("startTimeGMT"), _at("endTimeGMT")
+    if start is not None and end is None and secs:
+        end = start + secs
+    return (start, end) if start is not None and end is not None and end > start else None
+
+
+def _is_container(entry: dict, rows: list[dict]) -> bool:
+    """Positive evidence only: this row's time range encloses at least two
+    others. No timestamps, no verdict — an ambiguous row is kept. Duration is
+    never evidence: 5 + 15 + 5 + 5 minutes is four real segments, and the 15 is
+    the run."""
+    span = entry.get("_span")
+    if not span:
+        return False
+    inside = [e for e in rows if e is not entry and e.get("_span")
+              and e["_span"][0] >= span[0] - 1 and e["_span"][1] <= span[1] + 1]
+    return len(inside) >= 2
 
 
 _NOT_RUNNING = {"warmup", "cooldown", "warm up", "cool down"}

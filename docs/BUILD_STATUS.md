@@ -26,7 +26,7 @@ What exists in code now. Working rules: `../CLAUDE.md`. Direction: `DIRECTION.md
 ## Operations
 
 - Deploy: `docker compose up --build` (postgres + health-worker + bot).
-- Migrations: `src/trellis/migrations/001–026`, applied on start.
+- Migrations: `src/trellis/migrations/001–027`, applied on start.
 - Nightly DB backup: `scripts/backup_db.sh` → vault `.backups/`.
 - Tests: `.venv/bin/pytest tests/ -q`.
 - Before a push: `scripts/check_public_hygiene.sh` (also the pre-push hook).
@@ -55,7 +55,7 @@ Builds, in order:
    (the doc is the test script; every divergence fixes the doc or the code),
    ending with onboarding building a Trellis for whoever showed up.
 
-Standing doc rule (her note, 4 Sep): the public docs speak to STRANGERS.
+Standing doc rule (4 Sep): the public docs speak to STRANGERS.
 README/SETUP/BUILD_STATUS carry no insider shorthand - every release that
 changes behaviour updates them in plain words, same discipline as tests.
 

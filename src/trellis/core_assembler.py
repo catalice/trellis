@@ -22,7 +22,7 @@ from trellis.infra_router import Embedder, SemanticRouter
 _log = logging.getLogger(__name__)
 
 _HISTORY_TURNS = 10           # onboarding only; the main path is time-based
-_WINDOW_HOURS = 24            # verbatim memory = the last day (her design) ...
+_WINDOW_HOURS = 24            # verbatim memory = the last day (the user's design) ...
 _WINDOW_CAP = 60              # ... capped so a wild day can't run away
 _SUMMARISE_AFTER = 20
 

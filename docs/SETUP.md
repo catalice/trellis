@@ -31,12 +31,12 @@ Fill in `.env`:
 | Variable | What it is |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | from BotFather |
-| `TELEGRAM_ALLOWED_USERS` | your numeric Telegram id (comma-separated if several) |
+| `TELEGRAM_ALLOWED_USERS` | your numeric Telegram id. Empty admits nobody — start the bot and send it `/start` to learn your id. Trellis answers in private chats only, never in groups |
 | `ANTHROPIC_API_KEY` | your API key |
 | `ANTHROPIC_MODEL` | leave the default unless you know why |
-| `DATABASE_URL` | leave the default for Docker |
 | `OBSIDIAN_VAULT` | absolute path to your vault folder on the host |
 | `TRELLIS_TIMEZONE` | your IANA timezone, e.g. `Europe/London` |
+| `POSTGRES_PASSWORD` | **required** — your own database password, any characters, set **before** the first start. There is no default. The database is only reachable from this machine |
 | `TRELLIS_SECRET_KEY` | any long random string — encrypts stored Garmin sessions |
 | `HEALTH_WORKER_SECRET` | any long random string — auths the Garmin worker |
 | `GROQ_API_KEY` | optional, voice notes |
@@ -71,14 +71,57 @@ automatically every 6 hours; the bot can also sync on demand.
 docker compose logs -f trellis          # watch the bot
 docker compose up --build -d            # deploy after a code change
 scripts/backup_db.sh                    # dump the DB into <vault>/.backups/
+scripts/restore_db.sh <dump>            # rehearse a restore (scratch DB, nothing live)
 docker compose exec trellis python scripts/watcher_tick.py   # force a Watcher tick
 docker compose exec trellis python scripts/backfill_vault.py # re-project the vault
 .venv/bin/pytest tests/ -q              # run tests (uv sync first)
 ```
 
+Some tests run against a real Postgres (the deployed pgvector image) and are
+skipped when Docker isn't reachable. With Colima, point them at its socket:
+
+```bash
+export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock TESTCONTAINERS_RYUK_DISABLED=true
+```
+
 The DB volume is your life data — never `docker compose down -v` casually.
-`scripts/backup_db.sh` is designed to run nightly (cron/launchd); it needs
-`OBSIDIAN_VAULT` in its environment.
+
+## Backup and restore
+
+`scripts/backup_db.sh` is designed to run nightly (cron/launchd). It reads
+`OBSIDIAN_VAULT` from its environment, else from `.env`. A run that fails leaves
+every earlier dump untouched; the newest 14 are kept.
+
+The dump lands **inside the vault**, so three things together are a complete
+backup, and all three must reach somewhere off this machine:
+
+| What | Why it can't be rebuilt |
+|---|---|
+| The vault (including `.backups/`) | the database dumps, and anything you wrote in the vault by hand |
+| `.env` | `TRELLIS_SECRET_KEY` — without it, stored Garmin sessions can't be decrypted |
+| Nothing else | code is in git; generated vault pages are re-projected from the database |
+
+Rehearse a restore now and then — it touches nothing live:
+
+```bash
+scripts/restore_db.sh <vault>/.backups/trellis-YYYY-MM-DD.sql.gz
+```
+
+It restores into a scratch database, prints what it found, and drops it. To
+replace the live database:
+
+```bash
+scripts/restore_db.sh <vault>/.backups/trellis-YYYY-MM-DD.sql.gz --live
+```
+
+A live restore checks the dump in a staging database first — if it doesn't
+import cleanly, nothing live is touched. It then asks you to type `restore`,
+stops the bot, swaps the two databases by rename, and starts the bot. The
+database it replaced is kept as `trellis_before_restore_<time>` until you drop
+it yourself. Afterwards, run `scripts/backfill_vault.py` to re-project the vault.
+
+Only one backup runs at a time: a second one started meanwhile steps aside.
 
 ## Contributing / forking
 

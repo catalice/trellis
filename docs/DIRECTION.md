@@ -29,7 +29,7 @@ runs free of the noticing one. Discovery is broad (the Master proposes); verific
 
 ## What Trellis Is
 
-A personal operating system. Not a running bot with extra features — a trellis. Chosen structure, built by Cat, for Cat.
+A personal operating system. Not a running bot with extra features — a trellis. Chosen structure, built by the person who uses it, for them.
 
 A trellis does not grow for you. It gives you something to grow against. It holds shape so you don't have to hold it yourself. It is not a cage — it is chosen structure, and it can be extended, pruned, redirected as you change.
 

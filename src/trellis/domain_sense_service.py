@@ -106,7 +106,7 @@ class SenseService:
 
     def day_rows(self, user_id: UUID, *, since, until, now) -> dict:
         """The Watcher's day-by-day view, on demand — one dict per day of
-        everything tracked. Borrow the slow mind's eyes (her design)."""
+        everything tracked. Borrow the slow mind's eyes (the user's design)."""
         from datetime import datetime as _dt, time as _t, timezone as _tz
         from trellis.core_watcher import build_daily_frame
         start_dt = _dt.combine(since, _t.min, tzinfo=self._tz)
@@ -268,7 +268,41 @@ class SenseService:
                 out["synced_at"] = synced.astimezone(self._tz).strftime("%H:%M")
             except (ValueError, OSError):
                 pass
+        # A reading the latest sync did NOT supply — its request failed, or it
+        # answered with nothing — is older than synced_at says. Every reading
+        # carries the time it was last really fetched; one that trails the
+        # latest sync is named, with that time. Rows from before stamps existed
+        # make no claim either way.
+        stamps = (getattr(h, "raw", None) or {}).get("refreshed_at") or {}
+        if out and stamps and synced is not None:
+            kept: dict[str, str | None] = {}
+            for shown, source, label in _SHOWN_READINGS:
+                if shown not in out or label in kept:
+                    continue
+                try:
+                    good = datetime.fromisoformat(str(stamps[source]))
+                except (KeyError, ValueError, TypeError):
+                    kept[label] = None
+                    continue
+                if (synced - good).total_seconds() > _SAME_SYNC_SECONDS:
+                    local = good.astimezone(self._tz)
+                    same_day = local.date() == synced.astimezone(self._tz).date()
+                    kept[label] = local.strftime("%H:%M" if same_day else "%-d %b %H:%M")
+            if kept:
+                out["not_refreshed"] = kept
         return out or None
+
+
+# (key in recent_health's dict, the worker field it came from, how it's named).
+_SHOWN_READINGS = (
+    ("sleep_score", "sleep_score", "sleep"), ("sleep_hours", "sleep_duration_minutes", "sleep"),
+    ("hrv_last_night", "hrv_last_night", "HRV"),
+    ("body_battery_end", "body_battery_end", "body battery"),
+    ("body_battery_high", "body_battery_max", "body battery"),
+    ("resting_hr", "resting_hr", "RHR"), ("avg_stress", "stress_avg", "stress"),
+)
+# A row's updated_at and its readings' stamps come from the same sync a moment apart.
+_SAME_SYNC_SECONDS = 120
 
 
 def _clamp_score(value: int | None) -> int | None:

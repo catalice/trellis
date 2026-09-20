@@ -1,7 +1,7 @@
 -- The Watcher (intelligence layer) — the big brain's slow mind.
 -- One table: every pattern hypothesis the Watcher has ever entertained.
 -- NO seeds are planted here or anywhere: rows are born only from discovery
--- (her rule — no enumeration; the Watcher notices, it is never told what to watch).
+-- (the user's rule — no enumeration; the Watcher notices, it is never told what to watch).
 CREATE TABLE IF NOT EXISTS watcher_patterns (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES trellis_users(id),
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS watcher_patterns (
     stats JSONB,                    -- raw numbers behind the evidence
     proposed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     verified_at TIMESTAMPTZ,
-    resolved_at TIMESTAMPTZ,        -- when she adopted/dismissed it
+    resolved_at TIMESTAMPTZ,        -- when they adopted/dismissed it
     resolution_note TEXT
 );
 

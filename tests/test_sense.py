@@ -232,7 +232,7 @@ class TestHealthStaleness:
 
     def test_body_battery_is_the_level_not_the_days_max(self):
         """15 Sep: the line quoted the day's MAXIMUM as 'body battery' — 99 on an
-        evening she was at 15. The level is the last reading; the peak is context."""
+        evening they were at 15. The level is the last reading; the peak is context."""
         from trellis.domain_sense_tool import _fmt_health
         line = _fmt_health({"date": "2026-09-14", "body_battery_end": 15, "body_battery_high": 99})
         assert "body battery 15 as of last watch sync, peaked at 99" in line
@@ -246,7 +246,7 @@ class TestHealthStaleness:
 
 class TestCycleSummary:
     """5 Sep: nine months of cycle history was invisible to the fast mind five
-    weeks before her wedding. The maths is Python's, computed from the log."""
+    when it mattered. The maths is Python's, computed from the log."""
 
     class _Repo:
         def __init__(self, starts):
@@ -314,3 +314,52 @@ class TestLoggedSummary:
         svc.log_event(UID, TrackingEventType.MEDS, detail="magnesium",
                       occurred_at=NOW - timedelta(days=40))
         assert svc.logged_summary(UID, days=30, now=NOW) == []
+
+
+class TestKeptReadingsAreNamedAsOld:
+    """Hours after a sync that didn't bring a reading — the request failed, or it
+    answered with nothing — the context line must still say that number is older
+    than the sync, and when it was last really fetched."""
+
+    class _Health:
+        def __init__(self, record):
+            self._record = record
+        def latest_daily_health(self, uid):
+            return self._record
+
+    MORNING = "2026-07-20T05:10:00+00:00"
+
+    def _line(self, refreshed_at):
+        from types import SimpleNamespace
+        from trellis.domain_sense_tool import _fmt_health
+        record = SimpleNamespace(
+            observed_on=NOW.astimezone(TZ).date(), sleep_score=81, sleep_duration_minutes=432,
+            resting_heart_rate=52, hrv_last_night=55.0, hrv_status=None, body_battery_maximum=90,
+            body_battery_end=80, average_stress=30, updated_at=NOW,
+            raw={} if refreshed_at is None else {"refreshed_at": refreshed_at})
+        svc = SenseService(FakeStateRepo(), TZ, health_reader=self._Health(record))
+        return _fmt_health(svc.recent_health(UID, now=NOW))
+
+    def _all_fresh(self):
+        return {k: NOW.isoformat() for k in ("sleep_score", "sleep_duration_minutes", "hrv_last_night",
+                                             "body_battery_end", "body_battery_max", "resting_hr", "stress_avg")}
+
+    def test_an_empty_answer_with_no_error_still_leaves_the_reading_old(self):
+        """The evening sync answered, carried no body battery, raised nothing.
+        The morning's 80 must not read as the evening's."""
+        stamps = {**self._all_fresh(), "body_battery_end": self.MORNING, "body_battery_max": self.MORNING}
+        line = self._line(stamps)
+        assert "NOT refreshed at the last sync" in line
+        assert "body battery (last good 07:10)" in line
+        assert "sleep (" not in line and "HRV (" not in line        # the fresh ones aren't named
+
+    def test_a_reading_never_stamped_is_named_as_unknown(self):
+        stamps = self._all_fresh()
+        del stamps["hrv_last_night"]
+        assert "HRV (last good unknown)" in self._line(stamps)
+
+    def test_a_clean_sync_says_nothing_extra(self):
+        assert "NOT refreshed" not in self._line(self._all_fresh())
+
+    def test_a_row_from_before_stamps_existed_makes_no_claim(self):
+        assert "NOT refreshed" not in self._line(None)

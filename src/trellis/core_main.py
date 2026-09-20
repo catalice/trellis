@@ -188,6 +188,10 @@ def main() -> None:
 
     settings = Settings.from_env()
     settings.validate()
+    if not settings.telegram_allowed_users:
+        logging.getLogger(__name__).warning(
+            "TELEGRAM_ALLOWED_USERS is empty: nobody can use this bot. Send it "
+            "/start to learn your Telegram id, add it to .env, and restart.")
 
     database = PostgresDatabase(settings.database_url)
     database.migrate(Path(__file__).with_name("migrations"))
@@ -367,8 +371,8 @@ def main() -> None:
     )
 
     def brain_refresh(uid) -> None:
-        """Feed the vault's Brain pages from the live stores (her window into
-        everything saved about her)."""
+        """Feed the vault's Brain pages from the live stores (the user's window into
+        everything saved about them)."""
         vault.brain_changed(
             uid,
             profile=profile_service.get(uid),

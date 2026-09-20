@@ -232,7 +232,7 @@ def handle_move_get(user_id: UUID, input_dict: dict, now: datetime, *, move_serv
 
 
 def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
-    """One write door for the training record (her call, 15 Sep 2026 — the fold
+    """One write door for the training record (the user's call, 15 Sep 2026 — the fold
     that took Move from five tools to four). The proven handlers stay behind it."""
     what = str(input_dict.get("what", "")).strip().lower()
     if what == "plan":
@@ -351,7 +351,12 @@ def handle_sync_garmin(
     if result.get("health_through"):
         days = result.get("health_records")
         bits.append(f"health up to {result['health_through']}" + (f" ({days} day(s))" if days else ""))
-    out = "Synced Garmin — " + (", ".join(bits) if bits else "done") + "."
+    missed = result.get("unavailable") or {}
+    out = ("Partly synced Garmin — " if missed else "Synced Garmin — ") + (", ".join(bits) if bits else "done") + "."
+    if missed:
+        # Partial is said as partial: the readings below may be older than this sync.
+        out += "\nNot refreshed (Garmin request failed; stored readings kept): " + "; ".join(
+            f"{day}: {', '.join(groups)}" for day, groups in sorted(missed.items()))
     # The fresh numbers ride back on the receipt: a sync that reports "done"
     # without them left the model quoting the pre-sync figure (15 Sep, body
     # battery 17 vs the 71 that had just landed). Sense owns the data; Move
@@ -391,6 +396,9 @@ def _fmt_run_detail(detail: dict) -> str:
         if running.get("avg_hr"):
             r.append(f"avg HR {running['avg_hr']}")
         lines.append(", ".join(r) + " — judge the run on this, not the overall average")
+    if detail.get("not_fetched"):
+        lines.append("Not fetched from Garmin at the last sync (request failed): "
+                     + ", ".join(detail["not_fetched"]) + " — what's below may be incomplete.")
     splits = detail.get("splits") or []
     if splits:
         aggregated = any(s.get("count") for s in splits)

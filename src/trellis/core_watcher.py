@@ -90,7 +90,7 @@ class PostgresWatcherRepository:
     def set_verification(self, pattern_id: UUID, *, verified: bool,
                          evidence: str, stats: dict) -> None:
         """Record a verification run. Verifying promotes proposed/watching ->
-        verified; failing to verify never demotes an adopted pattern (her
+        verified; failing to verify never demotes an adopted pattern (their
         verdict outranks a noisy week) — it just refreshes the evidence."""
         with self._db.connect() as conn:
             with conn.cursor() as cur:
@@ -209,7 +209,7 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
         if bucket["mood"]:
             row(d)["mood"] = sum(bucket["mood"]) / len(bucket["mood"])
 
-    # Her WORDS reach the garden too (their call, 12 Aug): "anxious" can only
+    # Their WORDS reach the garden too (their call, 12 Aug): "anxious" can only
     # cluster into a pattern if discovery can read it. Truncated hard — a few
     # short snippets per day; rambles are brain_dump's job, not the frame's.
     for s_ in states:
@@ -516,7 +516,7 @@ class WatcherDiscovery:
                     "role": "user",
                     "content": f"THE GARDEN:\n{garden_summary}\n\n"
                                f"HYPOTHESES ALREADY TRACKED:\n{existing_text}\n\n"
-                               f"DISMISSED BY HER (never re-propose, even reworded):\n{dismissed_text}",
+                               f"DISMISSED BY THEM (never re-propose, even reworded):\n{dismissed_text}",
                 }],
             )
             raw = "".join(b.text for b in response.content
@@ -779,7 +779,7 @@ class Watcher:
                 "Verified but not yet discussed — offer ONE, gently, only when the "
                 "moment fits. You are a guide who helps them grow: an observation "
                 "with its evidence, connected to what it could feed — an "
-                "invitation, never an assignment, never a verdict. Record her "
+                "invitation, never an assignment, never a verdict. Record their "
                 "verdict with pattern_response:"
             )
             for p in verified:
@@ -855,7 +855,7 @@ PATTERN_RESPONSE_TOOL: dict = {
     "name": "pattern_response",
     "description": (
         "Record the user's verdict on a Watcher pattern that was offered to them. "
-        "Verification proved the numbers; SHE rules on the meaning. adopted = it "
+        "Verification proved the numbers; THEY rule on the meaning. adopted = it "
         "may quietly shape suggestions from now on. dismissed = never mention it "
         "again, ever. watching = interesting, keep testing. Get the pattern id "
         "from the [id] in the Watcher context."

@@ -362,6 +362,12 @@ def _fmt_health(health: "dict | None") -> "str | None":
         bits.append(f"RHR {health['resting_hr']}")
     if health.get("avg_stress") is not None:
         bits.append(f"stress {health['avg_stress']}")
+    kept = health.get("not_refreshed") or {}
+    if kept and bits:
+        # "synced HH:MM" is when a sync last RAN. That sync didn't bring these
+        # readings, so they are older — said every time, not only in its receipt.
+        bits.append("NOT refreshed at the last sync, kept from earlier: " + ", ".join(
+            f"{name} (last good {when or 'unknown'})" for name, when in kept.items()))
     return ", ".join(bits) if bits else None
 
 
@@ -486,7 +492,7 @@ SENSE_ROOMS: list[str] = [
 def sense_tools(sense_service, tz) -> list[tuple[dict, Any]]:
     # log_state (the write) + sense_get (the seeing-all door, added 5 Sep 2026:
     # reads-are-context worked at two weeks of data and failed at nine months —
-    # the cycle history was invisible five weeks before her wedding).
+    # months of cycle history were invisible to the fast mind).
     return [
         (
             LOG_STATE_TOOL,

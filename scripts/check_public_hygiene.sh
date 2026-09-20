@@ -16,21 +16,35 @@ set -euo pipefail
 # symlink from .git/hooks/, so its own path resolves inside .git/.
 REPO_DIR="$(git rev-parse --show-toplevel)"
 DENYLIST="$REPO_DIR/.hygiene-denylist"
+# The denylist is gitignored, so a linked worktree doesn't have one — use the
+# main checkout's rather than silently checking nothing.
+if [[ ! -f "$DENYLIST" ]]; then
+    MAIN_DIR="$(cd "$(git rev-parse --git-common-dir)/.." 2>/dev/null && pwd || true)"
+    [[ -n "$MAIN_DIR" && -f "$MAIN_DIR/.hygiene-denylist" ]] && DENYLIST="$MAIN_DIR/.hygiene-denylist"
+fi
 
 if [[ ! -f "$DENYLIST" ]]; then
     echo "hygiene: no .hygiene-denylist found — skipping (create one; see script header)"
     exit 0
 fi
 
-# As a pre-push hook, git hands us the refs being pushed on stdin — check the
-# TREES OF THOSE COMMITS, not just the worktree: a marker removed from the
-# checkout but alive in a pushed commit's tree would otherwise ride out.
+# As a pre-push hook, git hands us the refs being pushed on stdin — check
+# EVERY COMMIT being published, not just the tip: a marker added in one commit
+# and removed in the next is gone from the checkout and the tip, and still
+# ships in history.
 REFS_TO_CHECK=()
 if [[ ! -t 0 ]]; then
-    while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    while read -r _local_ref local_sha _remote_ref remote_sha; do
         [[ -z "${local_sha:-}" ]] && continue
         [[ "$local_sha" =~ ^0+$ ]] && continue   # deletion push
-        REFS_TO_CHECK+=("$local_sha")
+        if [[ -z "${remote_sha:-}" || "$remote_sha" =~ ^0+$ ]]; then
+            range=("$local_sha" --not --remotes)   # new branch: all the remote lacks
+        else
+            range=("$remote_sha..$local_sha")
+        fi
+        while read -r sha; do
+            [[ -n "$sha" ]] && REFS_TO_CHECK+=("$sha")
+        done < <(cd "$REPO_DIR" && git rev-list "${range[@]}" 2>/dev/null || echo "$local_sha")
     done || true
 fi
 
