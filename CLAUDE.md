@@ -434,7 +434,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - `.env` is gitignored — contains live bot token, API key, secrets. Never log or expose.
 - DB reset (full wipe): `docker compose down -v && docker compose up --build -d`
 - Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
-- Embedding backfill (safe to re-run): `uv run python scripts/backfill_embeddings.py`
+- Embedding backfill (safe to re-run, bot STOPPED — a write landing mid-run is undone): `docker compose stop trellis`, `uv run python scripts/backfill_embeddings.py`, check exit 0, `docker compose start trellis`
 - Tests: `.venv/bin/pytest tests/ -q`
 - Scenarios (`tests/test_scenarios.py`, `tests/harness.py`): one set, run with a scripted model always, and with the real model when `TRELLIS_EVAL=1` — an evaluation of the model, not a gate on the software. Add a scenario immediately before fixing the fault it shows.
 - The embedding model is baked into the image (Dockerfile) — the bot embeds offline at runtime.

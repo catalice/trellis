@@ -215,6 +215,13 @@ is not a release snapshot. Tag the code and the running images for rollback.
 the record with the right status (`action_log`). One harmless reminder reaching
 `accepted`. Maps and effort pages identical to the snapshot.
 
+**Index repair runs with the bot stopped.** `scripts/backfill_embeddings.py`
+reads the records, then the index, then repairs — a capture, rename or
+completion landing in between is undone. The bot is the only other index
+writer: `docker compose stop trellis` (Postgres stays up), run the script, check
+its exit status (1 = not finished; re-run before starting), then
+`docker compose start trellis`. One-off maintenance, so a procedure, not locking.
+
 **Rolling back is code AND state.** Tags alone are not a rollback: the previous
 code only looks at `scheduled` reminders, so any the new code left `claimed` or
 `executed` would be missed for ever — and restoring the old dump would discard

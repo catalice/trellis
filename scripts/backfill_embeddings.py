@@ -1,12 +1,19 @@
 """
 Backfill the meaning index for existing rows.
 
-One-time (safely re-runnable) maintenance: finds captures, efforts and seeds not
-yet in memory_index and files each one via the same MemoryIndex the app uses.
-Re-running is a no-op once everything is filed. Text composition is delegated to
-the model methods, so it can never drift from embed-on-write.
+Reconciles memory_index with the records (captures, efforts, open seeds) via the
+same MemoryIndex the app uses: files what is missing, re-files what changed or
+was never embedded, removes orphans. Re-running is a no-op once they agree. Text
+composition is delegated to the model methods, so it can never drift from
+embed-on-write.
 
-Run:  uv run python scripts/backfill_embeddings.py
+RUN IT WITH THE BOT STOPPED. It reads the records, then the index, then repairs:
+a write landing in between is undone — a fresh capture removed as an orphan, a
+rename put back to its old words. The bot is the only other index writer.
+
+    docker compose stop trellis          # Postgres stays up
+    uv run python scripts/backfill_embeddings.py ; echo "exit $?"
+    docker compose start trellis         # only after exit 0; on 1, re-run first
 """
 from __future__ import annotations
 
