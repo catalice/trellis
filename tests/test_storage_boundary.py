@@ -113,3 +113,22 @@ class TestPartialActivityDetail:
         with pg_database.connect() as conn, conn.cursor() as cur:
             cur.execute("SELECT raw_data ? 'unavailable' FROM garmin_activity_details WHERE activity_id = 'p2'")
             assert cur.fetchone() == (False,)
+
+
+class TestKeptReadingsStaySaidToBeOld:
+    """A reading kept because its refresh failed must not read as fresh later:
+    the last good refresh of each group is recorded, and survives the merge."""
+
+    def test_each_group_remembers_its_last_good_refresh(self, pg_database, pg_user):
+        repo = PostgresHealthRepository(pg_database)
+        repo.upsert_daily_health(GarminDailyHealthRecord(
+            user_id=pg_user, observed_on=DAY, steps=4000, sleep_score=81,
+            raw={"steps": 4000, "sleep_score": 81,
+                 "refreshed_at": {"stats": "2026-03-10T07:00:00+00:00", "sleep": "2026-03-10T07:00:00+00:00"}}))
+        repo.upsert_daily_health(GarminDailyHealthRecord(
+            user_id=pg_user, observed_on=DAY, steps=9000,
+            raw={"steps": 9000, "unavailable": ["sleep"],
+                 "refreshed_at": {"stats": "2026-03-10T19:00:00+00:00"}}))
+        raw = repo.latest_daily_health(pg_user).raw
+        assert raw["refreshed_at"] == {"stats": "2026-03-10T19:00:00+00:00",
+                                       "sleep": "2026-03-10T07:00:00+00:00"}

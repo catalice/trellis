@@ -229,7 +229,9 @@ class PostgresHealthRepository:
         of them, so a missing field means "not fetched this time", never "gone":
         it keeps the stored reading. A real value always replaces. The raw
         payload merges the same way; its 'unavailable' mark reflects only the
-        latest sync."""
+        latest sync, and 'refreshed_at' remembers, per group, the last time that
+        group really was fetched — so a kept reading is never mistaken for a
+        fresh one (updated_at only says when a sync last ran)."""
         with self.database.connect() as connection:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
@@ -263,7 +265,10 @@ class PostgresHealthRepository:
                         hrv_last_night = COALESCE(EXCLUDED.hrv_last_night, garmin_daily_health.hrv_last_night),
                         hrv_status = COALESCE(EXCLUDED.hrv_status, garmin_daily_health.hrv_status),
                         raw_data = (garmin_daily_health.raw_data - 'unavailable')
-                                   || jsonb_strip_nulls(EXCLUDED.raw_data),
+                                   || jsonb_strip_nulls(EXCLUDED.raw_data)
+                                   || jsonb_build_object('refreshed_at',
+                                        COALESCE(garmin_daily_health.raw_data->'refreshed_at', '{}'::jsonb)
+                                        || COALESCE(EXCLUDED.raw_data->'refreshed_at', '{}'::jsonb)),
                         provenance = EXCLUDED.provenance,
                         sync_run_id = EXCLUDED.sync_run_id,
                         updated_at = EXCLUDED.updated_at

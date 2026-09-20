@@ -13,7 +13,7 @@ import http.client
 import socket
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -538,6 +538,10 @@ class GarminSyncClient(Protocol):
     def activity_detail(self, session_dump: str, activity_id: str) -> GarminActivityDetail: ...
 
 
+# The groups the worker fetches separately for one day (its 'unavailable' names).
+DAILY_HEALTH_GROUPS = ("stats", "heart_rate", "sleep", "body_battery", "stress", "hrv")
+
+
 @dataclass(frozen=True)
 class GarminSyncSummary:
     daily_health_records: int
@@ -635,14 +639,17 @@ class GarminSyncService:
                     missed = tuple(str(g) for g in (metric.raw.get("unavailable") or ()))
                     if missed:
                         unavailable[metric.date.isoformat()] = missed
-                    self.health_repository.upsert_daily_health(
-                        GarminDailyHealthRecord.from_garmin(
-                            user_id, metric,
-                            provenance=GarminHealthProvenance(
-                                sync_run_id=run.id, fetched_at=now, worker_endpoint="/sync",
-                            ),
-                        )
+                    record = GarminDailyHealthRecord.from_garmin(
+                        user_id, metric,
+                        provenance=GarminHealthProvenance(
+                            sync_run_id=run.id, fetched_at=now, worker_endpoint="/sync",
+                        ),
                     )
+                    # Each group that DID arrive is stamped; a kept reading keeps
+                    # its older stamp through the storage merge.
+                    arrived = {g: now.isoformat() for g in DAILY_HEALTH_GROUPS if g not in missed}
+                    record = replace(record, raw={**record.raw, "refreshed_at": arrived})
+                    self.health_repository.upsert_daily_health(record)
             except Exception as error:
                 self.health_repository.finish_sync(
                     run.failed(completed_at=now, error=_safe_error(error))

@@ -268,6 +268,21 @@ class SenseService:
                 out["synced_at"] = synced.astimezone(self._tz).strftime("%H:%M")
             except (ValueError, OSError):
                 pass
+        # Groups the latest sync failed to refresh: their numbers above are
+        # older than synced_at says. Named with when each was last really fetched.
+        raw = getattr(h, "raw", None) or {}
+        missed = [str(g) for g in (raw.get("unavailable") or [])]
+        if out and missed:
+            stamps = raw.get("refreshed_at") or {}
+            kept: dict[str, str | None] = {}
+            for group in missed:
+                try:
+                    good = datetime.fromisoformat(str(stamps[group])).astimezone(self._tz)
+                    today = now.astimezone(self._tz).date() if now is not None else good.date()
+                    kept[group] = good.strftime("%H:%M") if good.date() == today else good.strftime("%-d %b %H:%M")
+                except (KeyError, ValueError, TypeError):
+                    kept[group] = None
+            out["not_refreshed"] = kept
         return out or None
 
 

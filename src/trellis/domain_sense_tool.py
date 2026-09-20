@@ -362,7 +362,17 @@ def _fmt_health(health: "dict | None") -> "str | None":
         bits.append(f"RHR {health['resting_hr']}")
     if health.get("avg_stress") is not None:
         bits.append(f"stress {health['avg_stress']}")
+    kept = health.get("not_refreshed") or {}
+    if kept and bits:
+        # "synced HH:MM" is when a sync last RAN. These groups failed in it, so
+        # their numbers are older — said every time, not only in the sync receipt.
+        bits.append("NOT refreshed at the last sync, kept from earlier: " + ", ".join(
+            f"{_GROUP_LABELS.get(g, g)} (last good {when or 'unknown'})" for g, when in kept.items()))
     return ", ".join(bits) if bits else None
+
+
+_GROUP_LABELS = {"stats": "steps", "heart_rate": "RHR", "sleep": "sleep",
+                 "body_battery": "body battery", "stress": "stress", "hrv": "HRV"}
 
 
 # ---------------------------------------------------------------------------

@@ -314,3 +314,34 @@ class TestLoggedSummary:
         svc.log_event(UID, TrackingEventType.MEDS, detail="magnesium",
                       occurred_at=NOW - timedelta(days=40))
         assert svc.logged_summary(UID, days=30, now=NOW) == []
+
+
+class TestKeptReadingsAreNamedAsOld:
+    """Hours after a partial sync, the context line must still say which numbers
+    were not refreshed and when they were last good."""
+
+    class _Health:
+        def __init__(self, record):
+            self._record = record
+        def latest_daily_health(self, uid):
+            return self._record
+
+    def _line(self, raw):
+        from types import SimpleNamespace
+        from trellis.domain_sense_tool import _fmt_health
+        record = SimpleNamespace(
+            observed_on=NOW.astimezone(TZ).date(), sleep_score=81, sleep_duration_minutes=432,
+            resting_heart_rate=52, hrv_last_night=55.0, hrv_status=None, body_battery_maximum=90,
+            body_battery_end=40, average_stress=30, updated_at=NOW, raw=raw)
+        svc = SenseService(FakeStateRepo(), TZ, health_reader=self._Health(record))
+        return _fmt_health(svc.recent_health(UID, now=NOW))
+
+    def test_a_kept_group_is_named_with_when_it_was_last_good(self):
+        line = self._line({"unavailable": ["sleep", "hrv"],
+                           "refreshed_at": {"sleep": "2026-07-20T05:10:00+00:00", "stats": NOW.isoformat()}})
+        assert "NOT refreshed at the last sync" in line
+        assert "sleep (last good 07:10)" in line
+        assert "HRV (last good unknown)" in line
+
+    def test_a_clean_sync_says_nothing_extra(self):
+        assert "NOT refreshed" not in self._line({"refreshed_at": {"sleep": NOW.isoformat()}})
