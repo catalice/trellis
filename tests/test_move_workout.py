@@ -337,14 +337,48 @@ class TestAnnotateWorkout(unittest.TestCase):
         updated = svc.annotate_workout(w.user_id, dt.date(2026, 8, 5), "trainer destroyed my legs")
         self.assertEqual(updated.user_note, "trainer destroyed my legs")
 
-    def test_two_activities_prefers_the_run(self):
+    def test_two_activities_and_no_sport_named_is_refused_not_guessed(self):
+        """It used to prefer the run, else take the first — and once filed the
+        account of a run on a strength session, then said it had logged the run."""
+        import datetime as dt
+        from trellis.domain_move_service import AmbiguousWorkout
+        d = dt.date(2026, 8, 5)
+        strength = self._workout(d, "Strength", kind="strength_training", aid="s1")
+        run = self._workout(d, "Morning Running", aid="r1")
+        svc = self._service([strength, run])
+        with self.assertRaises(AmbiguousWorkout) as caught:
+            svc.annotate_workout(run.user_id, d, "social run")
+        self.assertEqual({w.garmin_activity_id for w in caught.exception.candidates}, {"s1", "r1"})
+        self.assertIsNone(strength.user_note)                       # nothing was written anywhere
+
+    def test_naming_the_sport_picks_that_activity(self):
         import datetime as dt
         d = dt.date(2026, 8, 5)
         strength = self._workout(d, "Strength", kind="strength_training", aid="s1")
         run = self._workout(d, "Morning Running", aid="r1")
         svc = self._service([strength, run])
-        updated = svc.annotate_workout(run.user_id, d, "social run")
-        self.assertEqual(updated.garmin_activity_id, "r1")
+        self.assertEqual(svc.annotate_workout(run.user_id, d, "social run", sport="run").garmin_activity_id, "r1")
+        self.assertEqual(svc.annotate_workout(run.user_id, d, "heavy legs", sport="strength").garmin_activity_id, "s1")
+
+    def test_a_run_that_has_not_synced_yet_is_not_filed_on_the_strength_session(self):
+        """The 16 Sep failure: the run wasn't on record yet, only the strength session was."""
+        import datetime as dt
+        from trellis.domain_move_service import NoSuchWorkout
+        d = dt.date(2026, 8, 5)
+        strength = self._workout(d, "Strength", kind="strength_training", aid="s1")
+        svc = self._service([strength])
+        with self.assertRaises(NoSuchWorkout) as caught:
+            svc.annotate_workout(strength.user_id, d, "easy 5k, felt good", sport="run")
+        self.assertEqual([w.garmin_activity_id for w in caught.exception.that_day], ["s1"])
+
+    def test_a_note_filed_on_the_wrong_activity_can_be_taken_off(self):
+        import datetime as dt
+        d = dt.date(2026, 8, 5)
+        strength = self._workout(d, "Strength", kind="strength_training", aid="s1",
+                                 user_note="heavy legs — easy 5k, felt good")
+        svc = self._service([strength])
+        updated = svc.annotate_workout(strength.user_id, d, "", sport="strength", remove="easy 5k, felt good")
+        self.assertEqual(updated.user_note, "heavy legs")
 
     def test_no_workout_that_date_returns_none(self):
         import datetime as dt

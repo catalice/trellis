@@ -20,6 +20,7 @@ from uuid import UUID
 
 from trellis.core_actions import failed, partial, unknown
 from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
+from trellis.domain_move_service import AmbiguousWorkout, NoSuchWorkout
 
 _log = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ MOVE_UPDATE_TOOL: dict = {
         "(days sent replace same-dated days, days not sent survive; nothing is removed unless "
         "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
         "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
+        "The activity is never guessed: a day with several needs sport, and one not synced yet is refused. "
         "Result reports what's now stored — read it."
     ),
     "input_schema": {
@@ -101,6 +103,14 @@ MOVE_UPDATE_TOOL: dict = {
             "note": {
                 "type": "string",
                 "description": "workout: short, in their spirit: 'social run', 'cut short — knee'.",
+            },
+            "sport": {
+                "type": "string",
+                "description": "workout: which activity that day — 'run', 'strength', … Needed when the day has more than one; never guessed.",
+            },
+            "remove": {
+                "type": "string",
+                "description": "workout: a fragment of their earlier words to take OFF this activity (filed on the wrong one).",
             },
         },
         "required": ["what"],
@@ -324,20 +334,36 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
 def _update_workout(user_id: UUID, input_dict: dict, *, move_service) -> str:
     raw_date = str(input_dict.get("date", "")).strip()
     note = str(input_dict.get("note", "")).strip()
-    if not note:
-        return "note is required — their account of the workout."
+    sport = str(input_dict.get("sport", "")).strip() or None
+    remove = str(input_dict.get("remove", "")).strip() or None
+    if not note and not remove:
+        return failed("note is required — their account of the workout.")
     try:
         on_date = date.fromisoformat(raw_date)
     except ValueError:
         return f"Invalid date {raw_date!r} — use YYYY-MM-DD (check move_get history)."
     try:
-        workout = move_service.annotate_workout(user_id, on_date, note)
+        workout = move_service.annotate_workout(user_id, on_date, note, sport=sport, remove=remove)
+    except AmbiguousWorkout as exc:
+        return failed(f"Not saved — {raw_date} has several activities: "
+                      + "; ".join(_describe_activity(w) for w in exc.candidates)
+                      + ". Send it again with sport set to the one they mean.")
+    except NoSuchWorkout as exc:
+        return failed(f"Not saved — no {exc.sport} activity is recorded on {raw_date} "
+                      "(that day has: " + "; ".join(_describe_activity(w) for w in exc.that_day)
+                      + "). It may not have synced yet: sync_garmin, then send it again. "
+                      "Their words are NOT stored yet — say so.")
     except Exception:
         _log.warning("move_update workout failed", exc_info=True)
         return unknown("Updating that workout hit an error part-way — it may or may not have saved. Read it back before saying which.")
     if workout is None:
-        return f"Nothing recorded on {raw_date}. Check move_get history for the right date."
-    return f"Workout on {raw_date} updated: {workout.note}"
+        return failed(f"Not saved — nothing is recorded on {raw_date}. It may not have synced yet "
+                      "(sync_garmin), or the date is off (move_get history). Their words are NOT stored yet.")
+    return f"Workout on {raw_date} ({workout.activity_type or 'activity'}) now reads: {workout.note}"
+
+
+def _describe_activity(workout) -> str:
+    return f"{workout.name or workout.note.split(' — ')[0]} ({workout.activity_type or 'unknown sport'})"
 
 
 def handle_sync_garmin(

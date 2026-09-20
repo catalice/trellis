@@ -51,6 +51,27 @@ class WorkoutSpecError(ValueError):
     """The coach's workout spec couldn't be turned into a Garmin workout."""
 
 
+class AmbiguousWorkout(ValueError):
+    """More than one recorded activity fits — which one is theirs to say."""
+    def __init__(self, candidates: list) -> None:
+        super().__init__("several activities fit")
+        self.candidates = candidates
+
+
+class NoSuchWorkout(LookupError):
+    """The day has activities, but none of the sport named (not synced yet?)."""
+    def __init__(self, sport: str, that_day: list) -> None:
+        super().__init__(f"no {sport} activity that day")
+        self.sport, self.that_day = sport, that_day
+
+
+def _is_sport(workout: RunLog, sport: str) -> bool:
+    """'run' fits 'running' and 'trail_running'; 'strength' fits 'strength_training'."""
+    want = sport.strip().lower().replace(" ", "_")
+    kind = (workout.activity_type or "").lower()
+    return bool(want) and (want in kind or kind in want or want.rstrip("s") in kind)
+
+
 @dataclass(frozen=True)
 class WatchPush:
     name: str
@@ -151,18 +172,40 @@ class MoveService:
 
     def annotate_workout(
         self, user_id: UUID, on_date: date, annotation: str,
+        *, sport: str | None = None, remove: str | None = None,
     ) -> RunLog | None:
         """Attach the user's account of a workout — any sport — to its activity
         row (user_note, the column sync can't touch). APPENDS to their earlier
-        words, never replaces. If several activities share the date, prefers the
-        single run, else the latest. Returns the updated view, or None if
-        nothing is recorded that day."""
+        words, never replaces. Returns the updated view, or None if nothing at
+        all is recorded that day.
+
+        The activity is never guessed. One activity that day (of that sport, if
+        a sport is named) is the one; several raise AmbiguousWorkout; a named
+        sport that isn't on record that day raises NoSuchWorkout — typically a
+        session that hasn't synced yet, which must not land on whatever else
+        the day holds. `remove` takes a fragment of their words back off (a
+        note that was filed on the wrong activity)."""
         day = [w for w in self._repo.recent_workouts(user_id, limit=200)
                if w.ran_on == on_date]
         if not day:
             return None
-        runs = [w for w in day if "run" in (w.activity_type or "").lower()]
-        workout = runs[0] if len(runs) == 1 else day[0]
+        matches = [w for w in day if _is_sport(w, sport)] if sport else day
+        if not matches:
+            raise NoSuchWorkout(sport or "", day)
+        if len(matches) > 1:
+            raise AmbiguousWorkout(matches)
+        workout = matches[0]
+        if remove and remove.strip():
+            kept = [part for part in (workout.user_note or "").split(" — ")
+                    if part.strip().lower() != remove.strip().lower()]
+            words = " — ".join(kept)
+            if words != (workout.user_note or ""):
+                if not self._repo.set_user_note(user_id, workout.garmin_activity_id, words):
+                    return None
+                self._project_plan(user_id)
+                from dataclasses import replace as _swap
+                workout = _swap(workout, user_note=words or None,
+                                note=f"{workout.name or workout.note.split(' — ')[0]}" + (f" — {words}" if words else ""))
         clean = annotation.strip()
         if not clean:
             return workout
