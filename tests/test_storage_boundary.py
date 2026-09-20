@@ -253,3 +253,41 @@ class TestEraseAtTheStorageBoundary:
         with pg_database.connect() as conn, conn.cursor() as cur:
             cur.execute("SELECT tool FROM action_log WHERE user_id = %s ORDER BY started_at", (pg_user,))
             assert [r[0] for r in cur.fetchall()] == ["recent", "new"]
+
+
+class TestRollbackReconcilesInFlightReminders:
+    """Rolling the code back must not strand a reminder the new code had picked
+    up — and must never cause a check-in's actions to run again."""
+
+    def test_in_flight_reminders_become_deliverable_by_stage_one_without_any_rerun(self, pg_database, pg_user):
+        from datetime import datetime, timedelta, timezone
+        from pathlib import Path
+        from uuid import uuid4
+        from trellis.domain_focus_models import Reminder
+        from trellis.domain_focus_repo import PostgresReminderRepository
+        repo = PostgresReminderRepository(pg_database)
+        now = datetime.now(timezone.utc)
+
+        def add(label, kind, *, recurrence=None):
+            return repo.save(Reminder(id=uuid4(), user_id=pg_user, label=label, kind=kind, recurrence=recurrence,
+                                      remind_at=now - timedelta(minutes=1), status="scheduled"))
+
+        plain, ran, interrupted = add("check the oven", "remind"), add("weekly review", "check_in", recurrence="weekly"), \
+            add("ask about the run", "check_in")
+        untouched = add("tomorrow's thing", "remind")
+        for r in (plain, ran, interrupted):
+            repo.claim(r.id, now=now)
+        repo.ready(ran.id, "Here's how the week went — three runs, all easy.")
+
+        sql = (Path(__file__).parent.parent / "scripts" / "rollback_stages_2_3.sql").read_text()
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute(sql)
+
+        after = {r.id: r for r in (repo.get(x.id) for x in (plain, ran, interrupted, untouched))}
+        assert all(r.status == "scheduled" for r in after.values())          # stage 1 will see every one
+        assert all(r.kind == "remind" for r in after.values())               # none will wake the model
+        assert after[plain.id].label == "check the oven"
+        assert after[ran.id].label == "Here's how the week went — three runs, all easy."   # its stored reply, verbatim
+        assert after[ran.id].recurrence is None                              # the next weekly one already exists
+        assert "interrupted" in after[interrupted.id].label and "not been run again" in after[interrupted.id].label
+        assert after[untouched.id].label == "tomorrow's thing"

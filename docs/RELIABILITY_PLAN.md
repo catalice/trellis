@@ -195,6 +195,27 @@ Within a batch, changes stay coherent and separately reviewable, and one
 coherent change per deployment still applies. There are no mandatory review
 stops between individual fixes.
 
+## Releasing a batch
+
+**Before.** `scripts/predeploy_snapshot.sh` — a timestamped database dump and a
+copy of the vault in their own read-only folder (`~/trellis-snapshots/<time>-<revision>/`).
+The nightly backup is named by date, so a later run the same day replaces it; it
+is not a release snapshot. Tag the code and the running images for rollback.
+
+**After — keep it small.** Startup and migrations clean. One ordinary action on
+the record with the right status (`action_log`). One harmless reminder reaching
+`accepted`. Maps and effort pages identical to the snapshot.
+
+**Rolling back is code AND state.** Tags alone are not a rollback: the previous
+code only looks at `scheduled` reminders, so any the new code left `claimed` or
+`executed` would be missed for ever — and restoring the old dump would discard
+everything written since. Keep the database; stop the bot; run
+`scripts/rollback_stages_2_3.sql`; start the previous image. Plain reminders go
+back to `scheduled` (a possible duplicate, never a miss). A check-in becomes a
+plain notification carrying its stored reply — or a note that it was interrupted
+— so nothing it did is ever run again. The new tables and columns are harmless
+to the older code and stay.
+
 ## Follow-ups carried forward
 
 - **Backup lock:** the third review noted a remaining race in lock reclamation.
