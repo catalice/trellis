@@ -110,14 +110,19 @@ scripts/restore_db.sh <vault>/.backups/trellis-YYYY-MM-DD.sql.gz
 ```
 
 It restores into a scratch database, prints what it found, and drops it. To
-replace the live database (it stops the bot, asks you to type `restore`, then
-starts the bot again):
+replace the live database:
 
 ```bash
 scripts/restore_db.sh <vault>/.backups/trellis-YYYY-MM-DD.sql.gz --live
 ```
 
-After a live restore, run `scripts/backfill_vault.py` to re-project the vault.
+A live restore checks the dump in a staging database first — if it doesn't
+import cleanly, nothing live is touched. It then asks you to type `restore`,
+stops the bot, swaps the two databases by rename, and starts the bot. The
+database it replaced is kept as `trellis_before_restore_<time>` until you drop
+it yourself. Afterwards, run `scripts/backfill_vault.py` to re-project the vault.
+
+Only one backup runs at a time: a second one started meanwhile steps aside.
 
 ## Contributing / forking
 

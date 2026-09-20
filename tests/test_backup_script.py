@@ -65,3 +65,31 @@ def test_truncated_dump_is_rejected(tmp_path):
     result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
     assert result.returncode != 0
     assert _dumps(vault) == []
+
+
+def test_a_second_backup_while_one_is_running_steps_aside(tmp_path):
+    vault = tmp_path / "vault"
+    assert _run(tmp_path, vault, docker_ok=True).returncode == 0
+    (good,) = _dumps(vault)
+    before = good.read_bytes()
+    (vault / ".backups" / ".backup.lock").mkdir()                   # another run holds the lock
+    second = _run(tmp_path, vault, docker_ok=False)
+    assert second.returncode != 0 and "already running" in second.stderr
+    assert good.read_bytes() == before
+    assert (vault / ".backups" / ".backup.lock").is_dir()           # it didn't steal or clear the lock
+
+
+def test_staging_files_are_private_to_each_run(tmp_path):
+    script = SCRIPT.read_text()
+    assert "mktemp" in script and '"$OUT.partial"' not in script
+
+
+def test_a_stale_lock_from_a_crashed_run_is_taken_over(tmp_path):
+    import time
+    vault = tmp_path / "vault"
+    lock = vault / ".backups" / ".backup.lock"
+    lock.mkdir(parents=True)
+    old = time.time() - 3 * 3600
+    os.utime(lock, (old, old))
+    assert _run(tmp_path, vault, docker_ok=True).returncode == 0
+    assert len(_dumps(vault)) == 1 and not lock.exists()
