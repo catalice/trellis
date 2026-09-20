@@ -162,13 +162,54 @@ class TestLogStateHandler:
         assert repo.states == []
         assert "Nothing to log" in reply
 
-    def test_bad_med_time_still_logs_med(self):
+    def test_a_med_time_that_cannot_be_read_is_refused_and_nothing_is_logged(self):
+        """It used to fall back to NOW in silence while the receipt echoed the
+        unreadable time back as if it had been used."""
+        from trellis.core_actions import Status, status_of
         reply, repo = self._handle({
             "note": "took meds", "meds": [{"name": "ibuprofen", "time": "nineish"}],
         })
-        meds = [e for e in repo.events if e.event_type == TrackingEventType.MEDS]
-        assert len(meds) == 1
-        assert meds[0].occurred_at == NOW
+        assert status_of(reply) is Status.FAILED and "nineish" in reply
+        assert repo.events == [] and repo.states == []              # all or nothing
+
+
+class TestOneAccountLandsOnOneDay:
+    """'Yesterday I felt low, took my meds at nine and slept six hours' is ONE
+    account of ONE day. The state went to yesterday while the meds and the sleep
+    went to today — which corrupts every later comparison."""
+
+    YESTERDAY = "2026-07-19T21:00"
+
+    def _handle(self, input_dict):
+        repo = FakeStateRepo()
+        reply = handle_log_state(UID, input_dict, NOW, sense_service=SenseService(repo, TZ), tz=TZ)
+        return reply, repo
+
+    def test_state_meds_and_sleep_all_land_on_the_day_it_was_felt(self):
+        reply, repo = self._handle({"note": "felt low", "mood": 2, "felt_at": self.YESTERDAY,
+                                    "meds": [{"name": "ibuprofen", "time": "09:00"}], "sleep_hours": 6})
+        days = {s.felt_at.astimezone(TZ).date().isoformat() for s in repo.states} | \
+               {e.occurred_at.astimezone(TZ).date().isoformat() for e in repo.events}
+        assert days == {"2026-07-19"}
+        med = next(e for e in repo.events if e.event_type == TrackingEventType.MEDS)
+        assert med.occurred_at.astimezone(TZ).strftime("%H:%M") == "09:00"
+        assert "19 Jul" in reply                                        # the receipt says which day
+
+    def test_backdating_works_for_events_alone_with_no_state(self):
+        reply, repo = self._handle({"felt_at": self.YESTERDAY, "meds": [{"name": "ibuprofen"}]})
+        (med,) = repo.events
+        assert med.occurred_at.astimezone(TZ).date().isoformat() == "2026-07-19" and repo.states == []
+
+    def test_an_unreadable_felt_at_is_refused_not_quietly_made_today(self):
+        from trellis.core_actions import Status, status_of
+        reply, repo = self._handle({"note": "felt low", "felt_at": "yesterday evening"})
+        assert status_of(reply) is Status.FAILED and "yesterday evening" in reply
+        assert repo.states == [] and repo.events == []
+
+    def test_a_plain_checkin_today_is_unchanged(self):
+        reply, repo = self._handle({"note": "fine", "meds": [{"name": "ibuprofen", "time": "08:15"}], "sleep_hours": 7})
+        assert {e.occurred_at.astimezone(TZ).date() for e in repo.events} == {NOW.astimezone(TZ).date()}
+        assert "19 Jul" not in reply and "20 Jul" not in reply          # no date noise when it's today
 
 
 class TestFeltAtAndDelete:
