@@ -150,3 +150,64 @@ class TestATurnThatDiesSaysWhatItHadDone:
             assembler.handle_turn(uuid4(), "Save a note that the boiler needs servicing.")
         role, line = history.rows[-1]
         assert role == "assistant" and "save_note → SUCCEEDED: Saved." in line
+
+
+class TestARefusalTheModelCorrectsIsNotReportedAsAFailure:
+    def test_a_failed_attempt_followed_by_the_same_tool_succeeding_leaves_no_warning(self):
+        """A rule refused for being too long, rewritten shorter, saved: the person
+        got what they asked for. Warning them about the first attempt is noise."""
+        attempts = iter([failed("Not saved — 13 words, the limit is 10."), "Rule saved (global)."])
+        o = _scenario([Step(tools=SAVE), Step(tools=(("save_note", {"text": "shorter"}),)), Step(text="Saved it.")],
+                      lambda args: next(attempts))
+        assert _statuses(o) == [Status.FAILED, Status.SUCCEEDED]      # both are on the record
+        assert o.reply == "Saved it."                                 # and the person isn't warned
+
+    def test_an_unknown_outcome_is_never_cleared_by_a_later_success(self):
+        def behaviour(args):
+            if args["text"] == "the boiler needs servicing":
+                raise TimeoutError()
+            return "Saved."
+        o = _scenario([Step(tools=SAVE), Step(tools=(("save_note", {"text": "other"}),)), Step(text="Done.")], behaviour)
+        assert "Not confirmed" in o.reply
+
+
+class TestHandlersSayHowItWent:
+    """The status rides the handler's own text — checked on the real handlers."""
+
+    def test_a_rule_refused_for_length_is_a_failure(self):
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        from trellis.core_actions import status_of
+        from trellis.core_meta_tool import handle_save_preferences
+        from trellis.core_profile import LineGuard
+        out = handle_save_preferences(
+            uuid4(), {"action": "add", "text": "one two three four five six seven eight nine ten eleven"},
+            datetime.now(timezone.utc), preferences_repository=object(), guard=LineGuard())
+        assert status_of(out) is Status.FAILED
+
+    def test_a_save_that_raises_part_way_is_unknown_and_invites_no_retry(self):
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        from trellis.core_actions import status_of
+        from trellis.core_meta_tool import handle_save_preferences
+
+        class Breaks:
+            def list_rules(self, uid): return []
+            def add_rule(self, uid, domain, text): raise ConnectionError("lost mid-write")
+
+        out = handle_save_preferences(uuid4(), {"action": "add", "text": "short rule"},
+                                      datetime.now(timezone.utc), preferences_repository=Breaks())
+        assert status_of(out) is Status.UNKNOWN and "try again" not in out.lower()
+
+    def test_a_partial_garmin_sync_is_partial(self):
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        from trellis.core_actions import status_of
+        from trellis.domain_move_tool import handle_sync_garmin
+
+        class Move:
+            def sync_garmin(self, user_id, *, now):
+                return {"activities": 1, "health_records": 1, "health_through": "2026-03-10",
+                        "unavailable": {"2026-03-10": ("sleep",)}}
+
+        assert status_of(handle_sync_garmin(uuid4(), {}, datetime.now(timezone.utc), move_service=Move())) is Status.PARTIAL

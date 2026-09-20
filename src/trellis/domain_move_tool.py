@@ -18,6 +18,7 @@ from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
 
+from trellis.core_actions import failed, partial, unknown
 from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
 
 _log = logging.getLogger(__name__)
@@ -204,7 +205,7 @@ def handle_move_get(user_id: UUID, input_dict: dict, now: datetime, *, move_serv
             return str(exc)
         except Exception:
             _log.warning("watch list failed", exc_info=True)
-            return "Couldn't reach Garmin just now — try again in a moment."
+            return failed("Couldn't reach Garmin just now — nothing was read.")
         if not workouts:
             return "No workouts in their Garmin library."
         lines = ["On their Garmin (workout library, newest first):"]
@@ -223,7 +224,7 @@ def handle_move_get(user_id: UUID, input_dict: dict, now: datetime, *, move_serv
             return str(exc)
         except Exception:
             _log.warning("run_detail failed", exc_info=True)
-            return "Couldn't reach Garmin just now — try again in a moment."
+            return failed("Couldn't reach Garmin just now — nothing was read.")
         if detail is None:
             return "No recent workout found to review. Sync Garmin first, or check the number."
         return _fmt_run_detail(detail)
@@ -275,7 +276,7 @@ def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
                                        goal_id=goal_id, replace_week=replace_week)
     except Exception:
         _log.warning("move_update plan failed", exc_info=True)
-        return "Couldn't save the plan just now — try again in a moment."
+        return unknown("Saving the plan hit an error part-way — it may or may not have saved. Read the stored plan before saying which.")
     week = [s for s in saved.plan.get("week", []) if isinstance(s, dict) and s.get("date")]
     sent = len([s for s in plan.get("week", []) if isinstance(s, dict)])
     span = f" ({week[0]['date']} to {week[-1]['date']})" if week else ""
@@ -311,7 +312,7 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
         return str(exc)
     except Exception:
         _log.warning("push_to_watch failed", exc_info=True)
-        return "Couldn't push to Garmin just now — try again in a moment."
+        return unknown("The push to Garmin hit an error part-way — the workout may or may not be on the watch. Read the watch library before saying which; do not push again blind.")
     return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
 
 
@@ -328,7 +329,7 @@ def _update_workout(user_id: UUID, input_dict: dict, *, move_service) -> str:
         workout = move_service.annotate_workout(user_id, on_date, note)
     except Exception:
         _log.warning("move_update workout failed", exc_info=True)
-        return "Couldn't update that workout just now — try again in a moment."
+        return unknown("Updating that workout hit an error part-way — it may or may not have saved. Read it back before saying which.")
     if workout is None:
         return f"Nothing recorded on {raw_date}. Check move_get history for the right date."
     return f"Workout on {raw_date} updated: {workout.note}"
@@ -343,7 +344,7 @@ def handle_sync_garmin(
         return str(exc)
     except Exception:
         _log.warning("sync_garmin failed", exc_info=True)
-        return "Couldn't reach Garmin just now — try again in a moment."
+        return failed("Couldn't reach Garmin just now — nothing was synced; stored readings are unchanged.")
     bits = []
     acts = result.get("activities")
     if acts is not None:
@@ -369,7 +370,7 @@ def handle_sync_garmin(
                 out += f"\nReadiness now: {line}"
         except Exception:
             _log.warning("sync_garmin: readiness readout failed", exc_info=True)
-    return out
+    return partial(out) if missed else out
 
 
 

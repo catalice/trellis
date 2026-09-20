@@ -98,8 +98,14 @@ def receipt(actions: list[ActionRecord] | tuple[ActionRecord, ...]) -> str:
     """What the person must be told whatever the model wrote: every action that
     did not cleanly succeed, from the record. Empty when all went well."""
     lines = []
-    for action in actions:
+    for position, action in enumerate(actions):
         if action.status is Status.FAILED:
+            # A refusal the model then corrected (same tool, succeeded later
+            # this turn) got the person what they asked for — not worth a
+            # warning. It stays on the record. UNKNOWN is never cleared this way.
+            if any(later.tool == action.tool and later.status is Status.SUCCEEDED
+                   for later in actions[position + 1:]):
+                continue
             lines.append(f"⚠️ Not done: {action.summary or action.tool}")
         elif action.status is Status.PARTIAL:
             lines.append(f"⚠️ Partly done: {action.summary or action.tool}")

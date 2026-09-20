@@ -11,6 +11,7 @@ import logging
 from datetime import date, datetime
 from uuid import UUID
 
+from trellis.core_actions import failed, unknown
 from trellis.core_profile import AtCap, CurrentContextService, LineGuard, TooLong
 
 _log = logging.getLogger(__name__)
@@ -40,8 +41,8 @@ UPDATE_CONTEXT_TOOL = {
 
 
 def _too_long(exc: TooLong) -> str:
-    return (f"Not saved — {exc.words} words, the limit is {exc.limit}. "
-            "One line; split it if it's two things.")
+    return failed(f"Not saved — {exc.words} words, the limit is {exc.limit}. "
+                  "One line; split it if it's two things.")
 
 
 def handle_update_current_context(
@@ -79,11 +80,11 @@ def handle_update_current_context(
     except TooLong as exc:
         return _too_long(exc)
     except AtCap as exc:
-        return ("Not saved — the context is full. Remove one first:\n"
-                + "\n".join(f"  {e.text}" for e in exc.entries))
+        return failed("Not saved — the context is full. Remove one first:\n"
+                      + "\n".join(f"  {e.text}" for e in exc.entries))
     except Exception:
         _log.exception("update_current_context failed for user %s", user_id)
-        return "Couldn't save that — try again in a moment."
+        return unknown("That hit an error part-way — it may or may not have saved. Read what is stored before saying which.")
 
 
 # --- save_preferences -------------------------------------------------------
@@ -190,7 +191,7 @@ def handle_save_preferences(
         return "That rule_id isn't a valid id."
     except Exception:
         _log.exception("save_preferences failed for user %s", user_id)
-        return "Couldn't save that — try again in a moment."
+        return unknown("That hit an error part-way — it may or may not have saved. Read what is stored before saying which.")
 
 def meta_tools(
     context_service: CurrentContextService,

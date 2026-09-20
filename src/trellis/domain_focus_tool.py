@@ -19,6 +19,7 @@ from trellis.domain_focus_models import (
     TaskEnergy,
     TaskPriority,
 )
+from trellis.core_actions import failed, partial
 from trellis.domain_focus_service import GoalNotFoundError, PageTaken, TaskNotFoundError
 
 _log = logging.getLogger(__name__)
@@ -809,11 +810,11 @@ def handle_delete_entry(
     if verdict == "deleted":
         return "Erased (empty effort, page removed)."
     if verdict == "deleted_page_kept":
-        return ("Erased the effort record. Its vault page has writing on it that "
-                "Trellis didn't put there, so the page was left where it is.")
+        return partial("Erased the effort record. Its vault page has writing on it that "
+                       "Trellis didn't put there, so the page was left where it is.")
     if verdict == "not_empty":
-        return ("That effort still has notes filed on it — move them first "
-                "(focus_add what='effort_note' with capture_id), then erase.")
+        return failed("That effort still has notes filed on it — move them first "
+                      "(focus_add what='effort_note' with capture_id), then erase.")
     return "No record with that id."
 
 
@@ -923,8 +924,8 @@ def handle_focus_update(
         try:
             renamed = effort_service.rename(user_id, UUID(rec_id), new_title)
         except PageTaken as exc:
-            return (f"Not renamed — the vault already has a page at {exc.path} "
-                    "(another effort, or a note written by hand). Nothing changed; pick another title.")
+            return failed(f"Not renamed — the vault already has a page at {exc.path} "
+                          "(another effort, or a note written by hand). Nothing changed; pick another title.")
         except ValueError:
             return f"Invalid id: {rec_id!r}"
         if renamed is None:
