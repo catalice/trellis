@@ -117,6 +117,16 @@ class InMemoryActionLog:
         handle.finished_at = datetime.now(timezone.utc)
 
 
+@dataclass(frozen=True)
+class Erased:
+    """An erase, store by store. `left_in_vault`: pages where the text was edited
+    by hand, so it was left on purpose. `uncertain`: stores whose clean-up FAILED
+    or can't be established — the thing may still be there."""
+    erased: bool
+    left_in_vault: tuple[str, ...] = ()
+    uncertain: tuple[str, ...] = ()
+
+
 def _resolves(refusal: ActionRecord, later: ActionRecord) -> bool:
     """Is `later` the refused request, corrected? Same tool, succeeded, and the
     two inputs differ in exactly ONE field whose wording still overlaps — a rule

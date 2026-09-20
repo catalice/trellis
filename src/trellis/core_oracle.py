@@ -156,6 +156,13 @@ class Oracle:
         # record, to be rewritten; what ships is that rewrite (nothing, if it
         # won't) and then the record's own statement, last. A clean turn adds
         # nothing and costs no extra call.
+        #
+        # What this guarantees and what it doesn't: the RECORD's statement is
+        # deterministic and always last. The rewrite is the model's — it is
+        # asked to drop unsupported claims, and whatever it returns is shipped.
+        # A model that repeats "Saved." in its rewrite still gets it delivered,
+        # followed by "Not done". Python cannot judge prose; it can only make
+        # sure the truth is stated, and stated last.
         correction = receipt(done or [])
         if correction:
             text = self._rewritten(text, correction)

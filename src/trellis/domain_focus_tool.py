@@ -803,11 +803,17 @@ def _erased_message(result: "Erased"):
     not promise more than was done."""
     still = ("Still held: the conversation where it was said (it ages out of what I read), "
              "the action log (30 days), and any database backup taken before now.")
-    if result.left_in_vault:
-        return partial("Erased the record and its search entry. Its text is still on "
-                       + ", ".join(result.left_in_vault)
-                       + " — that text was changed by hand, so I left it; remove it there if you want it gone. "
-                       + still)
+    if result.left_in_vault or result.uncertain:
+        # Store by store — never a clean 'erased' the stores themselves can't vouch for.
+        parts = ["Erased the record."]
+        if result.uncertain:
+            parts.append("NOT confirmed gone from: " + ", ".join(result.uncertain)
+                         + " — that clean-up failed, so it may still be there"
+                         + (" and can still come up in recall." if "the search index" in result.uncertain else "."))
+        if result.left_in_vault:
+            parts.append("Its text is still on " + ", ".join(result.left_in_vault)
+                         + " — that text was changed by hand, so I left it; remove it there if you want it gone.")
+        return partial(" ".join(parts) + " " + still)
     return done("Erased: the record, its search entry, and the text I had written into the vault. " + still)
 
 
@@ -828,8 +834,12 @@ def handle_delete_entry(
         entry_id = UUID(entry_id_str)
     except ValueError:
         return refused(f"Invalid entry_id: {entry_id_str!r}")
-    if sense_service.delete_entry(user_id, entry_id) or task_service.delete(user_id, entry_id):
-        return _erased_message(Erased(erased=True))
+    tracking = sense_service.erase_entry(user_id, entry_id)
+    if tracking.erased:
+        return _erased_message(tracking)
+    task = task_service.erase(user_id, entry_id)
+    if task.erased:
+        return _erased_message(task)
     erased = capture_service.erase(user_id, entry_id)
     if erased.erased:
         return _erased_message(erased)

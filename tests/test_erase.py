@@ -161,3 +161,87 @@ class TestATrackingEntryIsErasedFromTheMonthItWasIn:
 
         assert SenseService(Repo(), ZoneInfo("UTC"), projection=Projection()).delete_entry(uuid4(), entry_id)
         assert seen == [january.date()]
+
+
+class TestEraseNeverClaimsMoreThanItDid:
+    """The receipt carries each store's own result. Where removal failed, or
+    can't be established, the erase is PARTIAL and says what remains or is
+    uncertain — it never reports a clean erase it cannot vouch for."""
+
+    def test_a_search_entry_that_could_not_be_removed_is_said(self, tmp_path):
+        from trellis.core_actions import Status, status_of
+        from trellis.domain_focus_service import CaptureService
+        from trellis.domain_focus_tool import _erased_message
+
+        class IndexDown:
+            def forget(self, kind, entity_id): return False        # the delete failed
+
+        capture = _capture()
+        vault = _vault(tmp_path)
+        vault.capture_saved(capture)
+        result = CaptureService(TestEraseSaysWhatItDidAndWhatRemains._Repo(capture),
+                                projection=vault, memory=IndexDown()).erase(capture.user_id, capture.id)
+        assert result.erased and result.uncertain == ("the search index",)
+        message = _erased_message(result)
+        assert status_of(message) is Status.PARTIAL
+        assert "search" in message.lower() and "its search entry, and" not in message
+
+    def test_the_real_index_reports_a_failed_delete(self):
+        from trellis.infra_memory import MemoryIndex
+
+        class Down:
+            def connect(self): raise ConnectionError("database is down")
+
+        assert MemoryIndex(Down(), embedder=None).forget("capture", uuid4()) is False
+
+    def test_an_edited_multiline_capture_is_detected_as_left_behind(self, tmp_path):
+        """Raw lines are written as '> line', so searching for the raw text as
+        one string missed a block that was still there."""
+        capture = _capture(raw="first line of the thing\nsecond line I regret\nthird line")
+        vault = _vault(tmp_path)
+        vault.capture_saved(capture)
+        page = tmp_path / "Calendar/Captures/2026-03-10.md"
+        page.write_text(page.read_text().replace("Cleaned up: a private thought.", "Reworded by hand."))
+        left = vault.capture_erased(capture)
+        assert "second line I regret" in page.read_text()
+        assert left == ["Calendar/Captures/2026-03-10.md"]
+
+    def test_a_tracking_page_that_could_not_be_rewritten_makes_the_erase_partial(self, tmp_path, monkeypatch):
+        from zoneinfo import ZoneInfo
+        from trellis.core_actions import Status, status_of
+        from trellis.domain_focus_tool import _erased_message
+        from trellis.domain_sense_service import SenseService
+        january = datetime(2026, 1, 12, 9, 0, tzinfo=timezone.utc)
+        entry = TestATrackingEntryIsErasedFromTheMonthItWasIn()._state(january, "the thing I regret writing")
+        states = TestATrackingEntryIsErasedFromTheMonthItWasIn._States([entry])
+        states.entry_day = lambda user_id, eid: january
+        states.delete_state = lambda user_id, eid: bool(states.states.clear() or True)
+        states.delete_event = lambda user_id, eid: False
+        vault = ObsidianVault(tmp_path, timezone.utc, None, None, None, state_repo=states)
+        vault.write_tracking_month(entry.user_id, 2026, 1)
+
+        import trellis.infra_obsidian as obsidian
+        def disk_full(path, text): raise OSError(28, "No space left on device")
+        monkeypatch.setattr(obsidian, "_write_atomically", disk_full)
+
+        result = SenseService(states, ZoneInfo("UTC"), projection=vault).erase_entry(entry.user_id, entry.id)
+        assert result.erased and any("2026-01" in page for page in result.uncertain)
+        message = _erased_message(result)
+        assert status_of(message) is Status.PARTIAL and "2026-01" in message
+        assert "regret" in (tmp_path / "Calendar/Tracking/History/2026-01.md").read_text()   # it really is still there
+
+    def test_a_task_whose_search_entry_could_not_be_removed_is_said_too(self):
+        from trellis.core_actions import Status, status_of
+        from trellis.domain_focus_service import TaskService
+        from trellis.domain_focus_tool import _erased_message
+        from zoneinfo import ZoneInfo
+
+        class Repo:
+            def delete(self, user_id, task_id): return True
+
+        class IndexDown:
+            def forget(self, kind, entity_id): return False
+
+        result = TaskService(Repo(), ZoneInfo("UTC"), memory=IndexDown()).erase(uuid4(), uuid4())
+        assert result.uncertain == ("the search index",)
+        assert status_of(_erased_message(result)) is Status.PARTIAL

@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from trellis.core_actions import Erased
 from trellis.domain_focus_models import (
     Capture,
     CaptureType,
@@ -90,12 +91,6 @@ class BrainDumpClaude(Protocol):
     ) -> BrainDumpResult | None: ...
 
 
-@dataclass(frozen=True)
-class Erased:
-    erased: bool
-    left_in_vault: tuple[str, ...] = ()      # pages where the text was changed by hand, so it was left
-
-
 class PageTaken(ValueError):
     """The vault page a rename would land on already exists."""
     def __init__(self, path: str) -> None:
@@ -122,7 +117,7 @@ class Memory(Protocol):
     still succeed unindexed and recall is unavailable. remember/forget never raise
     — indexing a row must never break the row's own write."""
     def remember(self, user_id: UUID, entity_kind: str, entity_id: UUID, text: str) -> None: ...
-    def forget(self, entity_kind: str, entity_id: UUID) -> None: ...
+    def forget(self, entity_kind: str, entity_id: UUID) -> bool | None: ...   # False = the delete failed
 
 
 # ---------------------------------------------------------------------------
@@ -285,16 +280,20 @@ class CaptureService:
         capture = self._repo.get(user_id, capture_id)
         if capture is None or not self._repo.delete(user_id, capture_id):
             return Erased(erased=False)
-        if self._memory is not None:
-            self._memory.forget("capture", capture_id)
+        uncertain: list[str] = []
+        if self._memory is not None and self._memory.forget("capture", capture_id) is False:
+            uncertain.append("the search index")
         left: list[str] = []
         if self._projection is not None:
             try:
                 left = list(self._projection.capture_erased(capture))
             except Exception:
                 _log.warning("capture erase: vault text not removed", exc_info=True)
-                left = ["the vault (an error stopped the clean-up)"]
-        return Erased(erased=True, left_in_vault=tuple(left))
+                uncertain.append("the vault")
+        # capture_erased reports a clean-up it could not finish as "the vault (…)".
+        uncertain += [page for page in left if page.startswith("the vault")]
+        left = [page for page in left if not page.startswith("the vault")]
+        return Erased(erased=True, left_in_vault=tuple(left), uncertain=tuple(uncertain))
 
     def delete(self, user_id: UUID, capture_id: UUID) -> bool:
         return self.erase(user_id, capture_id).erased
@@ -578,12 +577,18 @@ class TaskService:
         """Erase an erroneous task (duplicate, mis-extraction) — not a decision.
         A task they decided against gets status=dropped; a task that should
         never have existed is deleted so it cannot pollute history."""
-        deleted = self._repo.delete(user_id, task_id)
-        if deleted:
-            if self._memory is not None:
-                self._memory.forget("seed", task_id)
-            self._vault_refresh(user_id)
-        return deleted
+        return self.erase(user_id, task_id).erased
+
+    def erase(self, user_id: UUID, task_id: UUID) -> Erased:
+        """The same erase, store by store: a search entry that could not be
+        removed is named, not assumed gone."""
+        if not self._repo.delete(user_id, task_id):
+            return Erased(erased=False)
+        uncertain: list[str] = []
+        if self._memory is not None and self._memory.forget("seed", task_id) is False:
+            uncertain.append("the search index")
+        self._vault_refresh(user_id)
+        return Erased(erased=True, uncertain=tuple(uncertain))
 
     def due_today(self, user_id: UUID, now: datetime) -> list[Task]:
         today = now.astimezone(self._tz).date()

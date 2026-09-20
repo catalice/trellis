@@ -237,13 +237,19 @@ class ObsidianVault:
             receipt = (f"\n- {local.strftime('%H:%M')} · research → [[{effort.title}]]: {capture.summary or ''}\n"
                        if effort else None)
             in_day = [core] + ([receipt] if receipt else [])
-            self._remove_generated(day, in_day, [capture.raw, body], left)
+            # What betrays a block that is still there. The raw text is written
+            # one "> line" at a time, so it is looked for line by line — as one
+            # string, an edited multi-line capture went undetected. The block's
+            # own heading is the surest sign of all.
+            heading = core.strip().splitlines()[0]
+            telltales = [heading, body, *[ln for ln in capture.raw.splitlines() if len(ln.strip()) >= 8]]
+            self._remove_generated(day, in_day, telltales or [capture.raw], left)
             if effort and effort.obsidian_path:
                 self._remove_generated(
                     effort.obsidian_path,
                     [f"- [[{local.strftime('%Y-%m-%d')}]] — {summary}\n",
                      f"\n---\n_{local.strftime('%d %b %Y, %H:%M')}_\n\n{body}\n"],
-                    [capture.raw, body], left)
+                    [body, *[ln for ln in capture.raw.splitlines() if len(ln.strip()) >= 8]], left)
         except Exception:
             _log.warning("obsidian: capture erase failed", exc_info=True)
             left.append("the vault (an error stopped the clean-up)")
@@ -417,11 +423,13 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: state receipt write failed", exc_info=True)
 
-    def tracking_changed(self, user_id: UUID) -> None:
+    def tracking_changed(self, user_id: UUID) -> bool:
         """Rewrite Tracking/Recent.md (last two weeks) and the current month's
-        History file — one shared renderer, two windows."""
+        History file — one shared renderer, two windows. False = Recent.md could
+        not be rewritten."""
         if self._states is None:
-            return
+            return True
+        written = True
         try:
             now = datetime.now(self._tz)
             since = now - timedelta(days=_TRACKING_DAYS)
@@ -440,9 +448,10 @@ class ObsidianVault:
 
             path = self._vault / _TRACKING_PATH
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("\n".join(parts), encoding="utf-8")
+            _write_atomically(path, "\n".join(parts))
         except Exception:
             _log.warning("obsidian: Tracking Recent write failed", exc_info=True)
+            written = False
         try:
             today = datetime.now(self._tz).date()
             self.write_tracking_month(user_id, today.year, today.month)
@@ -457,24 +466,32 @@ class ObsidianVault:
                 self._update_daily_properties(user_id, today - timedelta(days=offset))
         except Exception:
             _log.warning("obsidian: daily property refresh failed", exc_info=True)
+        return written
 
-    def tracking_entry_erased(self, user_id: UUID, day: date) -> None:
+    def tracking_entry_erased(self, user_id: UUID, day: date) -> list[str]:
         """An entry felt on `day` was erased: rewrite the views it was IN — that
         day's note properties and that month's History page — not just the
-        current ones. Never raises."""
+        current ones. Never raises. Returns the pages that could NOT be
+        rewritten: the erased words may still be on them, and the caller must
+        say so."""
+        stale: list[str] = []
         try:
             self._update_daily_properties(user_id, day)
         except Exception:
             _log.warning("obsidian: daily properties refresh after erase failed", exc_info=True)
-        self.write_tracking_month(user_id, day.year, day.month)
-        self.tracking_changed(user_id)
+            stale.append(f"{_DAILY_DIR}/{day.isoformat()}.md")
+        if not self.write_tracking_month(user_id, day.year, day.month):
+            stale.append(f"{_TRACKING_HISTORY_DIR}/{day.year:04d}-{day.month:02d}.md")
+        if not self.tracking_changed(user_id):
+            stale.append(_TRACKING_PATH)
+        return stale
 
-    def write_tracking_month(self, user_id: UUID, year: int, month: int) -> None:
+    def write_tracking_month(self, user_id: UUID, year: int, month: int) -> bool:
         """(Re)write one month's History file — every entry, full detail. The
         current month rewrites as entries land; past months are only touched by
-        an explicit backfill."""
+        an explicit backfill or an erase. False = the page could not be written."""
         if self._states is None:
-            return
+            return True
         try:
             month_start = datetime(year, month, 1, tzinfo=self._tz)
             next_month = datetime(year + (month == 12), (month % 12) + 1, 1, tzinfo=self._tz)
@@ -492,16 +509,17 @@ class ObsidianVault:
                 # returning early here left them on the page.
                 if path.exists():
                     _write_atomically(path, f"# Tracking — {month_start.strftime('%B %Y')}\n\n*Nothing logged.*\n")
-                return
+                return True
             period_start = self._states.last_period_start(user_id)
             garmin_by_day = self._garmin_sleep_range(user_id, month_start.date())
             parts = [f"# Tracking — {month_start.strftime('%B %Y')}\n"]
             parts.extend(self._render_tracking_days(states, events, period_start, garmin_by_day))
-            path = self._vault / _TRACKING_HISTORY_DIR / f"{year:04d}-{month:02d}.md"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("\n".join(parts), encoding="utf-8")
+            _write_atomically(path, "\n".join(parts))
+            return True
         except Exception:
             _log.warning("obsidian: Tracking month write failed", exc_info=True)
+            return False
 
     def _garmin_sleep_range(self, user_id: UUID, since: date) -> dict:
         if self._health is None:

@@ -358,3 +358,14 @@ class TestEveryWriteHandlerDeclaresItsOutcome:
         """A new tool must be placed on one side or the other."""
         from trellis.core_assembler import READ_ONLY_TOOLS
         assert READ_ONLY_TOOLS == {"focus_get", "sense_get", "learn_get", "move_get", "recall", "web_search"}
+
+
+class TestWhatTheRewriteDoesNotGuarantee:
+    """Said plainly, so nobody reads more into it: the rewrite is the model's. A
+    model that repeats its false claim still has it delivered. What the software
+    guarantees is that the record's statement is there, deterministic, and last."""
+
+    def test_a_model_that_repeats_its_claim_is_still_followed_by_the_record(self):
+        o = _scenario([Step(tools=SAVE), Step(text="Saved."), Step(text="Saved.")],
+                      failed("Save failed; nothing changed."))
+        assert o.reply == "Saved.\n\n⚠️ Not done: Save failed; nothing changed."
