@@ -108,10 +108,13 @@ def make_summariser(
                 return
             conversation_messages = _trimmed_window(history.to_messages(turns))
             system_prompt = _SYSTEM_PROMPT.format(domain=domain)
+            # None means nothing is stored. A read that FAILED is not that: the
+            # record is about to be replaced, so without it nothing is written.
             try:
                 earlier = history.domain_summary(user_id, domain)
             except Exception:
-                earlier = None
+                _log.warning("earlier summary for '%s' unreadable; keeping it", domain, exc_info=True)
+                return
             summary = (_via_groq(system_prompt, conversation_messages, earlier)
                        or _via_fallback(system_prompt, conversation_messages, earlier))
             if not summary:

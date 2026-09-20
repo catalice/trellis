@@ -41,6 +41,9 @@ class FakeHistory:
     def turn_count(self, user_id):
         return 42
 
+    def domain_summary(self, user_id, domain):
+        return None
+
     def save_domain_summary(self, user_id, domain, summary, turns_covered):
         self.saved = (domain, summary, turns_covered)
 
@@ -84,3 +87,17 @@ def test_with_no_earlier_record_the_document_is_just_the_transcript():
     groq, history = FakeGroq("They ran 5k."), FakeHistory()
     make_summariser(groq)(uuid4(), "move", history)
     assert "Earlier record" not in groq.sent["messages"][1]["content"]
+
+
+class _HistoryThatCannotBeRead(FakeHistory):
+    def domain_summary(self, user_id, domain):
+        raise ConnectionError("database went away")
+
+
+def test_an_unreadable_earlier_record_is_kept_not_replaced():
+    """A failed read was treated as 'nothing stored': a summary written without
+    the record then replaced it, and the open threads went with it."""
+    groq, history = FakeGroq("They ran 5k."), _HistoryThatCannotBeRead()
+    make_summariser(groq)(uuid4(), "move", history)
+    assert history.saved is None                     # the stored record stands
+    assert not getattr(groq, "sent", None)           # and no model call was spent on it
