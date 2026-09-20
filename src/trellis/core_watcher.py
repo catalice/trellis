@@ -188,6 +188,14 @@ class _RunRepo(Protocol):
     def recent_runs(self, user_id: UUID, *, limit: int) -> list: ...
 
 
+# The columns build_daily_frame writes itself. A user-named tracked kind that
+# collides with one is stored as tracked_<kind> instead of overwriting it.
+_FRAME_COLUMNS = frozenset({
+    "body_battery", "cycle_day", "energy", "hrv", "meds", "mood", "notes", "phase", "ran", "ran_km",
+    "resting_hr", "run_avg_hr", "sleep_hours", "sleep_score", "stress", "tasks_done",
+})
+
+
 def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
                       tz, today: date, activities=(), task_events=()) -> dict[date, dict[str, Any]]:
     """One row per day with everything the verifier can test against. Pure
@@ -210,6 +218,23 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
             row(d)["energy"] = sum(bucket["energy"]) / len(bucket["energy"])
         if bucket["mood"]:
             row(d)["mood"] = sum(bucket["mood"]) / len(bucket["mood"])
+
+    # EVERY tracked kind reaches the frame — not only energy and mood. The extra
+    # dimensions a state carries (anxiety, cramps, …) were stored and then left
+    # out, so neither the day view nor verification could see them. Numbers
+    # average per day; a flag stays a flag; a day without the kind has no key
+    # (absent means not logged, never zero). A kind named like a built-in column
+    # is kept apart, never allowed to overwrite it.
+    tracked: dict[date, dict[str, list]] = {}
+    for s in states:
+        d = s.felt_at.astimezone(tz).date()
+        for kind, value in (getattr(s, "extra", None) or {}).items():
+            tracked.setdefault(d, {}).setdefault(str(kind), []).append(value)
+    for d, kinds in tracked.items():
+        for kind, values in kinds.items():
+            key = f"tracked_{kind}" if kind in _FRAME_COLUMNS else kind
+            numbers = [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+            row(d)[key] = (sum(numbers) / len(numbers)) if numbers else True
 
     # Their WORDS reach the garden too (their call, 12 Aug): "anxious" can only
     # cluster into a pattern if discovery can read it. Truncated hard — a few
