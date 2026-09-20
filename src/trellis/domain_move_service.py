@@ -403,9 +403,8 @@ def _extract_splits(detail: Any) -> list[dict]:
     # Typed payloads can wrap the real segments in a whole-session container row
     # (one INTERVAL_ACTIVE spanning everything) — it duplicates the overall line
     # and wrecks the timeline. A container is known by STRUCTURE: its time range
-    # encloses other rows. Duration alone can't tell it from a long real effort
-    # (a 30-minute run between two 5-minute walks is not a container). Without
-    # timestamps, only a row equal to all the others combined is dropped.
+    # encloses other rows. Duration can't tell it from a long real effort, so
+    # without timestamps nothing is dropped.
     if len(out) > 3:
         out = [e for e in out if not _is_container(e, out)]
     for e in out:
@@ -432,13 +431,16 @@ def _time_span(row: dict, secs: float | None) -> tuple[float, float] | None:
 
 
 def _is_container(entry: dict, rows: list[dict]) -> bool:
-    others = [e for e in rows if e is not entry]
+    """Positive evidence only: this row's time range encloses at least two
+    others. No timestamps, no verdict — an ambiguous row is kept. Duration is
+    never evidence: 5 + 15 + 5 + 5 minutes is four real segments, and the 15 is
+    the run."""
     span = entry.get("_span")
-    if span and all(e.get("_span") for e in others):
-        inside = [e for e in others if e["_span"][0] >= span[0] - 1 and e["_span"][1] <= span[1] + 1]
-        return len(inside) >= 2
-    secs, rest = entry.get("_secs", 0), sum(e.get("_secs", 0) for e in others)
-    return bool(secs and rest and abs(secs - rest) <= 0.05 * rest)
+    if not span:
+        return False
+    inside = [e for e in rows if e is not entry and e.get("_span")
+              and e["_span"][0] >= span[0] - 1 and e["_span"][1] <= span[1] + 1]
+    return len(inside) >= 2
 
 
 _NOT_RUNNING = {"warmup", "cooldown", "warm up", "cool down"}

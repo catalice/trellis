@@ -778,11 +778,12 @@ class TestWholeSessionContainer:
                 row("RWD_STAND", 2100, 120), row("RWD_WALK", 2220, 300)]
         assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "30:00", "2:00", "5:00"]
 
-    def test_without_times_a_row_equal_to_the_rest_combined_is_dropped(self):
+    def test_without_times_nothing_is_dropped_on_duration(self):
+        """5 + 15 + 5 + 5: the 15 equals the rest combined and is the actual run.
+        Duration is never evidence of a container."""
         from trellis.domain_move_service import _extract_splits
-        rows = [{"type": "RWD_RUN", "duration": 2520.0, "distance": 6000.0},
-                {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0},
-                {"type": "RWD_RUN", "duration": 1800.0, "distance": 5000.0},
-                {"type": "RWD_STAND", "duration": 120.0, "distance": 5.0},
+        rows = [{"type": "RWD_WALK", "duration": 300.0, "distance": 400.0},
+                {"type": "RWD_RUN", "duration": 900.0, "distance": 2500.0},
+                {"type": "RWD_STAND", "duration": 300.0, "distance": 5.0},
                 {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0}]
-        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "30:00", "2:00", "5:00"]
+        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "15:00", "5:00", "5:00"]
