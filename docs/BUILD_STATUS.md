@@ -34,6 +34,8 @@ What exists in code now. Working rules: `../CLAUDE.md`. Direction: `DIRECTION.md
 
 ## Queued next (agreed 30 Aug 2026)
 
+**Paused:** `RELIABILITY_PLAN.md` supersedes this queue while it runs.
+
 Builds, in order:
 1. Document ingestion — chunking (heading-aware + sentence boundaries), PDF/text
    extract, chunk identity in the memory index, Telegram file handler; pieces land
