@@ -63,11 +63,12 @@ MOVE_GET_TOOL: dict = {
 MOVE_UPDATE_TOOL: dict = {
     "name": "move_update",
     "description": (
-        "Write to the training record. what=plan: a plan change is THEIR decision, so it goes one of "
-        "three ways. instructed=<their words>: they asked for this change — stored now. Neither: your "
-        "own suggestion — HELD as a proposal, nothing stored; show them exactly that week. "
-        "agree=<proposal id>: they said yes in a LATER message — stores the proposal as it was shown, "
-        "not a new one. Stored days MERGE by date (days not sent survive; nothing is removed unless "
+        "Write to the training record. what=plan: a plan change is THEIR decision. "
+        "Suggesting a week, or any change of your own? Send it here BEFORE you describe it: it is HELD "
+        "as a proposal, nothing is stored, and you show them exactly what comes back. "
+        "agree=<proposal id>: they said yes in a LATER message — stores that proposal as it was shown, "
+        "never a new one. instructed=<their words>: they told you what to change — stored now, no asking. "
+        "A yes is not an instruction. Stored days MERGE by date (days not sent survive; nothing is removed unless "
         "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
         "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
         "The activity is never guessed: a day with several needs sport, and one not synced yet is refused. "
@@ -96,7 +97,7 @@ MOVE_UPDATE_TOOL: dict = {
             },
             "agree": {
                 "type": "string",
-                "description": "plan: the id of the proposal they have just said yes to. Send no plan with it. 'withdraw' = they said no.",
+                "description": "plan: the id of the proposal they have just said a plain yes to — all of it. A question, a 'but', or a challenge to any part is not a yes: answer it, and propose again if it changes. Send no plan with it. 'withdraw' = they said no.",
             },
             "replace_week": {
                 "type": "boolean",
@@ -282,6 +283,11 @@ def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service
 
     instructed = str(input_dict.get("instructed", "")).strip()
     if instructed:
+        sent = input_dict.get("plan") if isinstance(input_dict.get("plan"), dict) else {}
+        if move_service.asked_for(user_id, instructed) and not move_service.names_the_change(instructed, sent):
+            return refused("Those words agree to something — they don't say what to change. If they are saying yes to "
+                           "a week you described, it has to be a proposal they were SHOWN: send it without "
+                           "`instructed` to hold it, show exactly what comes back, and ask again. Nothing was stored.")
         if move_service.asked_for(user_id, instructed):
             return _update_plan(user_id, input_dict, move_service=move_service)
         return refused("Those words aren't in the message you're answering, so this isn't their instruction. "

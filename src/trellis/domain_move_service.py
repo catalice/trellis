@@ -162,6 +162,26 @@ class MoveService:
         quoted, said = _plain(their_words), _plain(message)
         return len(quoted.split()) >= 3 and quoted in said
 
+    def names_the_change(self, their_words: str, plan: dict) -> bool:
+        """An instruction says WHAT to change. "Yes, go with that" is in their
+        message too, but it is assent to something they were shown — and what
+        they were shown has to be a held proposal, not the model's memory of its
+        own prose. So the quoted words must touch the change itself: a weekday
+        being changed, a kind of session, a number in it, or plain 'run'."""
+        words = set(_plain(their_words).split())
+        touched = {"run", "runs", "running", "session", "sessions", "workout", "plan", "week", "today", "tomorrow"}
+        for session in (plan.get("week") or []):
+            if not isinstance(session, dict):
+                continue
+            touched.add(str(session.get("type", "")).lower())
+            touched.update(re.findall(r"\d+", str(session.get("detail", ""))))
+            try:
+                day = date.fromisoformat(str(session.get("date")))
+                touched.update({day.strftime("%A").lower(), day.strftime("%a").lower(), str(day.day)})
+            except ValueError:
+                pass
+        return bool(words & (touched - {""}))
+
     def propose_plan(self, user_id: UUID, *, plan: dict, replace_week: bool, now: datetime) -> PlanProposal:
         week = [s for s in (plan.get("week") or []) if isinstance(s, dict) and s.get("date")]
         held = {**plan, "week": sorted(week, key=lambda s: str(s["date"]))}

@@ -116,6 +116,16 @@ class TestTheirInstructionIsTheAuthorisation:
         assert result.status is Status.FAILED and result.correctable
         assert _stored(service, user) == []
 
+    def test_a_yes_is_not_an_instruction(self, move):
+        """Found by the real model on the first evaluation: it described a week
+        in prose, got a yes, and stored it by quoting the yes as their instruction."""
+        service, user, said = move
+        said["message"] = "Yes, go with that."
+        result = handle_move_update(user, {"what": "plan", "plan": WEEK, "instructed": "Yes, go with that."},
+                                    T1, move_service=service)
+        assert result.status is Status.FAILED and result.correctable and "SHOWN" in result
+        assert _stored(service, user) == []
+
     def test_a_couple_of_common_words_are_not_enough(self, move):
         service, user, said = move
         said["message"] = "Yes, go with that."
