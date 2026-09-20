@@ -96,14 +96,14 @@ SCENARIOS = [
         message="Save a note that the boiler needs servicing.",
         tools={"save_note": (SAVE_NOTE, RuntimeError("database is down"))},
         script=[Step(tools=(("save_note", {"text": "the boiler needs servicing"}),)),
-                Step(text="Something went wrong saving that — it isn't stored.")],
+                Step(text="That hit an error — I can't tell whether it saved.")],
         # At least once: the first real-model run (20 Sep 2026) called it TWICE — the
         # engine's failure text says "try again in a moment", and the model did, blind,
         # with no way to know whether the first attempt had taken effect. Stage 3's
         # "unknown outcome, never retried blindly" starts from that observation.
         checks=[_called("save_note", times=None), _spoke],
-        scripted_checks=[lambda o: "went wrong" in o.model.results_given[0][0].content or pytest.fail(
-            "the model was not told the tool failed")],
+        scripted_checks=[lambda o: "OUTCOME UNKNOWN" in o.model.results_given[0][0].content or pytest.fail(
+            "the model was not told the outcome is unknown")],
     ),
 ]
 

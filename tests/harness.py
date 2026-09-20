@@ -105,7 +105,8 @@ class SimulatedTools:
             try:
                 if isinstance(behaviour, BaseException):
                     raise behaviour
-                record.result = behaviour(input_dict) if callable(behaviour) else str(behaviour)
+                # A str is returned as it is — str() would strip an ActionResult's status.
+                record.result = behaviour(input_dict) if callable(behaviour) else behaviour
             except BaseException as error:
                 record.raised = error
                 raise
