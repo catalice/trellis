@@ -580,7 +580,8 @@ def _load_provenance(data: dict[str, Any]) -> GarminHealthProvenance:
 def _detail_section(
     raw_data: dict[str, Any], key: str, default: list[Any] | dict[str, Any],
 ) -> list[Any] | dict[str, Any]:
+    # Garmin sends a section as a list or as an object wrapping one (laps arrive
+    # as {"lapDTOs": [...]}). Either is kept as sent — narrowing to the default's
+    # type silently stored [] for every lap object.
     value = raw_data.get(key)
-    if isinstance(default, list):
-        return value if isinstance(value, list) else default
-    return value if isinstance(value, dict) else default
+    return value if isinstance(value, (list, dict)) and value else default

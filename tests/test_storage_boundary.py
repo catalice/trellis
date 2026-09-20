@@ -44,3 +44,30 @@ class TestPartialGarminSync:
         repo.upsert_daily_health(GarminDailyHealthRecord(
             user_id=pg_user, observed_on=DAY, steps=2, sleep_score=70, raw={"steps": 2, "sleep_score": 70}))
         assert "unavailable" not in repo.latest_daily_health(pg_user).raw
+
+
+class TestActivitySplitsSurviveStorage:
+    """Garmin sends laps as {"lapDTOs": [...]}. They must come back out of the
+    database as they went in — the coach reads laps from the stored detail."""
+
+    RAW = {
+        "splits": {"lapDTOs": [{"distance": 1000.0, "duration": 360.0, "averageHR": 141.0},
+                               {"distance": 1000.0, "duration": 350.0, "averageHR": 155.0}]},
+        "typedSplits": {"splits": [{"type": "INTERVAL_ACTIVE", "duration": 710.0}]},
+    }
+
+    def test_lap_object_round_trips(self, pg_database, pg_user):
+        from trellis.infra_garmin import GarminActivityDetail
+        from trellis.domain_move_service import _lap_rows
+        repo = PostgresHealthRepository(pg_database)
+        repo.upsert_activity_detail(user_id=pg_user, activity_id="a1", raw_data=self.RAW, sync_run_id=None)
+        stored = repo.get_activity_detail(pg_user, "a1")
+        assert stored["splits"] == self.RAW["splits"]
+        laps = _lap_rows(GarminActivityDetail(activity_id="a1", raw=stored))
+        assert [lap["averageHR"] for lap in laps] == [141.0, 155.0]
+
+    def test_a_plain_lap_list_still_round_trips(self, pg_database, pg_user):
+        repo = PostgresHealthRepository(pg_database)
+        raw = {"splits": [{"distance": 1000.0, "duration": 360.0}]}
+        repo.upsert_activity_detail(user_id=pg_user, activity_id="a2", raw_data=raw, sync_run_id=None)
+        assert repo.get_activity_detail(pg_user, "a2")["splits"] == raw["splits"]

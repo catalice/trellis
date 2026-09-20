@@ -747,3 +747,42 @@ class TestPartialSyncReceipt:
         out = handle_sync_garmin(uuid.uuid4(), {}, _NOON,
                                  move_service=self._Move({}))
         assert out.startswith("Synced Garmin") and "Not refreshed" not in out
+
+
+class TestWholeSessionContainer:
+    """A container row duplicates the whole session and must go; a long real
+    effort must never be mistaken for one."""
+
+    @staticmethod
+    def _detail(rows):
+        from trellis.infra_garmin import GarminActivityDetail
+        return GarminActivityDetail(activity_id="x", raw={"typedSplits": {"splits": rows}})
+
+    def test_a_dominant_real_effort_is_kept(self):
+        from trellis.domain_move_service import _extract_splits
+        rows = [{"type": "RWD_WALK", "duration": 300.0, "distance": 400.0},
+                {"type": "RWD_RUN", "duration": 1800.0, "distance": 5000.0},
+                {"type": "RWD_STAND", "duration": 120.0, "distance": 5.0},
+                {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0}]
+        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "30:00", "2:00", "5:00"]
+
+    def test_a_row_enclosing_the_others_in_time_is_dropped(self):
+        from trellis.domain_move_service import _extract_splits
+        def row(kind, start, secs):
+            h, m = divmod(start // 60, 60)
+            eh, em = divmod((start + secs) // 60, 60)
+            return {"type": kind, "duration": float(secs), "distance": 100.0,
+                    "startTimeGMT": f"2026-03-10T{8 + h:02d}:{m:02d}:00.0",
+                    "endTimeGMT": f"2026-03-10T{8 + eh:02d}:{em:02d}:00.0"}
+        rows = [row("RWD_RUN", 0, 2520), row("RWD_WALK", 0, 300), row("RWD_RUN", 300, 1800),
+                row("RWD_STAND", 2100, 120), row("RWD_WALK", 2220, 300)]
+        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "30:00", "2:00", "5:00"]
+
+    def test_without_times_a_row_equal_to_the_rest_combined_is_dropped(self):
+        from trellis.domain_move_service import _extract_splits
+        rows = [{"type": "RWD_RUN", "duration": 2520.0, "distance": 6000.0},
+                {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0},
+                {"type": "RWD_RUN", "duration": 1800.0, "distance": 5000.0},
+                {"type": "RWD_STAND", "duration": 120.0, "distance": 5.0},
+                {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0}]
+        assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "30:00", "2:00", "5:00"]
