@@ -26,18 +26,46 @@ LOCK="$BACKUP_DIR/.backup.lock"
 mkdir -p "$BACKUP_DIR"
 cd "$REPO_DIR"
 
-# mkdir is atomic: whoever creates the lock directory owns this run. A lock
-# older than two hours is a crashed run's, and is taken over.
-if ! mkdir "$LOCK" 2>/dev/null; then
-    if [[ -n "$(find "$LOCK" -maxdepth 0 -mmin +120 2>/dev/null)" ]]; then
-        echo "backup: taking over a stale lock from a crashed run" >&2
+# mkdir is atomic: whoever creates the lock directory owns this run, and writes
+# its pid inside. A lock is stale only when its owner is DEAD — age proves
+# nothing about a slow dump. (A lock with no pid is a run that died before
+# writing one; that is trusted only once it is two hours old.)
+lock_is_stale() {
+    local owner
+    owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]]; then
+        ! kill -0 "$owner" 2>/dev/null
     else
+        [[ -n "$(find "$LOCK" -maxdepth 0 -mmin +120 2>/dev/null)" ]]
+    fi
+}
+if ! mkdir "$LOCK" 2>/dev/null; then
+    if ! lock_is_stale; then
         echo "backup: another backup is already running — this one steps aside" >&2
         exit 1
     fi
+    # Reclaim by renaming: rename is atomic, so of several runs that see the
+    # same stale lock exactly one moves it away. The others fail here, or lose
+    # the mkdir that follows, and step aside.
+    husk="$LOCK.reclaimed.$$"
+    if ! mv "$LOCK" "$husk" 2>/dev/null || ! mkdir "$LOCK" 2>/dev/null; then
+        rm -rf "$husk" 2>/dev/null || true
+        echo "backup: another backup is already running — this one steps aside" >&2
+        exit 1
+    fi
+    rm -rf "$husk"
+    echo "backup: reclaimed the lock of a run that died" >&2
 fi
+echo "$$" > "$LOCK/pid"
 PARTIAL="$(mktemp "$BACKUP_DIR/.staging.XXXXXX")"
-trap 'rm -f "$PARTIAL"; rmdir "$LOCK" 2>/dev/null || true' EXIT
+release() {
+    rm -f "$PARTIAL"
+    # Only ever release a lock this run owns.
+    if [[ "$(cat "$LOCK/pid" 2>/dev/null || true)" == "$$" ]]; then
+        rm -rf "$LOCK"
+    fi
+}
+trap release EXIT
 
 docker compose exec -T postgres pg_dump -U trellis trellis | gzip > "$PARTIAL"
 

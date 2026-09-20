@@ -93,3 +93,43 @@ def test_a_stale_lock_from_a_crashed_run_is_taken_over(tmp_path):
     os.utime(lock, (old, old))
     assert _run(tmp_path, vault, docker_ok=True).returncode == 0
     assert len(_dumps(vault)) == 1 and not lock.exists()
+
+
+def _lock(vault: Path, *, pid: int | None, hours_old: float = 0) -> Path:
+    import time
+    lock = vault / ".backups" / ".backup.lock"
+    lock.mkdir(parents=True)
+    if pid is not None:
+        (lock / "pid").write_text(f"{pid}\n")
+    if hours_old:
+        old = time.time() - hours_old * 3600
+        os.utime(lock, (old, old))
+    return lock
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
+def test_a_lock_held_by_a_living_process_is_respected_however_old(tmp_path):
+    vault = tmp_path / "vault"
+    lock = _lock(vault, pid=os.getpid(), hours_old=30)             # old, but its owner is alive
+    result = _run(tmp_path, vault, docker_ok=True)
+    assert result.returncode != 0 and "already running" in result.stderr
+    assert (lock / "pid").read_text().strip() == str(os.getpid())   # untouched
+    assert _dumps(vault) == []
+
+
+def test_a_dead_owners_lock_is_reclaimed_and_then_owned(tmp_path):
+    vault = tmp_path / "vault"
+    lock = _lock(vault, pid=_dead_pid())
+    assert _run(tmp_path, vault, docker_ok=True).returncode == 0
+    assert len(_dumps(vault)) == 1 and not lock.exists()
+    assert not list((vault / ".backups").glob(".backup.lock.*"))   # the reclaimed husk is gone too
+
+
+def test_a_run_never_removes_a_lock_it_does_not_own(tmp_path):
+    script = SCRIPT.read_text()
+    assert 'cat "$LOCK/pid"' in script and '"$$"' in script      # ownership is checked before release
