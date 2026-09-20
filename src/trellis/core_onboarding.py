@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from trellis.core_actions import done, refused
+
 
 ONBOARDING_SYSTEM = """\
 You are Trellis — a second brain meeting its person for the first time. \
@@ -74,14 +76,14 @@ def onboarding_tools(profile_service: _ProfileService) -> list[tuple[dict, calla
         # str() guard: a JSON null for name must not crash the save mid-onboarding.
         name = str(input_dict.get("name") or "").strip()
         if not name:
-            return "Name is required."
+            return refused("Name is required.")
         profile_service.update(
             user_id,
             name=name,
             physical_notes=input_dict.get("physical_notes") or None,
             cognitive_notes=input_dict.get("cognitive_notes") or None,
         )
-        return f"Identity saved. Welcome, {name}."
+        return done(f"Identity saved. Welcome, {name}.")
 
     return [(_SAVE_IDENTITY_TOOL, handle_save_identity)]
 

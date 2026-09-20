@@ -133,8 +133,9 @@ core_config.py
 core_history.py
 core_main.py         # the ONE place houses are registered and wired
 core_meta_tool.py    # always-on tools: update_current_context, save_preferences
+core_model.py        # the model boundary: what Trellis needs from a model, in its own terms — no provider
 core_onboarding.py
-core_oracle.py       # the agentic loop (one Claude call per turn, tools until end_turn)
+core_oracle.py       # the conversation engine: one turn, tools until the model is done — speaks core_model only
 core_profile.py      # UserProfile, CurrentContext — global services
 core_registry.py     # houses register here: context loader + tools + rooms + signals
 core_router.py       # keyword fallback router (degraded mode only)
@@ -143,6 +144,7 @@ core_telegram.py
 core_watcher.py      # the slow mind: discovery (Claude, weekly) + verification (Python) + patterns table
 
 # Infrastructure — data sources and engines, not houses
+infra_anthropic.py   # the Anthropic connector — the ONLY module that imports the provider (retries, caching, message shapes)
 infra_embeddings.py  # local embedder (fastembed/bge-small) — memory + routing share it
 infra_garmin.py      # Garmin API client, sync, push, connection management
 infra_memory.py      # the Trellis-wide meaning index (embed-on-write, recall)
@@ -284,6 +286,7 @@ Deliberate understanding — a different cognitive mode from Focus (registered 3
 - **Guidance lines are short.** One rule, one or two sentences, plain. Long lines burn tokens and blur — if a rule needs a paragraph, it's two rules or it's unclear.
 - **The prompt register (applied everywhere 16 Sep 2026).** House guidance = the ROLE in that room + what the data means, nothing else. Tool description = what it does, when to reach for it, the one behaviour that would surprise you — each mechanic stated ONCE, only there. Anything about the person → a preference row (theirs to edit). Tactics and worked examples in a prompt became the ceiling (15 Sep: "the only real slot is Friday") — don't put them back.
 - Never call Claude for something Python can calculate deterministically
+- **Nothing above the model boundary names a provider** (one exception: summaries try Groq first, directly — kept from before the boundary; its fallback is the connector). Conversation, synthesis, discovery and the summary fallback receive a `core_model.ModelConnector` from `core_main.build_model` — the one place a provider is chosen (`TRELLIS_MODEL_PROVIDER`). A new provider is a connector module plus a branch there.
 
 ---
 
@@ -319,6 +322,8 @@ Two patterns, chosen by risk profile:
 | **Dispatch read** `{house}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
 | **Dispatch write** `{house}_add` / `{house}_update` | Create/change verbs repeated across a house's entities | One door per verb (the user's call, 30 Aug — "we can always regress"). Detail lives in PER-FIELD descriptions tagged by entity, never one prose wall. The proven per-entity handlers stay behind the dispatch. log_state was the precedent: a union write that works. |
 | **Specific named write** `push_to_watch`, `delete_entry` | Distinct acts and destructive acts | An act with its own risk profile keeps its own name — deletion must never be reachable by enum typo. |
+
+**A tool that changes something declares how it went** (`core_actions`: `done` / `refused` / `failed` / `partial` / `unknown`). A plain string from one is recorded as NOT done — silence is not success. An exception is `unknown`, never `failed`, and never says "try again". Read-only tools (`READ_ONLY_TOOLS` in `core_assembler`) may answer in plain text. `tests/test_truthful_outcomes.py` fails if a write handler returns a bare string.
 
 **All tools are always available** — routing never gates them. The current 18:
 
@@ -378,7 +383,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 ## Lean constraints (non-negotiable)
 
-- **One ORACLE call per turn** (the agentic loop). One bounded single-shot guard is the only exception, born from a live failure: the silent-turn NUDGE (empty reply after tools). (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
+- **One conversational turn per message** (the agentic loop). Two bounded single-shot guards are the only exceptions, each born from a live failure: the silent-turn NUDGE (empty reply after tools), and the OUTCOME REWRITE (only when an action did not cleanly succeed: the draft goes back once with the record, because a warning appended beside "Done — saved." leaves the person to resolve the contradiction). The rewrite is the model's and is shipped as returned; what is GUARANTEED is the record's own statement, deterministic and last. (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
 - **Minimal pre-loaded context.** The failure mode is loading too much, not too little.
 - **Bounded context.** Insights and history enter as summaries. Never pass raw records.
 - **Tools as the API surface.** A future UI calls the same tools Telegram does.
@@ -419,4 +424,5 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
 - Embedding backfill (safe to re-run): `uv run python scripts/backfill_embeddings.py`
 - Tests: `.venv/bin/pytest tests/ -q`
+- Scenarios (`tests/test_scenarios.py`, `tests/harness.py`): one set, run with a scripted model always, and with the real model when `TRELLIS_EVAL=1` — an evaluation of the model, not a gate on the software. Add a scenario immediately before fixing the fault it shows.
 - The embedding model is baked into the image (Dockerfile) — the bot embeds offline at runtime.

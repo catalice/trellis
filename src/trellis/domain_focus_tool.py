@@ -19,7 +19,8 @@ from trellis.domain_focus_models import (
     TaskEnergy,
     TaskPriority,
 )
-from trellis.domain_focus_service import GoalNotFoundError, PageTaken, TaskNotFoundError
+from trellis.core_actions import done, failed, partial, refused
+from trellis.domain_focus_service import Erased, GoalNotFoundError, PageTaken, TaskNotFoundError
 
 _log = logging.getLogger(__name__)
 
@@ -241,7 +242,9 @@ DELETE_ENTRY_TOOL: dict = {
     "name": "delete_entry",
     "description": (
         "Erase a record that should never have existed — a duplicate, a wrong "
-        "tracking entry, a mis-capture. Gone completely. A decision is not a "
+        "tracking entry, a mis-capture. Removes the record, its search entry and "
+        "the text Trellis wrote in the vault; the result says what is still held "
+        "elsewhere — tell them that, never 'gone completely'. A decision is not a "
         "mistake: a task they decided against is focus_update status='dropped'. "
         "Corrections are erase + re-log. Erasing a capture leaves the tasks "
         "extracted from it; erasing a task takes its reminders with it; an "
@@ -271,12 +274,12 @@ def handle_brain_dump(
 ) -> str:
     raw = str(input_dict.get("text", "")).strip()
     if not raw:
-        return "No text provided — nothing to capture."
+        return refused("No text provided — nothing to capture.")
 
     result = brain_dump_service.process(user_id, raw, now)
 
     if result.synthesis is None:
-        return (
+        return partial(
             f"Saved your dump (synthesis unavailable right now, raw preserved).\n"
             f"Capture ID: {result.capture.id}"
         )
@@ -309,7 +312,7 @@ def handle_brain_dump(
             + ", ".join(syn.effort_hints)
         )
 
-    return "\n".join(parts)
+    return done("\n".join(parts))
 
 
 @dataclass(frozen=True)
@@ -409,6 +412,18 @@ def _view_effort(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusRead
     return "\n".join(lines)
 
 
+# Each state named for what it actually shows. 'accepted' is Telegram taking the
+# message — nobody can know it was read.
+_REMINDER_STATE = {
+    "claimed": "due, being prepared",
+    "executed": "ready, not yet accepted by Telegram — still trying",
+    "accepted": "accepted by Telegram",
+    "undelivered": "NOT delivered — retries ran out",
+    "cancelled": "cancelled",
+    "sent": "marked sent (older record — delivery was never confirmed)",
+}
+
+
 def _view_reminders(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
     upcoming = ctx.reminder_service.all_scheduled(user_id)
     recent = [r for r in ctx.reminder_service.recent(user_id, limit=10) if r.status != "scheduled"]
@@ -421,9 +436,11 @@ def _view_reminders(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusR
             for r in upcoming
         )
     if recent:
-        lines.append("Recent (delivery status):")
+        lines.append("Recent:")
         lines.extend(
-            f"  {'check-in: ' if r.kind == 'check_in' else ''}{r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)} — {r.status}"
+            f"  {'check-in: ' if r.kind == 'check_in' else ''}{r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)}"
+            f" — {_REMINDER_STATE.get(r.status, r.status)}"
+            + (f" ({r.attempts} failed tries)" if r.attempts and r.status != "accepted" else "")
             for r in recent
         )
     return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
@@ -479,7 +496,7 @@ def handle_create_task(
 ) -> str:
     title = str(input_dict.get("title", "")).strip()
     if not title:
-        return "Task title is required."
+        return refused("Task title is required.")
     try:
         priority = TaskPriority(input_dict.get("priority", "medium"))
     except ValueError:
@@ -521,7 +538,7 @@ def handle_create_task(
         # Best-effort by design, but never mute: a persistently failing dup
         # check would otherwise vanish without trace.
         _log.debug("duplicate check failed", exc_info=True)
-    return result
+    return done(result)
 
 
 def handle_update_task(
@@ -533,11 +550,11 @@ def handle_update_task(
 ) -> str:
     task_id_str = str(input_dict.get("task_id", "")).strip()
     if not task_id_str:
-        return "task_id is required."
+        return refused("task_id is required.")
     try:
         task_id = UUID(task_id_str)
     except ValueError:
-        return f"Invalid task_id: {task_id_str!r}"
+        return refused(f"Invalid task_id: {task_id_str!r}")
 
     # status='done' routes through complete(): it owns completed_at, the task
     # event, and the vault refresh — a plain status write would skip all three.
@@ -546,7 +563,7 @@ def handle_update_task(
         try:
             completed = task_service.complete(user_id, task_id, now=now)
         except TaskNotFoundError:
-            return f"Task not found: {task_id_str}"
+            return refused(f"Task not found: {task_id_str}")
 
     kwargs: dict[str, Any] = {}
     if "title" in input_dict:
@@ -568,7 +585,7 @@ def handle_update_task(
         elif input_dict["status"] != "done":
             # Refuse loudly — a silent drop here reported "Updated" while
             # changing nothing but updated_at.
-            return (
+            return refused(
                 f"Invalid task status: {input_dict['status']!r}. "
                 "Use open, done, dropped, or parked."
             )
@@ -585,15 +602,15 @@ def handle_update_task(
         kwargs["description"] = input_dict["description"]
 
     if completed is not None and not kwargs:
-        return f"Done: {completed.title}"
+        return done(f"Done: {completed.title}")
 
     try:
         task = task_service.update(user_id, task_id, **kwargs, now=now)
     except TaskNotFoundError:
-        return f"Task not found: {task_id_str}"
+        return refused(f"Task not found: {task_id_str}")
     if completed is not None:
-        return f"Done + updated: {task.title}"
-    return f"Updated: {task.title}"
+        return done(f"Done + updated: {task.title}")
+    return done(f"Updated: {task.title}")
 
 
 def handle_set_reminder(
@@ -607,17 +624,17 @@ def handle_set_reminder(
     label = str(input_dict.get("label", "")).strip()
     remind_at_str = str(input_dict.get("remind_at", "")).strip()
     if not label or not remind_at_str:
-        return "label and remind_at are both required."
+        return refused("label and remind_at are both required.")
     try:
         remind_at = datetime.fromisoformat(remind_at_str.replace("Z", "+00:00"))
     except ValueError:
-        return f"Invalid remind_at format: {remind_at_str!r}. Use YYYY-MM-DDTHH:MM."
+        return refused(f"Invalid remind_at format: {remind_at_str!r}. Use YYYY-MM-DDTHH:MM.")
     # Timezone math is Python's job, never Claude's: a naive datetime is the
     # user's local wall-clock time.
     if remind_at.tzinfo is None:
         remind_at = remind_at.replace(tzinfo=tz)
     if remind_at <= now:
-        return (
+        return refused(
             f"That time ({_fmt_datetime(remind_at, tz)}) is already past — a "
             "reminder set there would never usefully fire. Pick a future time."
         )
@@ -656,7 +673,7 @@ def handle_set_reminder(
             f"@ {_fmt_datetime(dup.remind_at, tz)}{dup_repeats} [{dup.id}]. "
             "If that makes this a duplicate, ask them which to cancel."
         )
-    return result
+    return done(result)
 
 
 def handle_cancel_reminder(
@@ -668,14 +685,14 @@ def handle_cancel_reminder(
 ) -> str:
     rid_str = str(input_dict.get("reminder_id", "")).strip()
     if not rid_str:
-        return "reminder_id is required."
+        return refused("reminder_id is required.")
     try:
         cancelled = reminder_service.cancel(UUID(rid_str))
     except ValueError:
-        return f"Invalid reminder_id: {rid_str!r}"
+        return refused(f"Invalid reminder_id: {rid_str!r}")
     if not cancelled:
-        return "No scheduled reminder with that id — focus_get what='reminders' lists them."
-    return "Reminder cancelled."
+        return refused("No scheduled reminder with that id — focus_get what='reminders' lists them.")
+    return done("Reminder cancelled.")
 
 
 def handle_add_goal(
@@ -687,7 +704,7 @@ def handle_add_goal(
 ) -> str:
     title = str(input_dict.get("title", "")).strip()
     if not title:
-        return "title is required."
+        return refused("title is required.")
     label = str(input_dict.get("label", "") or "").strip() or None
 
     target_date = None
@@ -695,7 +712,7 @@ def handle_add_goal(
         try:
             target_date = date.fromisoformat(str(input_dict["target_date"]))
         except ValueError:
-            return f"Invalid target_date: {input_dict['target_date']!r}. Use YYYY-MM-DD."
+            return refused(f"Invalid target_date: {input_dict['target_date']!r}. Use YYYY-MM-DD.")
 
     goal = goal_service.add(
         user_id, title,
@@ -722,7 +739,7 @@ def handle_add_goal(
         # Best-effort by design, but never mute: a persistently failing dup
         # check would otherwise vanish without trace.
         _log.debug("duplicate check failed", exc_info=True)
-    return result
+    return done(result)
 
 
 def handle_update_goal(
@@ -734,11 +751,11 @@ def handle_update_goal(
 ) -> str:
     goal_id_str = str(input_dict.get("goal_id", "")).strip()
     if not goal_id_str:
-        return "goal_id is required."
+        return refused("goal_id is required.")
     try:
         goal_id = UUID(goal_id_str)
     except ValueError:
-        return f"Invalid goal_id: {goal_id_str!r}"
+        return refused(f"Invalid goal_id: {goal_id_str!r}")
 
     kwargs: dict[str, Any] = {}
     if "title" in input_dict:
@@ -749,7 +766,7 @@ def handle_update_goal(
         try:
             kwargs["target_date"] = date.fromisoformat(str(input_dict["target_date"]))
         except ValueError:
-            return f"Invalid target_date format."
+            return refused(f"Invalid target_date format.")
     if "is_fixed_date" in input_dict:
         kwargs["is_fixed_date"] = input_dict["is_fixed_date"] is True
     if "notes" in input_dict:
@@ -758,7 +775,7 @@ def handle_update_goal(
         try:
             kwargs["status"] = GoalStatus(input_dict["status"])
         except ValueError:
-            return f"Unknown status: {input_dict['status']!r}."
+            return refused(f"Unknown status: {input_dict['status']!r}.")
 
     # Notes are a wholesale text replace — echo what got overwritten so a bad
     # rewrite is visible in the result, not silently gone. Fetched by id so
@@ -774,11 +791,30 @@ def handle_update_goal(
     try:
         goal = goal_service.update(user_id, goal_id, **kwargs, now=now)
     except GoalNotFoundError:
-        return f"Goal not found: {goal_id_str}"
+        return refused(f"Goal not found: {goal_id_str}")
     result = f"Goal updated: {goal.summary()}"
     if old_notes and kwargs.get("notes") != old_notes:
         result += f'\nNotes replaced — they used to say: "{old_notes}"'
-    return result
+    return done(result)
+
+
+def _erased_message(result: "Erased"):
+    """What went, and — every time — what Trellis still holds. 'Erased' must
+    not promise more than was done."""
+    still = ("Still held: the conversation where it was said (it ages out of what I read), "
+             "the action log (30 days), and any database backup taken before now.")
+    if result.left_in_vault or result.uncertain:
+        # Store by store — never a clean 'erased' the stores themselves can't vouch for.
+        parts = ["Erased the record."]
+        if result.uncertain:
+            parts.append("NOT confirmed gone from: " + ", ".join(result.uncertain)
+                         + " — that clean-up failed, so it may still be there"
+                         + (" and can still come up in recall." if "the search index" in result.uncertain else "."))
+        if result.left_in_vault:
+            parts.append("Its text is still on " + ", ".join(result.left_in_vault)
+                         + " — that text was changed by hand, so I left it; remove it there if you want it gone.")
+        return partial(" ".join(parts) + " " + still)
+    return done("Erased: the record, its search entry, and the text I had written into the vault. " + still)
 
 
 def handle_delete_entry(
@@ -793,28 +829,31 @@ def handle_delete_entry(
 ) -> str:
     entry_id_str = str(input_dict.get("entry_id", "")).strip()
     if not entry_id_str:
-        return "entry_id is required."
+        return refused("entry_id is required.")
     try:
         entry_id = UUID(entry_id_str)
     except ValueError:
-        return f"Invalid entry_id: {entry_id_str!r}"
-    if (
-        sense_service.delete_entry(user_id, entry_id)
-        or task_service.delete(user_id, entry_id)
-        or capture_service.delete(user_id, entry_id)
-    ):
-        return "Erased."
+        return refused(f"Invalid entry_id: {entry_id_str!r}")
+    tracking = sense_service.erase_entry(user_id, entry_id)
+    if tracking.erased:
+        return _erased_message(tracking)
+    task = task_service.erase(user_id, entry_id)
+    if task.erased:
+        return _erased_message(task)
+    erased = capture_service.erase(user_id, entry_id)
+    if erased.erased:
+        return _erased_message(erased)
     verdict = (effort_service.delete_if_empty(user_id, entry_id, capture_service)
                if effort_service is not None else "not_found")
     if verdict == "deleted":
-        return "Erased (empty effort, page removed)."
+        return done("Erased (empty effort, page removed).")
     if verdict == "deleted_page_kept":
-        return ("Erased the effort record. Its vault page has writing on it that "
-                "Trellis didn't put there, so the page was left where it is.")
+        return partial("Erased the effort record. Its vault page has writing on it that "
+                       "Trellis didn't put there, so the page was left where it is.")
     if verdict == "not_empty":
-        return ("That effort still has notes filed on it — move them first "
-                "(focus_add what='effort_note' with capture_id), then erase.")
-    return "No record with that id."
+        return refused("That effort still has notes filed on it — move them first "
+                      "(focus_add what='effort_note' with capture_id), then erase.")
+    return refused("No record with that id.")
 
 
 WEB_SEARCH_TOOL: dict = {
@@ -886,7 +925,7 @@ def handle_focus_add(
             effort_service=effort_service, capture_service=capture_service,
             task_service=task_service,
         )
-    return f"Unknown what: {what!r}. Use: task, goal, reminder, effort_note."
+    return refused(f"Unknown what: {what!r}. Use: task, goal, reminder, effort_note.")
 
 
 def handle_focus_update(
@@ -912,25 +951,25 @@ def handle_focus_update(
         )
     if what == "reminder":
         if input_dict.get("status") != "cancelled":
-            return "Reminders only cancel (status='cancelled'). To move one: cancel it, then focus_add a new one."
+            return refused("Reminders only cancel (status='cancelled'). To move one: cancel it, then focus_add a new one.")
         return handle_cancel_reminder(
             user_id, {"reminder_id": rec_id}, now, reminder_service=reminder_service,
         )
     if what == "effort":
         new_title = str(input_dict.get("title", "")).strip()
         if not new_title:
-            return "title is required to rename an effort."
+            return refused("title is required to rename an effort.")
         try:
             renamed = effort_service.rename(user_id, UUID(rec_id), new_title)
         except PageTaken as exc:
-            return (f"Not renamed — the vault already has a page at {exc.path} "
-                    "(another effort, or a note written by hand). Nothing changed; pick another title.")
+            return failed(f"Not renamed — the vault already has a page at {exc.path} "
+                          "(another effort, or a note written by hand). Nothing changed; pick another title.")
         except ValueError:
-            return f"Invalid id: {rec_id!r}"
+            return refused(f"Invalid id: {rec_id!r}")
         if renamed is None:
-            return "No effort with that id."
-        return f"Renamed to '{renamed.title}' — its vault page moved with it."
-    return f"Unknown what: {what!r}. Use: task, goal, reminder, effort."
+            return refused("No effort with that id.")
+        return done(f"Renamed to '{renamed.title}' — its vault page moved with it.")
+    return refused(f"Unknown what: {what!r}. Use: task, goal, reminder, effort.")
 
 
 def handle_save_to_effort(
@@ -946,9 +985,9 @@ def handle_save_to_effort(
     content = str(input_dict.get("content", "")).strip()
     capture_id_str = str(input_dict.get("capture_id", "")).strip()
     if not title:
-        return "effort_title is required."
+        return refused("effort_title is required.")
     if not content and not capture_id_str:
-        return "Pass content (new material) or capture_id (an existing capture to file)."
+        return refused("Pass content (new material) or capture_id (an existing capture to file).")
 
     # A typo must not silently spawn a second effort: say when one was created,
     # and flag a near-miss against the existing names so a slip is caught in
@@ -978,10 +1017,10 @@ def handle_save_to_effort(
         try:
             capture_service.assign(user_id, UUID(capture_id_str), effort.id)
         except ValueError:
-            return f"Invalid capture_id: {capture_id_str!r}"
+            return refused(f"Invalid capture_id: {capture_id_str!r}")
         except LookupError:
-            return f"No capture with id {capture_id_str} — focus_get what='inbox' lists them."
-        return f"Filed that capture into '{effort.title}'{created_note}."
+            return refused(f"No capture with id {capture_id_str} — focus_get what='inbox' lists them.")
+        return done(f"Filed that capture into '{effort.title}'{created_note}.")
     capture_service.save_research(user_id, content, effort_id=effort.id, now=now)
 
     retired = ""
@@ -994,7 +1033,7 @@ def handle_save_to_effort(
         except Exception:
             _log.warning("save_to_effort: seed retirement failed", exc_info=True)
             retired = " (seed retirement FAILED — the seed is still on the list)"
-    return f"Saved to effort '{effort.title}'{created_note}{retired}."
+    return done(f"Saved to effort '{effort.title}'{created_note}{retired}.")
 
 
 def handle_web_search(

@@ -44,6 +44,11 @@ class FakeStateRepo:
         starts = [e for e in self.events if e.event_type == TrackingEventType.PERIOD_START]
         return max(starts, key=lambda e: e.occurred_at) if starts else None
 
+    def entry_day(self, user_id, entry_id):
+        found = [s.felt_at for s in self.states if s.id == entry_id] + \
+                [e.occurred_at for e in self.events if e.id == entry_id]
+        return found[0] if found else None
+
     def delete_state(self, user_id, log_id):
         before = len(self.states)
         self.states = [s for s in self.states if s.id != log_id]

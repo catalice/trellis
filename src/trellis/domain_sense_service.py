@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from trellis.core_actions import Erased
 from trellis.domain_sense_models import StateLog, TrackingEvent, TrackingEventType
 
 _log = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class StateRepository(Protocol):
     def tracked_kinds(self, user_id: UUID) -> list[str]: ...
     def delete_state(self, user_id: UUID, log_id: UUID) -> bool: ...
     def delete_event(self, user_id: UUID, event_id: UUID) -> bool: ...
+    def entry_day(self, user_id: UUID, entry_id: UUID) -> datetime | None: ...
 
 
 class HealthReader(Protocol):
@@ -190,12 +192,30 @@ class SenseService:
         since = now - timedelta(days=days)
         return self._repo.list_events_since(user_id, since=since)
 
-    def delete_entry(self, user_id: UUID, entry_id: UUID) -> bool:
-        """Remove a state log or tracking event (whichever the id matches)."""
+    def erase_entry(self, user_id: UUID, entry_id: UUID) -> Erased:
+        """Remove a state log or tracking event (whichever the id matches), and
+        rewrite the vault views it was IN — the day and month it was felt, which
+        for an old entry is not the current one. The result names any page that
+        could not be rewritten: the erased words may still be on it."""
+        felt = self._repo.entry_day(user_id, entry_id)
         deleted = self._repo.delete_state(user_id, entry_id) or self._repo.delete_event(user_id, entry_id)
-        if deleted and self._projection:
-            self._projection.tracking_changed(user_id)
-        return deleted
+        if not deleted:
+            return Erased(erased=False)
+        stale: list[str] = []
+        if self._projection:
+            try:
+                if felt is not None and hasattr(self._projection, "tracking_entry_erased"):
+                    stale = list(self._projection.tracking_entry_erased(
+                        user_id, felt.astimezone(self._tz).date()) or [])
+                elif self._projection.tracking_changed(user_id) is False:
+                    stale = ["the tracking pages in the vault"]
+            except Exception:
+                _log.warning("tracking erase: vault views not refreshed", exc_info=True)
+                stale = ["the tracking pages in the vault"]
+        return Erased(erased=True, uncertain=tuple(stale))
+
+    def delete_entry(self, user_id: UUID, entry_id: UUID) -> bool:
+        return self.erase_entry(user_id, entry_id).erased
 
     def cycle_day(self, user_id: UUID, now: datetime) -> int | None:
         start = self._repo.last_period_start(user_id)

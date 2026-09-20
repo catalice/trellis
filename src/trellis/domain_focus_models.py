@@ -209,10 +209,13 @@ class Reminder:
     user_id: UUID
     label: str
     remind_at: datetime
-    status: str                           # scheduled | sent | cancelled
+    status: str                           # scheduled | claimed | executed | accepted | undelivered | cancelled ('sent' = legacy)
     task_id: UUID | None = None
     recurrence: str | None = None         # daily | weekly | monthly | yearly; None = one-off
     kind: str = "remind"                  # remind = label posted verbatim | check_in = wakes the oracle
+    message: str | None = None            # what to deliver — a check-in's reply, stored once its turn has run
+    attempts: int = 0                     # failed deliveries so far
+    claimed_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

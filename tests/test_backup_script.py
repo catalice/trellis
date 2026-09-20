@@ -133,3 +133,50 @@ def test_a_dead_owners_lock_is_reclaimed_and_then_owned(tmp_path):
 def test_a_run_never_removes_a_lock_it_does_not_own(tmp_path):
     script = SCRIPT.read_text()
     assert 'cat "$LOCK/pid"' in script and '"$$"' in script      # ownership is checked before release
+
+
+SNAPSHOT = Path(__file__).parent.parent / "scripts" / "predeploy_snapshot.sh"
+
+
+def _snapshot(tmp_path: Path, vault: Path, *, docker_ok: bool = True):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    dump = tmp_path / "dump.sql"
+    dump.write_text(GOOD_DUMP)
+    fake = bin_dir / "docker"
+    fake.write_text("#!/usr/bin/env bash\n" + (f'cat "{dump}"\n' if docker_ok else "exit 1\n"))
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "OBSIDIAN_VAULT": str(vault),
+           "SNAPSHOT_ROOT": str(tmp_path / "snapshots")}
+    return subprocess.run(["bash", str(SNAPSHOT)], env=env, capture_output=True, text=True)
+
+
+def test_a_release_snapshot_is_timestamped_separate_and_holds_the_vault(tmp_path):
+    import tarfile
+    vault = tmp_path / "my vault"
+    (vault / "Atlas/Maps").mkdir(parents=True)
+    (vault / "Atlas/Maps/Rome.md").write_text("hand-written\n")
+    (vault / ".backups").mkdir()
+    (vault / ".backups/trellis-2026-01-01.sql.gz").write_bytes(b"old nightly dump")
+    result = _snapshot(tmp_path, vault)
+    assert result.returncode == 0, result.stderr
+    (folder,) = (tmp_path / "snapshots").iterdir()
+    names = sorted(p.name for p in folder.iterdir())
+    assert [n.split("-")[0] for n in names] == ["README.txt", "trellis", "vault"]
+    assert gzip.decompress(next(folder.glob("trellis-*.sql.gz")).read_bytes()).decode().rstrip().endswith("dump complete")
+    with tarfile.open(next(folder.glob("vault-*.tar.gz"))) as archive:
+        members = archive.getnames()
+    assert "my vault/Atlas/Maps/Rome.md" in members
+    assert not any(".backups" in m for m in members)                 # the dumps aren't copied into the copy
+    assert not os.access(folder / names[1], os.W_OK)                 # read-only: nothing replaces it by accident
+    assert list((vault / ".backups").iterdir()) == [vault / ".backups/trellis-2026-01-01.sql.gz"]   # nightly untouched
+    os.system(f'chmod -R u+w "{tmp_path / "snapshots"}"')            # let pytest clean up
+
+
+def test_a_snapshot_whose_dump_failed_is_not_left_looking_complete(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    result = _snapshot(tmp_path, vault, docker_ok=False)
+    assert result.returncode != 0
+    assert not list((tmp_path / "snapshots").rglob("*.sql.gz"))
+    os.system(f'chmod -R u+w "{tmp_path / "snapshots"}" 2>/dev/null')

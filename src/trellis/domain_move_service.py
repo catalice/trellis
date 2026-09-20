@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -48,6 +49,34 @@ class GarminSyncPort(Protocol):
 
 class WorkoutSpecError(ValueError):
     """The coach's workout spec couldn't be turned into a Garmin workout."""
+
+
+class AmbiguousWorkout(ValueError):
+    """More than one recorded activity fits — which one is theirs to say."""
+    def __init__(self, candidates: list) -> None:
+        super().__init__("several activities fit")
+        self.candidates = candidates
+
+
+class NoSuchWorkout(LookupError):
+    """The day has activities, but none of the sport named (not synced yet?)."""
+    def __init__(self, sport: str, that_day: list) -> None:
+        super().__init__(f"no {sport} activity that day")
+        self.sport, self.that_day = sport, that_day
+
+
+def _is_sport(workout: RunLog, sport: str) -> bool:
+    """'run' fits 'running' and 'trail_running'; 'strength' fits 'strength_training'."""
+    want = sport.strip().lower().replace(" ", "_")
+    kind = (workout.activity_type or "").lower()
+    return bool(want) and (want in kind or kind in want or want.rstrip("s") in kind)
+
+
+@dataclass(frozen=True)
+class WatchPush:
+    name: str
+    replaced: bool = False          # this date already had a workout Trellis pushed
+    old_copy_left: bool = False     # ...and removing that older copy failed
 
 
 class MoveService:
@@ -143,18 +172,40 @@ class MoveService:
 
     def annotate_workout(
         self, user_id: UUID, on_date: date, annotation: str,
+        *, sport: str | None = None, remove: str | None = None,
     ) -> RunLog | None:
         """Attach the user's account of a workout — any sport — to its activity
         row (user_note, the column sync can't touch). APPENDS to their earlier
-        words, never replaces. If several activities share the date, prefers the
-        single run, else the latest. Returns the updated view, or None if
-        nothing is recorded that day."""
+        words, never replaces. Returns the updated view, or None if nothing at
+        all is recorded that day.
+
+        The activity is never guessed. One activity that day (of that sport, if
+        a sport is named) is the one; several raise AmbiguousWorkout; a named
+        sport that isn't on record that day raises NoSuchWorkout — typically a
+        session that hasn't synced yet, which must not land on whatever else
+        the day holds. `remove` takes a fragment of their words back off (a
+        note that was filed on the wrong activity)."""
         day = [w for w in self._repo.recent_workouts(user_id, limit=200)
                if w.ran_on == on_date]
         if not day:
             return None
-        runs = [w for w in day if "run" in (w.activity_type or "").lower()]
-        workout = runs[0] if len(runs) == 1 else day[0]
+        matches = [w for w in day if _is_sport(w, sport)] if sport else day
+        if not matches:
+            raise NoSuchWorkout(sport or "", day)
+        if len(matches) > 1:
+            raise AmbiguousWorkout(matches)
+        workout = matches[0]
+        if remove and remove.strip():
+            kept = [part for part in (workout.user_note or "").split(" — ")
+                    if part.strip().lower() != remove.strip().lower()]
+            words = " — ".join(kept)
+            if words != (workout.user_note or ""):
+                if not self._repo.set_user_note(user_id, workout.garmin_activity_id, words):
+                    return None
+                self._project_plan(user_id)
+                from dataclasses import replace as _swap
+                workout = _swap(workout, user_note=words or None,
+                                note=f"{workout.name or workout.note.split(' — ')[0]}" + (f" — {words}" if words else ""))
         clean = annotation.strip()
         if not clean:
             return workout
@@ -172,27 +223,44 @@ class MoveService:
 
     # -- push a structured workout to the watch (the executive-function win) ----
 
-    def push_workout_to_watch(self, user_id: UUID, spec: dict, on_date: date) -> str:
+    def push_workout_to_watch(self, user_id: UUID, spec: dict, on_date: date) -> "WatchPush":
         """Build a Garmin workout from the coach's spec and schedule it on on_date.
-        Returns the workout name for confirmation. Raises WorkoutSpecError on a bad
-        spec, or RuntimeError if Garmin isn't wired/connected."""
+        Raises WorkoutSpecError on a bad spec, RuntimeError if Garmin isn't
+        wired/connected, and whatever Garmin raised if the upload or scheduling
+        failed — in which case the watch is as it was.
+
+        A pushed workout is a DATED SESSION: what identifies it is the record of
+        what Trellis pushed for that date, never its name. The new workout goes
+        up and is scheduled FIRST; only then is this date's previous one
+        removed. So a correction replaces that day and no other, a failed
+        upload changes nothing, and a workout made by hand is never touched."""
         if self._garmin_push is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
         workout = build_garmin_workout(spec)               # raises WorkoutSpecError
-        # A push REPLACES: same-named workouts are deleted first, so corrections
-        # update the watch instead of stacking duplicates (the 4-copies mess,
-        # 11 Aug). Best-effort — a failed cleanup never blocks the push.
-        name = str(workout.get("workoutName") or "")
-        if name:
-            try:
-                for w in self._garmin_push.list_workouts(user_id, limit=30):
-                    if w.get("workoutName") == name and w.get("workoutId"):
-                        self._garmin_push.delete_workout(user_id, str(w["workoutId"]))
-            except Exception:
-                _log.warning("push replace: could not clean same-named workouts", exc_info=True)
+        name = str(workout.get("workoutName") or "workout")
+        previous = self._repo.get_watch_push(user_id, on_date, name)
+
         workout_id = self._garmin_push.push_workout(user_id, workout)
-        self._garmin_push.schedule_workout(user_id, workout_id, on_date)
-        return str(workout.get("workoutName") or "workout")
+        try:
+            self._garmin_push.schedule_workout(user_id, workout_id, on_date)
+        except Exception:
+            # Uploaded but not scheduled: take the newcomer back, so the watch
+            # is as it was. If even that fails, the caller still hears the error.
+            try:
+                self._garmin_push.delete_workout(user_id, workout_id)
+            except Exception:
+                _log.warning("push: could not remove the unscheduled upload %s", workout_id, exc_info=True)
+            raise
+        self._repo.record_watch_push(user_id, on_date, name, workout_id)
+
+        old_copy_left = False
+        if previous and previous != workout_id:
+            try:
+                self._garmin_push.delete_workout(user_id, previous)
+            except Exception:
+                old_copy_left = True
+                _log.warning("push: the previous workout %s could not be removed", previous, exc_info=True)
+        return WatchPush(name=name, replaced=bool(previous), old_copy_left=old_copy_left)
 
     def sync_garmin(self, user_id: UUID, *, now: datetime, days: int = 3) -> dict:
         """Refresh this user's Garmin data: daily health + activities + details

@@ -8,6 +8,11 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 
+# Providers a connector exists for. Adding one = a connector module + a branch in
+# core_main.build_model; nothing above the model boundary changes.
+MODEL_PROVIDERS = ("anthropic",)
+
+
 def database_dsn() -> str:
     """How to reach Postgres. An explicit DATABASE_URL wins. Otherwise the DSN is
     built from parts, so the install's own POSTGRES_PASSWORD works whatever
@@ -46,6 +51,10 @@ class Settings:
     guardian_api_key: str = ""
     chat_ttl_hours: int = 0   # 0 = keep chat forever; >0 sweeps messages older than N hours
     marker_hour: int = -1     # local hour for the daily memory-horizon marker; -1 = off
+    # Which model provider answers, and its small model for background work
+    # (summaries). Credentials are required only for the provider selected.
+    model_provider: str = "anthropic"
+    small_model: str = "claude-haiku-4-5-20251001"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -79,6 +88,8 @@ class Settings:
             guardian_api_key=os.getenv("GUARDIAN_API_KEY", ""),
             chat_ttl_hours=int(os.getenv("TRELLIS_CHAT_TTL_HOURS", "0") or 0),
             marker_hour=int(os.getenv("TRELLIS_MORNING_MARKER_HOUR", "-1") or -1),
+            model_provider=os.getenv("TRELLIS_MODEL_PROVIDER", "anthropic").strip().lower() or "anthropic",
+            small_model=os.getenv("TRELLIS_SMALL_MODEL", "claude-haiku-4-5-20251001"),
         )
 
     def validate(self) -> None:
@@ -87,7 +98,11 @@ class Settings:
                 "No database credentials: set POSTGRES_PASSWORD in .env (or a full DATABASE_URL)")
         if not self.telegram_bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
-        if not self.anthropic_api_key:
+        if self.model_provider not in MODEL_PROVIDERS:
+            raise ValueError(
+                f"TRELLIS_MODEL_PROVIDER={self.model_provider!r} is not supported "
+                f"(available: {', '.join(MODEL_PROVIDERS)})")
+        if self.model_provider == "anthropic" and not self.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required")
         if not self.obsidian_vault.is_dir():
             raise ValueError(f"Obsidian vault does not exist: {self.obsidian_vault}")

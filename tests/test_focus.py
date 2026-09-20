@@ -98,7 +98,7 @@ class FakeCaptureRepo:
         self.captures[capture.id] = capture
         return capture
 
-    def get(self, capture_id):
+    def get(self, user_id, capture_id):
         return self.captures.get(capture_id)
 
     def list_recent(self, user_id, *, limit):
@@ -156,11 +156,11 @@ class FakeReminderRepo:
         self.reminders[rid] = replace(r, status="cancelled")
         return True
 
-    def mark_sent(self, rid) -> bool:
+    def claim(self, rid, *, now) -> bool:
         from dataclasses import replace
-        if rid not in self.reminders:
+        if rid not in self.reminders or self.reminders[rid].status != "scheduled":
             return False
-        self.reminders[rid] = replace(self.reminders[rid], status="sent")
+        self.reminders[rid] = replace(self.reminders[rid], status="claimed", claimed_at=now)
         return True
 
     def list_recent(self, user_id, *, limit):
@@ -452,10 +452,11 @@ class TestReminderService:
         svc.cancel(r.id)
         assert svc.upcoming(UID, hours=24, now=NOW) == []
 
-    def test_mark_sent_removes_from_upcoming(self):
+    def test_a_claimed_reminder_is_no_longer_due_and_cannot_be_claimed_twice(self):
         svc = ReminderService(FakeReminderRepo(), TZ)
         r = svc.set(UID, "Fitting", NOW, now=NOW)
-        svc.mark_sent(r.id)
+        assert svc.claim(r.id, now=NOW) is True
+        assert svc.claim(r.id, now=NOW) is False
         assert svc.upcoming(UID, hours=24, now=NOW) == []
 
     def test_reschedule_daily_advances_one_day(self):
@@ -539,6 +540,11 @@ class FakeStateRepo:
     def __init__(self):
         self.states: list = []
         self.events: list = []
+
+    def entry_day(self, user_id, entry_id):
+        found = [s.felt_at for s in self.states if s.id == entry_id] + \
+                [e.occurred_at for e in self.events if e.id == entry_id]
+        return found[0] if found else None
 
     def save_state(self, log):
         self.states.append(log)
@@ -1126,3 +1132,35 @@ class TestGoalLabels:
         updated = svc.update(UID, g.id, label=None, now=NOW)
         assert updated.label is None
         assert not updated.is_training_goal()
+
+
+class TestRecurringRemindersKeepLocalTime:
+    """A 09:00 reminder is 09:00 on the wall, before and after the clocks change.
+    Advancing the stored UTC instant by 24h drifted it to 08:00 (or 10:00)."""
+
+    def test_daily_across_the_autumn_clock_change(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_service import _next_occurrence
+        madrid = ZoneInfo("Europe/Madrid")
+        before = datetime(2026, 10, 24, 7, 0, tzinfo=timezone.utc)        # 09:00 in Madrid (UTC+2)
+        now = datetime(2026, 10, 24, 7, 0, 5, tzinfo=timezone.utc)
+        nxt = _next_occurrence(before, "daily", now, madrid)
+        assert nxt.astimezone(madrid).strftime("%d %H:%M") == "25 09:00"   # clocks went back overnight
+        assert nxt.astimezone(timezone.utc).hour == 8                      # so the instant moved an hour
+
+    def test_weekly_across_the_spring_clock_change(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_service import _next_occurrence
+        madrid = ZoneInfo("Europe/Madrid")
+        before = datetime(2027, 3, 22, 8, 0, tzinfo=timezone.utc)         # Monday 09:00 Madrid (UTC+1)
+        nxt = _next_occurrence(before, "weekly", before + timedelta(seconds=5), madrid)
+        assert nxt.astimezone(madrid).strftime("%d %H:%M") == "29 09:00"
+
+    def test_downtime_still_lands_strictly_in_the_future_at_the_same_local_time(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_service import _next_occurrence
+        madrid = ZoneInfo("Europe/Madrid")
+        before = datetime(2026, 10, 20, 7, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)           # a week down, across the change
+        nxt = _next_occurrence(before, "daily", now, madrid)
+        assert nxt > now and nxt.astimezone(madrid).strftime("%d %H:%M") == "28 09:00"

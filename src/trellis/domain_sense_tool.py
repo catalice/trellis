@@ -19,6 +19,7 @@ from datetime import date as _date, datetime, time as _time
 from typing import Any, Callable
 from uuid import UUID
 
+from trellis.core_actions import done, refused
 from trellis.domain_sense_claude import SENSE_GUIDANCE
 from trellis.domain_sense_models import TrackingEventType
 
@@ -191,8 +192,8 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
                 period_occurred = datetime.combine(d, _time(10, 0), tzinfo=tz)
                 period_when = f" ({period_date_str})"
             except ValueError:
-                return (f"period_date '{period_date_str}' isn't a valid "
-                        "YYYY-MM-DD date — nothing was logged.")
+                return refused(f"period_date '{period_date_str}' isn't a valid "
+                               "YYYY-MM-DD date — nothing was logged.")
 
     # A state entry needs their words; pure events (period/meds/sleep) don't —
     # forcing a note here is how phantom state rows got fabricated (3 Aug).
@@ -263,12 +264,12 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
         parts.append(f"Period {period}{period_when}.")
 
     if not parts:
-        return "Nothing to log — pass their words (note) and/or meds, sleep, or period."
+        return refused("Nothing to log — pass their words (note) and/or meds, sleep, or period.")
 
     summary = sense_service.today_summary(user_id, now)
     if summary:
         parts.append(summary)
-    return " ".join(parts)
+    return done(" ".join(parts))
 
 
 # ---------------------------------------------------------------------------

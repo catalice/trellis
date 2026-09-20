@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from trellis.core_actions import Erased
 from trellis.domain_focus_models import (
     Capture,
     CaptureType,
@@ -39,6 +40,7 @@ class CaptureRepository(Protocol):
     def assign_to_effort(self, user_id: UUID, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
     def list_for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]: ...
     def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
+    def get(self, user_id: UUID, capture_id: UUID) -> Capture | None: ...
 
 
 class EffortRepository(Protocol):
@@ -68,7 +70,12 @@ class ReminderRepository(Protocol):
     def list_scheduled(self, user_id: UUID) -> list[Reminder]: ...
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Reminder]: ...
     def cancel(self, reminder_id: UUID) -> bool: ...
-    def mark_sent(self, reminder_id: UUID) -> bool: ...
+    def claim(self, reminder_id: UUID, *, now: datetime) -> bool: ...
+    def ready(self, reminder_id: UUID, message: str) -> None: ...
+    def awaiting_delivery(self, user_id: UUID) -> list[Reminder]: ...
+    def delivery_failed(self, reminder_id: UUID) -> int: ...
+    def accepted(self, reminder_id: UUID, *, now: datetime) -> None: ...
+    def undelivered(self, reminder_id: UUID) -> None: ...
 
 
 class GoalRepository(Protocol):
@@ -100,6 +107,7 @@ class VaultProjection(Protocol):
     def capture_assigned(self, capture: Capture) -> None: ...
     def research_saved(self, capture: Capture) -> None: ...
     def page_exists(self, obsidian_path: str) -> bool: ...
+    def capture_erased(self, capture: Capture) -> list[str]: ...    # vault pages where its text could NOT be removed
     def effort_page_removed(self, obsidian_path: str) -> str: ...   # removed | kept | missing
     def effort_page_moved(self, old_path: str | None, effort: Effort, keep_old: bool = False) -> str: ...
 
@@ -109,7 +117,7 @@ class Memory(Protocol):
     still succeed unindexed and recall is unavailable. remember/forget never raise
     — indexing a row must never break the row's own write."""
     def remember(self, user_id: UUID, entity_kind: str, entity_id: UUID, text: str) -> None: ...
-    def forget(self, entity_kind: str, entity_id: UUID) -> None: ...
+    def forget(self, entity_kind: str, entity_id: UUID) -> bool | None: ...   # False = the delete failed
 
 
 # ---------------------------------------------------------------------------
@@ -264,13 +272,31 @@ class CaptureService:
             self._projection.capture_assigned(capture)
         return capture
 
+    def erase(self, user_id: UUID, capture_id: UUID) -> "Erased":
+        """Erase a capture everywhere Trellis put it: the record, its search
+        entry, and the text Trellis wrote into the vault. Writing done by hand
+        is never touched; a block someone edited is left and named. Tasks taken
+        from it are erased separately, by their own ids."""
+        capture = self._repo.get(user_id, capture_id)
+        if capture is None or not self._repo.delete(user_id, capture_id):
+            return Erased(erased=False)
+        uncertain: list[str] = []
+        if self._memory is not None and self._memory.forget("capture", capture_id) is False:
+            uncertain.append("the search index")
+        left: list[str] = []
+        if self._projection is not None:
+            try:
+                left = list(self._projection.capture_erased(capture))
+            except Exception:
+                _log.warning("capture erase: vault text not removed", exc_info=True)
+                uncertain.append("the vault")
+        # capture_erased reports a clean-up it could not finish as "the vault (…)".
+        uncertain += [page for page in left if page.startswith("the vault")]
+        left = [page for page in left if not page.startswith("the vault")]
+        return Erased(erased=True, left_in_vault=tuple(left), uncertain=tuple(uncertain))
+
     def delete(self, user_id: UUID, capture_id: UUID) -> bool:
-        """Erase a mis-capture (test, mistake) — tasks extracted from it are
-        erased separately via their own ids; the FK just nulls their source."""
-        deleted = self._repo.delete(user_id, capture_id)
-        if deleted and self._memory is not None:
-            self._memory.forget("capture", capture_id)
-        return deleted
+        return self.erase(user_id, capture_id).erased
 
     def save_research(self, user_id: UUID, content: str, *, effort_id: UUID, now: datetime) -> Capture:
         """Store a piece of research/notes onto an effort. Full text lands on
@@ -551,12 +577,18 @@ class TaskService:
         """Erase an erroneous task (duplicate, mis-extraction) — not a decision.
         A task they decided against gets status=dropped; a task that should
         never have existed is deleted so it cannot pollute history."""
-        deleted = self._repo.delete(user_id, task_id)
-        if deleted:
-            if self._memory is not None:
-                self._memory.forget("seed", task_id)
-            self._vault_refresh(user_id)
-        return deleted
+        return self.erase(user_id, task_id).erased
+
+    def erase(self, user_id: UUID, task_id: UUID) -> Erased:
+        """The same erase, store by store: a search entry that could not be
+        removed is named, not assumed gone."""
+        if not self._repo.delete(user_id, task_id):
+            return Erased(erased=False)
+        uncertain: list[str] = []
+        if self._memory is not None and self._memory.forget("seed", task_id) is False:
+            uncertain.append("the search index")
+        self._vault_refresh(user_id)
+        return Erased(erased=True, uncertain=tuple(uncertain))
 
     def due_today(self, user_id: UUID, now: datetime) -> list[Task]:
         today = now.astimezone(self._tz).date()
@@ -628,11 +660,28 @@ class ReminderService:
         the model can't SEE is one it can't cancel or update — audit item 25.)"""
         return self._repo.list_scheduled(user_id)
 
-    def mark_sent(self, reminder_id: UUID) -> None:
+    # -- delivery: claimed -> executed (message ready) -> accepted | undelivered --
+
+    def claim(self, reminder_id: UUID, *, now: datetime) -> bool:
+        return self._repo.claim(reminder_id, now=now)
+
+    def ready(self, reminder_id: UUID, message: str) -> None:
+        self._repo.ready(reminder_id, message)
+
+    def awaiting_delivery(self, user_id: UUID) -> list[Reminder]:
+        return self._repo.awaiting_delivery(user_id)
+
+    def delivery_failed(self, reminder_id: UUID) -> int:
+        return self._repo.delivery_failed(reminder_id)
+
+    def accepted(self, reminder_id: UUID, *, now: datetime) -> None:
         reminder = self._repo.get(reminder_id)
-        self._repo.mark_sent(reminder_id)
+        self._repo.accepted(reminder_id, now=now)
         if reminder:
             self._vault_refresh(reminder.user_id)
+
+    def undelivered(self, reminder_id: UUID) -> None:
+        self._repo.undelivered(reminder_id)
 
     def recent(self, user_id: UUID, *, limit: int = 10) -> list[Reminder]:
         return self._repo.list_recent(user_id, limit=limit)
@@ -643,7 +692,7 @@ class ReminderService:
         return self.set(
             user_id,
             reminder.label,
-            _next_occurrence(reminder.remind_at, reminder.recurrence or "daily", now),
+            _next_occurrence(reminder.remind_at, reminder.recurrence or "daily", now, self._tz),
             task_id=reminder.task_id,
             recurrence=reminder.recurrence,
             kind=reminder.kind,
@@ -733,11 +782,17 @@ class GoalService:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _next_occurrence(after: datetime, recurrence: str, now: datetime) -> datetime:
-    nxt = _advance(after, recurrence)
+def _next_occurrence(after: datetime, recurrence: str, now: datetime, tz: tzinfo | None = None) -> datetime:
+    """The next firing, at the same time ON THE WALL in the person's timezone.
+    A recurrence is a local habit ("09:00 every day"), not a fixed gap between
+    instants: stepping the stored UTC instant by 24h drifts it an hour at every
+    clock change. Arithmetic on a datetime in a named zone is wall-clock
+    arithmetic, so the step is taken there and converted back."""
+    local = after.astimezone(tz) if tz is not None else after
+    nxt = _advance(local, recurrence)
     while nxt <= now:
         nxt = _advance(nxt, recurrence)
-    return nxt
+    return nxt.astimezone(timezone.utc) if tz is not None else nxt
 
 
 def _advance(dt: datetime, recurrence: str) -> datetime:

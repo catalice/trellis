@@ -11,6 +11,7 @@ import logging
 from datetime import date, datetime
 from uuid import UUID
 
+from trellis.core_actions import done, failed, refused, unknown
 from trellis.core_profile import AtCap, CurrentContextService, LineGuard, TooLong
 
 _log = logging.getLogger(__name__)
@@ -40,8 +41,8 @@ UPDATE_CONTEXT_TOOL = {
 
 
 def _too_long(exc: TooLong) -> str:
-    return (f"Not saved — {exc.words} words, the limit is {exc.limit}. "
-            "One line; split it if it's two things.")
+    return refused(f"Not saved — {exc.words} words, the limit is {exc.limit}. "
+                   "One line; split it if it's two things.")
 
 
 def handle_update_current_context(
@@ -54,36 +55,36 @@ def handle_update_current_context(
     action = str(input_dict.get("action") or "add").strip()
     text = str(input_dict.get("text") or "").strip()
     if not text:
-        return "text is required."
+        return refused("text is required.")
     today = now.date()
     try:
         if action == "remove":
             gone = context_service.remove(user_id, text, today=today)
             if gone is None:
                 live = context_service.live(user_id, today)
-                return "No single line matches that. Live lines:\n" + "\n".join(
-                    f"  {e.text}" for e in live) if live else "Nothing live to remove."
-            return f"Removed: {gone.text}"
+                return refused("No single line matches that. Live lines:\n" + "\n".join(
+                    f"  {e.text}" for e in live)) if live else failed("Nothing live to remove.")
+            return done(f"Removed: {gone.text}")
         until = None
         raw_until = str(input_dict.get("until") or "").strip()
         if raw_until:
             try:
                 until = date.fromisoformat(raw_until)
             except ValueError:
-                return "until must be YYYY-MM-DD."
+                return refused("until must be YYYY-MM-DD.")
         entry, similar = context_service.add(user_id, text, today=today, until=until)
         out = f"Saved: {entry.text}"
         if similar:
             out += f"\nClose to a line already there: \"{similar}\" — remove that one if this replaces it."
-        return out
+        return done(out)
     except TooLong as exc:
         return _too_long(exc)
     except AtCap as exc:
-        return ("Not saved — the context is full. Remove one first:\n"
-                + "\n".join(f"  {e.text}" for e in exc.entries))
+        return failed("Not saved — the context is full. Remove one first:\n"
+                      + "\n".join(f"  {e.text}" for e in exc.entries))
     except Exception:
         _log.exception("update_current_context failed for user %s", user_id)
-        return "Couldn't save that — try again in a moment."
+        return unknown("That hit an error part-way — it may or may not have saved. Read what is stored before saying which.")
 
 
 # --- save_preferences -------------------------------------------------------
@@ -141,16 +142,16 @@ def handle_save_preferences(
         if action == "list":
             rules = preferences_repository.list_rules(user_id)
             if not rules:
-                return "No preference rules saved yet."
+                return done("No preference rules saved yet.")
             lines = ["Preference rules:"]
             for r in rules:
                 lines.append(f"  [{r['id']}] ({r['domain']}) {r['rule']}")
-            return "\n".join(lines)
+            return done("\n".join(lines))
 
         if action == "add":
             domain = str(input_dict.get("domain", "")).strip() or "global"
             if not text:
-                return "text is required to add a rule."
+                return refused("text is required to add a rule.")
             similar = None
             if guard is not None:
                 guard.check_length(text)
@@ -161,36 +162,36 @@ def handle_save_preferences(
             out = f"Rule saved ({domain})."
             if similar:
                 out += f"\nClose to one already held: \"{similar}\" — one home per rule; update or remove if this replaces it."
-            return out
+            return done(out)
 
         if action == "update":
             rid = str(input_dict.get("rule_id", "")).strip()
             if not rid or not text:
-                return "rule_id and text are required to update."
+                return refused("rule_id and text are required to update.")
             if guard is not None:
                 guard.check_length(text)
             if not preferences_repository.update_rule(user_id, UUID(rid), text):
-                return "No rule with that id — action='list' shows them."
+                return refused("No rule with that id — action='list' shows them.")
             _refresh()
-            return "Rule updated."
+            return done("Rule updated.")
 
         if action == "remove":
             rid = str(input_dict.get("rule_id", "")).strip()
             if not rid:
-                return "rule_id is required to remove."
+                return refused("rule_id is required to remove.")
             if not preferences_repository.remove_rule(user_id, UUID(rid)):
-                return "No rule with that id — action='list' shows them."
+                return refused("No rule with that id — action='list' shows them.")
             _refresh()
-            return "Rule removed."
+            return done("Rule removed.")
 
-        return "Unknown action. Use: add, list, update, remove."
+        return refused("Unknown action. Use: add, list, update, remove.")
     except TooLong as exc:
         return _too_long(exc)
     except ValueError:
-        return "That rule_id isn't a valid id."
+        return refused("That rule_id isn't a valid id.")
     except Exception:
         _log.exception("save_preferences failed for user %s", user_id)
-        return "Couldn't save that — try again in a moment."
+        return unknown("That hit an error part-way — it may or may not have saved. Read what is stored before saying which.")
 
 def meta_tools(
     context_service: CurrentContextService,

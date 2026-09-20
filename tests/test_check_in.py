@@ -11,11 +11,15 @@ from trellis.domain_focus_models import Reminder
 
 
 class _Bot:
-    def __init__(self):
+    def __init__(self, failures=0):
         self.sent = []
         self.actions = 0
+        self.failures = failures            # how many sends fail before Telegram accepts one
 
     async def send_message(self, chat_id, text, parse_mode=None):
+        if self.failures > 0:
+            self.failures -= 1
+            raise TimeoutError("telegram timed out")
         self.sent.append(text)
         return SimpleNamespace(chat_id=chat_id, message_id=len(self.sent))
 
@@ -24,16 +28,39 @@ class _Bot:
 
 
 class _Reminders:
-    def __init__(self, due):
-        self.due = due
-        self.sent = []
+    """The reminder service, with the states a reminder really moves through."""
+    def __init__(self, reminders):
+        self.rows = {r.id: r for r in reminders}
         self.rescheduled = []
 
-    def upcoming(self, user_id, *, hours, now):
-        return list(self.due)
+    def _set(self, rid, **changes):
+        from dataclasses import replace
+        self.rows[rid] = replace(self.rows[rid], **changes)
 
-    def mark_sent(self, rid):
-        self.sent.append(rid)
+    def upcoming(self, user_id, *, hours, now):
+        return [r for r in self.rows.values() if r.status == "scheduled"]
+
+    def claim(self, rid, *, now):
+        if self.rows[rid].status != "scheduled":
+            return False
+        self._set(rid, status="claimed", claimed_at=now)
+        return True
+
+    def ready(self, rid, message):
+        self._set(rid, status="executed", message=message)
+
+    def awaiting_delivery(self, user_id):
+        return [r for r in self.rows.values() if r.status in ("claimed", "executed")]
+
+    def delivery_failed(self, rid):
+        self._set(rid, attempts=self.rows[rid].attempts + 1)
+        return self.rows[rid].attempts
+
+    def accepted(self, rid, *, now):
+        self._set(rid, status="accepted")
+
+    def undelivered(self, rid):
+        self._set(rid, status="undelivered")
 
     def reschedule(self, user_id, reminder, *, now):
         self.rescheduled.append(reminder.id)
@@ -57,15 +84,21 @@ def _handler(reminders, assembler):
     h.settings, h.database, h.assembler, h.reminders = settings, database, assembler, reminders
     h._message_log = None
     h._turn_locks = {}
+    h._check_ins_running = set()
     import logging
     h.logger = logging.getLogger("test")
     return h, uid
 
 
-def _reminder(label, kind, *, recurrence=None):
-    return Reminder(id=uuid4(), user_id=uuid4(), label=label,
-                    remind_at=datetime.now(timezone.utc) - timedelta(minutes=1),
-                    status="scheduled", recurrence=recurrence, kind=kind)
+def _reminder(label, kind, *, recurrence=None, status="scheduled", claimed_minutes_ago=None, message=None):
+    now = datetime.now(timezone.utc)
+    return Reminder(id=uuid4(), user_id=uuid4(), label=label, remind_at=now - timedelta(minutes=1),
+                    status=status, recurrence=recurrence, kind=kind, message=message,
+                    claimed_at=(now - timedelta(minutes=claimed_minutes_ago)) if claimed_minutes_ago else None)
+
+
+def _tick(h, bot):
+    return asyncio.run(h._deliver_due_reminders_once(SimpleNamespace(bot=bot)))
 
 
 class TestCheckInDelivery(unittest.TestCase):
@@ -74,41 +107,127 @@ class TestCheckInDelivery(unittest.TestCase):
         reminders, assembler = _Reminders([rem]), _Assembler()
         h, _ = _handler(reminders, assembler)
         bot = _Bot()
-        n = asyncio.run(h._deliver_due_reminders_once(SimpleNamespace(bot=bot)))
-        self.assertEqual(n, 1)
+        self.assertEqual(_tick(h, bot), 1)
         self.assertEqual(bot.sent, ["Reminder: clean your shoes"])
         self.assertEqual(assembler.turns, [])
-        self.assertEqual(reminders.sent, [rem.id])
+        self.assertEqual(reminders.rows[rem.id].status, "accepted")
 
     def test_check_in_runs_a_turn_and_sends_the_reply(self):
         rem = _reminder("check in with me about the week ahead", "check_in", recurrence="weekly")
         reminders, assembler = _Reminders([rem]), _Assembler()
         h, uid = _handler(reminders, assembler)
         bot = _Bot()
-        asyncio.run(h._deliver_due_reminders_once(SimpleNamespace(bot=bot)))
+        _tick(h, bot)
         self.assertEqual(bot.sent, ["Hey — how did the week go?"])
-        self.assertEqual(len(assembler.turns), 1)
-        self.assertEqual(assembler.turns[0], _check_in_message(rem.label))
+        self.assertEqual(assembler.turns, [_check_in_message(rem.label)])
         self.assertIn("not a message from them", assembler.turns[0])
-        self.assertIn(rem.label, assembler.turns[0])
-        # marked sent + rescheduled BEFORE the turn ran, so a failing turn can't re-fire
-        self.assertEqual(reminders.sent, [rem.id])
-        self.assertEqual(reminders.rescheduled, [rem.id])
+        self.assertEqual(reminders.rows[rem.id].status, "accepted")
+        self.assertEqual(reminders.rescheduled, [rem.id])       # rescheduled once, at the claim
 
-    def test_check_in_turn_failure_is_told_and_not_retried(self):
+
+class TestSentMeansAccepted(unittest.TestCase):
+    """'Sent' used to be written BEFORE delivery: a Telegram timeout left a
+    reminder the person never got marked as sent. Now a reminder is claimed,
+    made ready, and only 'accepted' once Telegram took it — which is what that
+    word can honestly mean (not that it was read)."""
+
+    def test_a_reminder_telegram_refused_is_not_accepted_and_is_retried(self):
+        rem = _reminder("clean your shoes", "remind")
+        reminders = _Reminders([rem])
+        h, _ = _handler(reminders, _Assembler())
+        bot = _Bot(failures=2)                                  # Markdown try + plain try both fail
+        self.assertEqual(_tick(h, bot), 0)
+        self.assertEqual(reminders.rows[rem.id].status, "executed")
+        self.assertEqual(reminders.rows[rem.id].attempts, 1)
+        self.assertEqual(_tick(h, bot), 1)                      # next tick: delivered
+        self.assertEqual(bot.sent, ["Reminder: clean your shoes"])
+        self.assertEqual(reminders.rows[rem.id].status, "accepted")
+
+    def test_retries_are_bounded_and_end_as_undelivered(self):
+        from trellis.core_telegram import _MAX_DELIVERY_ATTEMPTS
+        rem = _reminder("clean your shoes", "remind")
+        reminders = _Reminders([rem])
+        h, _ = _handler(reminders, _Assembler())
+        bot = _Bot(failures=10_000)
+        for _ in range(_MAX_DELIVERY_ATTEMPTS + 3):
+            _tick(h, bot)
+        self.assertEqual(reminders.rows[rem.id].status, "undelivered")
+        self.assertEqual(reminders.rows[rem.id].attempts, _MAX_DELIVERY_ATTEMPTS)
+
+    def test_a_claim_lost_to_another_worker_is_left_alone(self):
+        rem = _reminder("clean your shoes", "remind")
+        reminders = _Reminders([rem])
+        reminders.claim = lambda rid, *, now: False
+        h, _ = _handler(reminders, _Assembler())
+        bot = _Bot()
+        _tick(h, bot)
+        self.assertEqual(bot.sent, [])
+
+
+class TestACheckInsActionsNeverRunTwice(unittest.TestCase):
+    """Delivery may be retried; the turn that produced the message may not —
+    it may already have done things."""
+
+    def test_a_failed_send_resends_the_stored_reply_without_a_second_turn(self):
+        rem = _reminder("check in about the week", "check_in")
+        reminders, assembler = _Reminders([rem]), _Assembler()
+        h, _ = _handler(reminders, assembler)
+        bot = _Bot(failures=2)
+        _tick(h, bot)
+        self.assertEqual(reminders.rows[rem.id].message, "Hey — how did the week go?")   # stored before sending
+        _tick(h, bot)
+        self.assertEqual(bot.sent, ["Hey — how did the week go?"])
+        self.assertEqual(len(assembler.turns), 1)                                         # ONE turn, ever
+
+    def test_a_turn_that_raised_is_told_and_never_rerun(self):
         rem = _reminder("ask me how the run went", "check_in")
 
         class _Boom(_Assembler):
             def handle_turn(self, user_id, message):
+                self.turns.append(message)
                 raise RuntimeError("api down")
 
+        assembler = _Boom()
         reminders = _Reminders([rem])
-        h, _ = _handler(reminders, _Boom())
+        h, _ = _handler(reminders, assembler)
         bot = _Bot()
-        asyncio.run(h._deliver_due_reminders_once(SimpleNamespace(bot=bot)))
+        _tick(h, bot)
+        _tick(h, bot)
+        self.assertEqual(len(assembler.turns), 1)
         self.assertEqual(len(bot.sent), 1)
         self.assertIn("ask me how the run went", bot.sent[0])
-        self.assertEqual(reminders.sent, [rem.id])
+        self.assertIn("haven't run it again", bot.sent[0])
+
+    def test_a_check_in_interrupted_by_a_crash_is_reported_not_rerun(self):
+        """Claimed long ago, no message: the process died mid-turn. What it did is unknown."""
+        rem = _reminder("weekly review", "check_in", status="claimed", claimed_minutes_ago=30)
+        reminders, assembler = _Reminders([rem]), _Assembler()
+        h, _ = _handler(reminders, assembler)
+        bot = _Bot()
+        _tick(h, bot)
+        self.assertEqual(assembler.turns, [])
+        self.assertEqual(len(bot.sent), 1)
+        self.assertIn("weekly review", bot.sent[0])
+        self.assertIn("interrupted", bot.sent[0])
+        self.assertEqual(reminders.rows[rem.id].status, "accepted")
+
+    def test_a_plain_reminder_claimed_before_a_crash_is_still_delivered(self):
+        """A possible duplicate is better than a miss."""
+        rem = _reminder("clean your shoes", "remind", status="claimed", claimed_minutes_ago=30)
+        reminders = _Reminders([rem])
+        h, _ = _handler(reminders, _Assembler())
+        bot = _Bot()
+        _tick(h, bot)
+        self.assertEqual(bot.sent, ["Reminder: clean your shoes"])
+
+    def test_a_check_in_still_running_is_not_mistaken_for_a_crash(self):
+        rem = _reminder("weekly review", "check_in", status="claimed", claimed_minutes_ago=30)
+        reminders = _Reminders([rem])
+        h, _ = _handler(reminders, _Assembler())
+        h._check_ins_running.add(rem.id)
+        bot = _Bot()
+        _tick(h, bot)
+        self.assertEqual(bot.sent, [])
 
 
 class TestFocusAddCheckIn(unittest.TestCase):

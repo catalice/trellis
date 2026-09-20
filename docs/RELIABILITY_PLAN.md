@@ -1,7 +1,7 @@
 # Reliability plan
 
 **Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
-Stages 2–3 are next, on their own branch.
+Stage 2 is built on `reliability/02-harness-outcomes` and awaits review; stage 3 follows on the same branch.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
@@ -158,6 +158,10 @@ decisions, with no procedural coaching.
   required only for the providers selected.
 - Provider features stay inside the connector — no lowest-common-denominator
   text interface.
+- One exception stands: conversation summaries go to Groq first, directly,
+  with the connector's small model as the fallback. That is the behaviour from
+  before the boundary, kept as it was; folding Groq behind a connector is a
+  follow-up, not part of this step.
 - A second live provider is deferred. The scripted model proves separation, not
   portability: the result is *prepared for alternative providers*, not
   *interchangeable*.
@@ -181,7 +185,8 @@ resolved before deploying.
 
 1. After stage 1 — data protection and access restrictions complete.
 2. After stages 2–3 together — regression harness, model boundary and truthful
-   outcomes complete.
+   outcomes complete. This is the gate before merge and deployment. (Stage 2
+   was also looked at on its own, as an interim checkpoint, on 20 September.)
 3. After stage 4 — retrieval, memory and answer completeness complete.
 4. After stage 5 — evidence and Watcher changes complete.
 5. Before stage 6 — a readiness review before the ownership trial starts.
@@ -189,6 +194,27 @@ resolved before deploying.
 Within a batch, changes stay coherent and separately reviewable, and one
 coherent change per deployment still applies. There are no mandatory review
 stops between individual fixes.
+
+## Releasing a batch
+
+**Before.** `scripts/predeploy_snapshot.sh` — a timestamped database dump and a
+copy of the vault in their own read-only folder (`~/trellis-snapshots/<time>-<revision>/`).
+The nightly backup is named by date, so a later run the same day replaces it; it
+is not a release snapshot. Tag the code and the running images for rollback.
+
+**After — keep it small.** Startup and migrations clean. One ordinary action on
+the record with the right status (`action_log`). One harmless reminder reaching
+`accepted`. Maps and effort pages identical to the snapshot.
+
+**Rolling back is code AND state.** Tags alone are not a rollback: the previous
+code only looks at `scheduled` reminders, so any the new code left `claimed` or
+`executed` would be missed for ever — and restoring the old dump would discard
+everything written since. Keep the database; stop the bot; run
+`scripts/rollback_stages_2_3.sql`; start the previous image. Plain reminders go
+back to `scheduled` (a possible duplicate, never a miss). A check-in becomes a
+plain notification carrying its stored reply — or a note that it was interrupted
+— so nothing it did is ever run again. The new tables and columns are harmless
+to the older code and stay.
 
 ## Follow-ups carried forward
 
@@ -203,6 +229,20 @@ stops between individual fixes.
 - **Pure projections** (Brain pages, task and tracking views, the training plan
   page) are still rewritten whole; whether any of them hold hand-written content
   is decision 5 below.
+
+## Decisions taken (20 September 2026)
+
+- **Reminder failure:** a possible duplicate is preferred to a miss. Sending is
+  retried, a bounded number of times. What produced the message is never run
+  again: a check-in's turn runs once, its reply is stored, and only the delivery
+  is retried.
+- **Erase** removes the active record, its search entry, and the text Trellis
+  wrote into the vault. Writing done by hand is never touched; a block someone
+  edited is left and named. Every erase says what Trellis still holds: the
+  conversation where it was said, the action log, and earlier database backups.
+- **The action log** keeps 30 days. It holds what was asked of each tool — the
+  user's words — so it exists to account for recent turns, not to keep them.
+  (Length chosen by the builder; the user may change it.)
 
 ## Decisions for the user
 

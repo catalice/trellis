@@ -2,7 +2,7 @@
 Handles one conversation turn end to end.
 
 Knows about: context layer ordering, domain routing, history, tool binding.
-Does NOT know about: Claude API, specific domains, DB schemas.
+Does NOT know about: any model provider's API, specific domains, DB schemas.
 
 To change context layer order or content: edit _build_context.
 To add a domain: edit main.py only — nothing here changes.
@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 from uuid import UUID
 
+from trellis.core_actions import describe
+from trellis.core_model import SystemPrompt
 from trellis.core_oracle import Oracle
 from trellis.core_registry import ContextLoader, TrellisRegistry
 from trellis.core_router import Router
@@ -25,6 +27,10 @@ _HISTORY_TURNS = 10           # onboarding only; the main path is time-based
 _WINDOW_HOURS = 24            # verbatim memory = the last day (the user's design) ...
 _WINDOW_CAP = 60              # ... capped so a wild day can't run away
 _SUMMARISE_AFTER = 20
+
+# Tools that change nothing. Every other tool must DECLARE how its action went
+# (core_actions); from these, a plain answer is a successful read.
+READ_ONLY_TOOLS = frozenset({"focus_get", "sense_get", "learn_get", "move_get", "recall", "web_search"})
 
 _SYSTEM_BASE = """\
 You are Trellis: collaborator, coach, teacher, and the memory that holds what \
@@ -108,6 +114,7 @@ class Assembler:
         default_domain: str | None = None,
         embedder: Embedder | None = None,
         preferences=None,   # repo with .get(user_id, domain) -> str | None
+        action_log: Callable[[UUID], object] | None = None,   # user_id -> a core_actions.ActionLog for one turn
     ) -> None:
         self._oracle = oracle
         self._registry = registry
@@ -121,6 +128,7 @@ class Assembler:
         self._onboarding_system = onboarding_system
         self._onboarding_tools = onboarding_tools or []
         self._preferences = preferences
+        self._action_log = action_log
         self._timezone = timezone
         self._default_domain = default_domain
         # Routing shapes CONTEXT only (tools are always available). Semantic when
@@ -147,14 +155,9 @@ class Assembler:
         _log.debug("routed %s → %s", message[:60], domains)
 
         context = self._build_context(user_id, now, domains)
-        # System as two blocks: the constitution never changes, so it (plus the
-        # tool schemas before it) caches at a tenth of the price; the context
-        # block is the volatile tail.
-        system = [
-            {"type": "text", "text": _SYSTEM_BASE,
-             "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": f"---\n\n{context}"},
-        ]
+        # The constitution never changes; the context is this turn's. Said so,
+        # a connector can cache the stable part (with the tool definitions).
+        system = SystemPrompt(stable=_SYSTEM_BASE, volatile=context)
 
         tool_schemas, bound_handlers = self._build_tools(user_id, now, domains)
 
@@ -166,12 +169,9 @@ class Assembler:
             {"role": "user", "content": message},
         ]
         # History is append-only within the day, so its prefix is stable —
-        # mark the last history message and the whole prefix caches too.
+        # mark where it ends and a connector can cache the whole prefix too.
         if len(messages) >= 2 and isinstance(messages[-2].get("content"), str):
-            messages[-2]["content"] = [{
-                "type": "text", "text": messages[-2]["content"],
-                "cache_control": {"type": "ephemeral"},
-            }]
+            messages[-2] = {**messages[-2], "stable_prefix": True}
 
         # The user's message is persisted BEFORE the oracle runs: if the API
         # dies past its retries mid-turn, tool side effects from earlier
@@ -182,13 +182,19 @@ class Assembler:
             "handled_by": "claude",
             "domains": sorted(domains),
         })
+        actions = self._action_log(user_id) if self._action_log is not None else None
         try:
-            result = self._oracle.run(system, messages, tool_schemas, bound_handlers)
+            result = self._oracle.run(system, messages, tool_schemas, bound_handlers,
+                                      actions=actions, read_only=READ_ONLY_TOOLS)
         except Exception:
+            # The record outlives the model: say what the turn HAD done, from
+            # the record, not a guess that something might have.
+            on_record = list(getattr(actions, "entries", None) or [])
             self._history.append(
                 user_id, "assistant",
-                "[turn failed mid-run — tool actions from before the error may "
-                "have completed; retrieve before assuming nothing changed]",
+                ("[turn failed mid-run — on record before the error: " + describe(on_record) + "]")
+                if on_record else
+                "[turn failed mid-run — no action was on record before the error]",
             )
             raise
         self._save_assistant_turn(user_id, result)

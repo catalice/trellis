@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from trellis.core_actions import done
 from trellis.core_oracle import OracleResult, ToolCall
 from trellis.core_router import Router
 from trellis.domain_focus_models import (
@@ -204,7 +205,10 @@ class TestOracleSilentFinish:
         class FakeClient:
             def __init__(self, resps): self.messages = FakeMessages(resps)
 
-        return Oracle(client=FakeClient(responses), model="test")
+        # Through the real Anthropic connector, fed Anthropic-shaped responses:
+        # the behaviour these tests lock must hold across the model boundary.
+        from trellis.infra_anthropic import AnthropicConnector
+        return Oracle(AnthropicConnector(FakeClient(responses), "test"))
 
     def test_silent_end_turn_is_nudged_once(self):
         """A silent end_turn after tools now gets ONE nudge call asking the
@@ -218,7 +222,7 @@ class TestOracleSilentFinish:
         ])
         result = oracle.run("sys", [{"role": "user", "content": "hi"}],
                             tools=[{"name": "save_to_effort"}],
-                            handlers={"save_to_effort": lambda inp: "Saved to effort 'Dining Area Upgrade'."})
+                            handlers={"save_to_effort": lambda inp: done("Saved to effort 'Dining Area Upgrade'.")})
         assert result.text == "Kept that on your Dining Area page."
         assert result.tool_calls[0].name == "save_to_effort"
 
@@ -234,7 +238,7 @@ class TestOracleSilentFinish:
         ])
         result = oracle.run("sys", [{"role": "user", "content": "hi"}],
                             tools=[{"name": "save_to_effort"}],
-                            handlers={"save_to_effort": lambda inp: "Saved to effort 'Dining Area Upgrade'."})
+                            handlers={"save_to_effort": lambda inp: done("Saved to effort 'Dining Area Upgrade'.")})
         assert result.text == "Saved to effort 'Dining Area Upgrade'."
 
     def test_text_reply_unchanged(self):
@@ -264,7 +268,7 @@ class TestOracleDeliversEveryStep:
             self._Resp("end_turn", [self._Block(type="text", text="Logged the mood too.")]),
         ])
         result = oracle.run("sys", [{"role": "user", "content": "I ran! mood anxious"}],
-                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("State logged.")})
         assert result.text == "Well done for running.\n\nLogged the mood too."
 
     def test_exact_restatement_after_tool_is_not_doubled(self):
@@ -273,7 +277,7 @@ class TestOracleDeliversEveryStep:
             self._Resp("end_turn", [self._Block(type="text", text="Well done.")]),
         ])
         result = oracle.run("sys", [{"role": "user", "content": "I ran!"}],
-                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("State logged.")})
         assert result.text == "Well done."
 
     def test_pre_tool_text_then_silence_needs_no_nudge(self):
@@ -284,7 +288,7 @@ class TestOracleDeliversEveryStep:
             self._Resp("end_turn", []),
         ])
         result = oracle.run("sys", [{"role": "user", "content": "I ran!"}],
-                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("State logged.")})
         assert result.text == "Logged, and well done."
 
     def test_rider_tells_the_model_its_earlier_text_ships(self):
@@ -300,12 +304,13 @@ class TestOracleDeliversEveryStep:
             def __init__(self, resps): self.messages = Msgs(resps)
 
         from trellis.core_oracle import Oracle
-        oracle = Oracle(client=Client([
+        from trellis.infra_anthropic import AnthropicConnector
+        oracle = Oracle(AnthropicConnector(Client([
             self._Resp("tool_use", [self._Block(type="text", text="Answer."), self._tool()]),
             self._Resp("end_turn", [self._Block(type="text", text="More.")]),
-        ]), model="test")
+        ]), "test"))
         oracle.run("sys", [{"role": "user", "content": "q"}],
-                   tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "ok"})
+                   tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("ok")})
         rider = seen[1]["messages"][-1]["content"][-1]["text"]
         assert "WILL reach them" in rider and "don't point them at it" in rider
 

@@ -18,14 +18,14 @@ class FakeGroq:
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=self.reply))])
 
 
-class FakeAnthropic:
+class FakeModel:
+    """A core_model connector's one-shot side."""
     def __init__(self, reply):
         self.reply, self.sent = reply, None
-        self.messages = SimpleNamespace(create=self._create)
 
-    def _create(self, **kwargs):
-        self.sent = kwargs
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text=self.reply)])
+    def complete(self, system, user, *, max_tokens, tier="main"):
+        self.sent = {"system": system, "user": user, "tier": tier}
+        return self.reply
 
 
 class FakeHistory:
@@ -55,7 +55,8 @@ def test_conversation_goes_as_one_user_document():
 
 
 def test_empty_groq_reply_falls_back_with_the_same_document():
-    fallback, history = FakeAnthropic("They ran 5k."), FakeHistory()
-    make_summariser(FakeGroq(""), fallback_client=fallback)(uuid4(), "move", history)
-    assert [m["role"] for m in fallback.sent["messages"]] == ["user"]
+    fallback, history = FakeModel("They ran 5k."), FakeHistory()
+    make_summariser(FakeGroq(""), fallback=fallback)(uuid4(), "move", history)
+    assert "They: ran 5k" in fallback.sent["user"]          # the whole conversation, as one document
+    assert fallback.sent["tier"] == "small"                  # background work uses the small model
     assert history.saved[1] == "They ran 5k."

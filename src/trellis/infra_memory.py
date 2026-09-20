@@ -117,10 +117,12 @@ class MemoryIndex:
             _log.warning("memory_index batch upsert failed", exc_info=True)
             return 0
 
-    def forget(self, entity_kind: str, entity_id: UUID) -> None:
+    def forget(self, entity_kind: str, entity_id: UUID) -> bool:
         """Drop an entity's card — call when the underlying thing is deleted or
-        archived, so recall can't surface a stale pointer. Best-effort; forgetting
-        something that was never filed is a harmless no-op."""
+        archived, so recall can't surface a stale pointer. Never raises. Returns
+        False when the delete FAILED — the card may still be there, its text may
+        still surface in recall, and an erase must say so. Forgetting something
+        that was never filed is a harmless no-op (True)."""
         try:
             with self._db.connect() as conn:
                 with conn.cursor() as cur:
@@ -128,8 +130,10 @@ class MemoryIndex:
                         "DELETE FROM memory_index WHERE entity_kind = %s AND entity_id = %s",
                         (entity_kind, entity_id),
                     )
+            return True
         except Exception:
             _log.warning("memory_index delete failed for %s %s", entity_kind, entity_id, exc_info=True)
+            return False
 
     # -- read -----------------------------------------------------------------
 
