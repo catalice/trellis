@@ -60,3 +60,27 @@ def test_empty_groq_reply_falls_back_with_the_same_document():
     assert "They: ran 5k" in fallback.sent["user"]          # the whole conversation, as one document
     assert fallback.sent["tier"] == "small"                  # background work uses the small model
     assert history.saved[1] == "They ran 5k."
+
+
+class _HistoryWithARecord(FakeHistory):
+    def domain_summary(self, user_id, domain):
+        from datetime import datetime, timezone
+        return ("They asked whether to move the long run; left open.", datetime(2026, 3, 1, tzinfo=timezone.utc))
+
+
+def test_the_earlier_record_is_read_so_open_threads_are_carried_not_overwritten():
+    """Each summary replaced the last without reading it: a thread left open fell
+    out of the newest 40 turns and was gone."""
+    groq, history = FakeGroq("They ran 5k. Still open: whether to move the long run."), _HistoryWithARecord()
+    make_summariser(groq)(uuid4(), "move", history)
+    document = groq.sent["messages"][1]["content"]
+    assert "They asked whether to move the long run; left open." in document     # the model can see it
+    assert document.index("Earlier record") < document.index("They: ran 5k")     # older first, then what's new
+    assert "still open" in groq.sent["messages"][0]["content"].lower()           # and is told what to do with it
+    assert history.saved[1] == "They ran 5k. Still open: whether to move the long run."
+
+
+def test_with_no_earlier_record_the_document_is_just_the_transcript():
+    groq, history = FakeGroq("They ran 5k."), FakeHistory()
+    make_summariser(groq)(uuid4(), "move", history)
+    assert "Earlier record" not in groq.sent["messages"][1]["content"]
