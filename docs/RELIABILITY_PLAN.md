@@ -1,7 +1,8 @@
 # Reliability plan
 
 **Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
-Stage 2 is built on `reliability/02-harness-outcomes` and awaits review; stage 3 follows on the same branch.
+Stages 2–3 (model boundary, scenario harness, truthful outcomes) reviewed together, merged and
+deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness) is next, on its own branch.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
