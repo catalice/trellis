@@ -893,7 +893,7 @@ class Watcher:
                 if p.get("evidence"):
                     line += f" — latest data: {p['evidence']}"
                 parts.append(line)
-        return "[The Watcher — long-window patterns]\n" + "\n".join(parts)
+        return "[The Watcher — long-window patterns. INFERRED from their data: associations, never causes]\n" + "\n".join(parts)
 
     def respond(self, user_id: UUID, pattern_id: UUID, verdict: str,
                 note: str | None) -> dict | None:

@@ -72,6 +72,15 @@ Python before speaking, and why any future knowledge feature (Learn) must
 fetch and store its citations — a reference that can't be followed back to
 its source doesn't get kept.
 
+**A listing is not a source** (stage 5, Sep 2026). `web_search query=` finds —
+titles, links, fragments; `web_search read=` reads the source's own text and
+says how much was reached (full text, abstract only, registry record, page
+text). The search provider's synthesised answer is never requested. A kept
+Learn reference records what was reached (`source_basis`). Context blocks say
+what they are — OBSERVED (device), REPORTED (their words), INFERRED (Watcher) —
+so a reply can. The Watcher's tests state a direction and can be refuted; a day
+with nothing recorded is unknown; medications keep their names.
+
 ---
 
 ## Routing — how a message reaches a house

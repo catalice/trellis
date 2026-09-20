@@ -153,6 +153,8 @@ class Scenario:
     scripted_checks: list[Check] = field(default_factory=list)   # engine guarantees; scripted mode only
     real_model: bool = True             # False: only meaningful against a script (e.g. a model that goes silent)
     context: str = "Today: Monday 2 March 2026, 09:00."
+    earlier: list[dict] = field(default_factory=list)   # the conversation so far, oldest first
+    read_only: frozenset = frozenset()  # tools that change nothing, so may answer in plain text
 
 
 def run(scenario: Scenario, model=None, system_base: str | None = None, read_only=frozenset()) -> Outcome:
@@ -163,9 +165,9 @@ def run(scenario: Scenario, model=None, system_base: str | None = None, read_onl
     tools = SimulatedTools(scenario.tools)
     result = Oracle(connector).run(
         SystemPrompt(stable=system_base or _SYSTEM_BASE, volatile=scenario.context),
-        [{"role": "user", "content": scenario.message}],
+        [*scenario.earlier, {"role": "user", "content": scenario.message}],
         tools.schemas,
         tools.handlers,
-        read_only=read_only,
+        read_only=read_only | scenario.read_only,
     )
     return Outcome(reply=result.text, calls=tools.calls, result=result, model=connector)
