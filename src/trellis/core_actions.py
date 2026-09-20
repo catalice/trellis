@@ -176,6 +176,12 @@ class PostgresActionLog:
         record = ActionRecord(tool=tool, input=dict(input))
         try:
             with self._database.connect() as conn, conn.cursor() as cur:
+                # The log holds what was asked of each tool — their words. It is
+                # there to account for recent turns, not to keep them: 30 days.
+                cur.execute(
+                    "DELETE FROM action_log WHERE user_id = %s AND started_at < NOW() - INTERVAL '30 days'",
+                    (self._user_id,),
+                )
                 cur.execute(
                     "INSERT INTO action_log (id, user_id, tool, input) VALUES (%s, %s, %s, %s::jsonb)",
                     (record.id, self._user_id, tool, json.dumps(input, default=str)),

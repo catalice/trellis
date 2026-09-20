@@ -39,6 +39,7 @@ class CaptureRepository(Protocol):
     def assign_to_effort(self, user_id: UUID, capture_id: UUID, effort_id: UUID | None) -> Capture: ...
     def list_for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]: ...
     def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
+    def get(self, user_id: UUID, capture_id: UUID) -> Capture | None: ...
 
 
 class EffortRepository(Protocol):
@@ -89,6 +90,12 @@ class BrainDumpClaude(Protocol):
     ) -> BrainDumpResult | None: ...
 
 
+@dataclass(frozen=True)
+class Erased:
+    erased: bool
+    left_in_vault: tuple[str, ...] = ()      # pages where the text was changed by hand, so it was left
+
+
 class PageTaken(ValueError):
     """The vault page a rename would land on already exists."""
     def __init__(self, path: str) -> None:
@@ -105,6 +112,7 @@ class VaultProjection(Protocol):
     def capture_assigned(self, capture: Capture) -> None: ...
     def research_saved(self, capture: Capture) -> None: ...
     def page_exists(self, obsidian_path: str) -> bool: ...
+    def capture_erased(self, capture: Capture) -> list[str]: ...    # vault pages where its text could NOT be removed
     def effort_page_removed(self, obsidian_path: str) -> str: ...   # removed | kept | missing
     def effort_page_moved(self, old_path: str | None, effort: Effort, keep_old: bool = False) -> str: ...
 
@@ -269,13 +277,27 @@ class CaptureService:
             self._projection.capture_assigned(capture)
         return capture
 
-    def delete(self, user_id: UUID, capture_id: UUID) -> bool:
-        """Erase a mis-capture (test, mistake) — tasks extracted from it are
-        erased separately via their own ids; the FK just nulls their source."""
-        deleted = self._repo.delete(user_id, capture_id)
-        if deleted and self._memory is not None:
+    def erase(self, user_id: UUID, capture_id: UUID) -> "Erased":
+        """Erase a capture everywhere Trellis put it: the record, its search
+        entry, and the text Trellis wrote into the vault. Writing done by hand
+        is never touched; a block someone edited is left and named. Tasks taken
+        from it are erased separately, by their own ids."""
+        capture = self._repo.get(user_id, capture_id)
+        if capture is None or not self._repo.delete(user_id, capture_id):
+            return Erased(erased=False)
+        if self._memory is not None:
             self._memory.forget("capture", capture_id)
-        return deleted
+        left: list[str] = []
+        if self._projection is not None:
+            try:
+                left = list(self._projection.capture_erased(capture))
+            except Exception:
+                _log.warning("capture erase: vault text not removed", exc_info=True)
+                left = ["the vault (an error stopped the clean-up)"]
+        return Erased(erased=True, left_in_vault=tuple(left))
+
+    def delete(self, user_id: UUID, capture_id: UUID) -> bool:
+        return self.erase(user_id, capture_id).erased
 
     def save_research(self, user_id: UUID, content: str, *, effort_id: UUID, now: datetime) -> Capture:
         """Store a piece of research/notes onto an effort. Full text lands on

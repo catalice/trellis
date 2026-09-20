@@ -72,6 +72,15 @@ class PostgresStateRepository:
     def delete_event(self, user_id: UUID, event_id: UUID) -> bool:
         return self._delete(user_id, event_id)
 
+    def entry_day(self, user_id: UUID, entry_id: UUID) -> datetime | None:
+        """When a log row was felt — read before it is erased, so the views it
+        appeared in can be rewritten."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT felt_at FROM tracking_log WHERE id = %s AND user_id = %s", (entry_id, user_id))
+                row = cur.fetchone()
+                return row[0] if row else None
+
     def _delete(self, user_id: UUID, row_id: UUID) -> bool:
         with self._db.connect() as conn:
             with conn.cursor() as cur:

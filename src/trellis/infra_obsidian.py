@@ -218,6 +218,53 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: daily note write failed", exc_info=True)
 
+    def capture_erased(self, capture: Capture) -> list[str]:
+        """Take an erased capture's text out of the vault. Only what Trellis
+        itself wrote is removed, and only while it still reads exactly as
+        written: its block in the day's note, its line or research block on an
+        effort page, its receipt. Anything typed by hand stays. Returns the
+        pages where its text could NOT be removed (someone has edited it) — the
+        caller says so. Never raises."""
+        left: list[str] = []
+        try:
+            local = capture.created_at.astimezone(self._tz)
+            day = f"{_DAILY_DIR}/{local.strftime('%Y-%m-%d')}.md"
+            summary = capture.summary or capture.raw[:80]
+            body = (capture.synthesis or capture.raw).strip()
+            effort = self._efforts.get(capture.effort_id) if capture.effort_id and self._efforts else None
+
+            core = self._render_capture(capture, (), local)
+            receipt = (f"\n- {local.strftime('%H:%M')} · research → [[{effort.title}]]: {capture.summary or ''}\n"
+                       if effort else None)
+            in_day = [core] + ([receipt] if receipt else [])
+            self._remove_generated(day, in_day, [capture.raw, body], left)
+            if effort and effort.obsidian_path:
+                self._remove_generated(
+                    effort.obsidian_path,
+                    [f"- [[{local.strftime('%Y-%m-%d')}]] — {summary}\n",
+                     f"\n---\n_{local.strftime('%d %b %Y, %H:%M')}_\n\n{body}\n"],
+                    [capture.raw, body], left)
+        except Exception:
+            _log.warning("obsidian: capture erase failed", exc_info=True)
+            left.append("the vault (an error stopped the clean-up)")
+        return left
+
+    def _remove_generated(self, relative: str, generated: list[str], telltales: list[str], left: list[str]) -> None:
+        """Remove each generated string that is present verbatim. If afterwards
+        the page still carries the capture's own words, its text was edited by
+        hand — leave it and name the page."""
+        path = self._vault / relative
+        if not path.exists():
+            return
+        text = original = path.read_text(encoding="utf-8")
+        for block in generated:
+            if block and block in text:
+                text = text.replace(block, "", 1)
+        if text != original:
+            _write_atomically(path, text)
+        if any(t and t.strip() and t.strip() in text for t in telltales):
+            left.append(relative)
+
     def _render_capture(self, capture: Capture, tasks: tuple[Task, ...], local: datetime) -> str:
         heading = capture.summary or capture.capture_type.value.replace("_", " ")
         lines = [f"\n## {local.strftime('%H:%M')} — {heading}\n"]
@@ -411,6 +458,17 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: daily property refresh failed", exc_info=True)
 
+    def tracking_entry_erased(self, user_id: UUID, day: date) -> None:
+        """An entry felt on `day` was erased: rewrite the views it was IN — that
+        day's note properties and that month's History page — not just the
+        current ones. Never raises."""
+        try:
+            self._update_daily_properties(user_id, day)
+        except Exception:
+            _log.warning("obsidian: daily properties refresh after erase failed", exc_info=True)
+        self.write_tracking_month(user_id, day.year, day.month)
+        self.tracking_changed(user_id)
+
     def write_tracking_month(self, user_id: UUID, year: int, month: int) -> None:
         """(Re)write one month's History file — every entry, full detail. The
         current month rewrites as entries land; past months are only touched by
@@ -428,7 +486,12 @@ class ObsidianVault:
                 e for e in self._states.list_events_since(user_id, since=month_start)
                 if e.occurred_at.astimezone(self._tz) < next_month
             ]
+            path = self._vault / _TRACKING_HISTORY_DIR / f"{year:04d}-{month:02d}.md"
             if not states and not events:
+                # A month emptied by an erase must not keep the erased words:
+                # returning early here left them on the page.
+                if path.exists():
+                    _write_atomically(path, f"# Tracking — {month_start.strftime('%B %Y')}\n\n*Nothing logged.*\n")
                 return
             period_start = self._states.last_period_start(user_id)
             garmin_by_day = self._garmin_sleep_range(user_id, month_start.date())

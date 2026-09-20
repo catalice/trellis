@@ -98,7 +98,7 @@ class FakeCaptureRepo:
         self.captures[capture.id] = capture
         return capture
 
-    def get(self, capture_id):
+    def get(self, user_id, capture_id):
         return self.captures.get(capture_id)
 
     def list_recent(self, user_id, *, limit):
@@ -540,6 +540,11 @@ class FakeStateRepo:
     def __init__(self):
         self.states: list = []
         self.events: list = []
+
+    def entry_day(self, user_id, entry_id):
+        found = [s.felt_at for s in self.states if s.id == entry_id] + \
+                [e.occurred_at for e in self.events if e.id == entry_id]
+        return found[0] if found else None
 
     def save_state(self, log):
         self.states.append(log)

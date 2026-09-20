@@ -227,3 +227,29 @@ class TestReminderDeliveryStates:
         repo.ready(reminder.id, "first")
         repo.ready(reminder.id, "second")                   # a second 'ready' must not replace the stored reply
         assert repo.get(reminder.id).message == "first"
+
+
+class TestEraseAtTheStorageBoundary:
+    def test_a_capture_can_be_read_back_before_it_is_erased(self, pg_database, pg_user):
+        from datetime import datetime, timezone
+        from uuid import uuid4
+        from trellis.domain_focus_models import Capture, CaptureType
+        from trellis.domain_focus_repo import PostgresCaptureRepository
+        repo = PostgresCaptureRepository(pg_database)
+        saved = repo.save(Capture(id=uuid4(), user_id=pg_user, raw="a private thought", capture_type=CaptureType.IDEA,
+                                  synthesis=None, summary="Private", effort_id=None,
+                                  created_at=datetime.now(timezone.utc)))
+        assert repo.get(pg_user, saved.id).raw == "a private thought"
+        assert repo.get(uuid4(), saved.id) is None                  # never another person's
+        assert repo.delete(pg_user, saved.id) and repo.get(pg_user, saved.id) is None
+
+    def test_the_action_log_keeps_thirty_days(self, pg_database, pg_user):
+        from trellis.core_actions import PostgresActionLog
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO action_log (id, user_id, tool, input, started_at) VALUES"
+                        " (gen_random_uuid(), %s, 'old', '{}'::jsonb, NOW() - INTERVAL '45 days'),"
+                        " (gen_random_uuid(), %s, 'recent', '{}'::jsonb, NOW() - INTERVAL '5 days')", (pg_user, pg_user))
+        PostgresActionLog(pg_database, pg_user).begin("new", {})
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT tool FROM action_log WHERE user_id = %s ORDER BY started_at", (pg_user,))
+            assert [r[0] for r in cur.fetchall()] == ["recent", "new"]

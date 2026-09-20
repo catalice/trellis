@@ -20,7 +20,7 @@ from trellis.domain_focus_models import (
     TaskPriority,
 )
 from trellis.core_actions import done, failed, partial, refused
-from trellis.domain_focus_service import GoalNotFoundError, PageTaken, TaskNotFoundError
+from trellis.domain_focus_service import Erased, GoalNotFoundError, PageTaken, TaskNotFoundError
 
 _log = logging.getLogger(__name__)
 
@@ -242,7 +242,9 @@ DELETE_ENTRY_TOOL: dict = {
     "name": "delete_entry",
     "description": (
         "Erase a record that should never have existed — a duplicate, a wrong "
-        "tracking entry, a mis-capture. Gone completely. A decision is not a "
+        "tracking entry, a mis-capture. Removes the record, its search entry and "
+        "the text Trellis wrote in the vault; the result says what is still held "
+        "elsewhere — tell them that, never 'gone completely'. A decision is not a "
         "mistake: a task they decided against is focus_update status='dropped'. "
         "Corrections are erase + re-log. Erasing a capture leaves the tasks "
         "extracted from it; erasing a task takes its reminders with it; an "
@@ -796,6 +798,19 @@ def handle_update_goal(
     return done(result)
 
 
+def _erased_message(result: "Erased"):
+    """What went, and — every time — what Trellis still holds. 'Erased' must
+    not promise more than was done."""
+    still = ("Still held: the conversation where it was said (it ages out of what I read), "
+             "the action log (30 days), and any database backup taken before now.")
+    if result.left_in_vault:
+        return partial("Erased the record and its search entry. Its text is still on "
+                       + ", ".join(result.left_in_vault)
+                       + " — that text was changed by hand, so I left it; remove it there if you want it gone. "
+                       + still)
+    return done("Erased: the record, its search entry, and the text I had written into the vault. " + still)
+
+
 def handle_delete_entry(
     user_id: UUID,
     input_dict: dict,
@@ -813,12 +828,11 @@ def handle_delete_entry(
         entry_id = UUID(entry_id_str)
     except ValueError:
         return refused(f"Invalid entry_id: {entry_id_str!r}")
-    if (
-        sense_service.delete_entry(user_id, entry_id)
-        or task_service.delete(user_id, entry_id)
-        or capture_service.delete(user_id, entry_id)
-    ):
-        return done("Erased.")
+    if sense_service.delete_entry(user_id, entry_id) or task_service.delete(user_id, entry_id):
+        return _erased_message(Erased(erased=True))
+    erased = capture_service.erase(user_id, entry_id)
+    if erased.erased:
+        return _erased_message(erased)
     verdict = (effort_service.delete_if_empty(user_id, entry_id, capture_service)
                if effort_service is not None else "not_found")
     if verdict == "deleted":

@@ -122,6 +122,13 @@ class PostgresCaptureRepository:
                     (capture_id,),
                 )
 
+    def get(self, user_id: UUID, capture_id: UUID) -> Capture | None:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM captures WHERE id = %s AND user_id = %s", (capture_id, user_id))
+                row = cur.fetchone()
+                return _capture(row) if row else None
+
     def delete(self, user_id: UUID, capture_id: UUID) -> bool:
         with self._db.connect() as conn:
             with conn.cursor() as cur:

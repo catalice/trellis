@@ -209,6 +209,20 @@ stops between individual fixes.
   page) are still rewritten whole; whether any of them hold hand-written content
   is decision 5 below.
 
+## Decisions taken (20 September 2026)
+
+- **Reminder failure:** a possible duplicate is preferred to a miss. Sending is
+  retried, a bounded number of times. What produced the message is never run
+  again: a check-in's turn runs once, its reply is stored, and only the delivery
+  is retried.
+- **Erase** removes the active record, its search entry, and the text Trellis
+  wrote into the vault. Writing done by hand is never touched; a block someone
+  edited is left and named. Every erase says what Trellis still holds: the
+  conversation where it was said, the action log, and earlier database backups.
+- **The action log** keeps 30 days. It holds what was asked of each tool — the
+  user's words — so it exists to account for recent turns, not to keep them.
+  (Length chosen by the builder; the user may change it.)
+
 ## Decisions for the user
 
 Only what needs a preference. None blocks stages 1–2.

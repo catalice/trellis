@@ -27,6 +27,7 @@ class StateRepository(Protocol):
     def tracked_kinds(self, user_id: UUID) -> list[str]: ...
     def delete_state(self, user_id: UUID, log_id: UUID) -> bool: ...
     def delete_event(self, user_id: UUID, event_id: UUID) -> bool: ...
+    def entry_day(self, user_id: UUID, entry_id: UUID) -> datetime | None: ...
 
 
 class HealthReader(Protocol):
@@ -191,10 +192,16 @@ class SenseService:
         return self._repo.list_events_since(user_id, since=since)
 
     def delete_entry(self, user_id: UUID, entry_id: UUID) -> bool:
-        """Remove a state log or tracking event (whichever the id matches)."""
+        """Remove a state log or tracking event (whichever the id matches), and
+        rewrite the vault views it was IN — the day and month it was felt, which
+        for an old entry is not the current one."""
+        felt = self._repo.entry_day(user_id, entry_id)
         deleted = self._repo.delete_state(user_id, entry_id) or self._repo.delete_event(user_id, entry_id)
         if deleted and self._projection:
-            self._projection.tracking_changed(user_id)
+            if felt is not None and hasattr(self._projection, "tracking_entry_erased"):
+                self._projection.tracking_entry_erased(user_id, felt.astimezone(self._tz).date())
+            else:
+                self._projection.tracking_changed(user_id)
         return deleted
 
     def cycle_day(self, user_id: UUID, now: datetime) -> int | None:
