@@ -110,7 +110,7 @@ PUSH_TO_WATCH_TOOL: dict = {
     "name": "push_to_watch",
     "description": (
         "Put a structured workout on their Garmin watch for a date. Their watch: agree first. "
-        "Replaces any same-named workout — corrections update, never stack."
+        "Replaces any same-named workout — one fixed name per session type, or corrections stack."
     ),
     "input_schema": {
         "type": "object",
@@ -136,7 +136,7 @@ PUSH_TO_WATCH_TOOL: dict = {
 SYNC_GARMIN_TOOL: dict = {
     "name": "sync_garmin",
     "description": (
-        "Pull Garmin now: activities + health. Runs daily by itself; call it when they want the latest. "
+        "Pull Garmin now: activities + health. Runs daily by itself; call it when they want the latest, or before quoting a number marked stale. "
         "Pulls Garmin's cloud — it can't make the watch upload. Fresh readiness rides back on the receipt."
     ),
     "input_schema": {"type": "object", "properties": {}},

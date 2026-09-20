@@ -262,8 +262,9 @@ class PostgresTaskRepository:
                     """
                     SELECT * FROM tasks
                     WHERE user_id = %s AND status = 'open'
-                    ORDER BY due_at NULLS LAST,
+                    ORDER BY
                         CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+                        due_at NULLS LAST,
                         created_at
                     """,
                     (user_id,),

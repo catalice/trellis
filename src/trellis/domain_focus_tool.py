@@ -35,7 +35,8 @@ FOCUS_ADD_TOOL: dict = {
     "name": "focus_add",
     "description": (
         "Create one Focus record: a task, a goal, a reminder, or a note on an "
-        "effort. Pick 'what', send only that entity's fields. Result warns about "
+        "effort. Pick 'what', send only that entity's fields. A task only when "
+        "they ask for one — a passing remark is not a request. Result warns about "
         "same-named duplicates — read it."
     ),
     "input_schema": {
