@@ -264,7 +264,8 @@ class MoveService:
         for e in splits:
             e.pop("_secs", None)
             e.pop("_dist_m", None)
-        return {"overall": overall, "splits": splits, "running": running}
+        not_fetched = list((getattr(detail, "raw", None) or {}).get("unavailable") or []) if detail else []
+        return {"overall": overall, "splits": splits, "running": running, "not_fetched": not_fetched}
 
     def watch_workouts(self, user_id: UUID, *, limit: int = 15) -> list[dict]:
         """What's actually in their Garmin workout library (newest first) — so

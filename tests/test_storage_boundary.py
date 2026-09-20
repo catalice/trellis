@@ -71,3 +71,45 @@ class TestActivitySplitsSurviveStorage:
         raw = {"splits": [{"distance": 1000.0, "duration": 360.0}]}
         repo.upsert_activity_detail(user_id=pg_user, activity_id="a2", raw_data=raw, sync_run_id=None)
         assert repo.get_activity_detail(pg_user, "a2")["splits"] == raw["splits"]
+
+
+class TestPartialActivityDetail:
+    """The worker names a failed section as '<key>Error' and leaves the section
+    out. A failed section must keep what is stored — laps AND the raw payload
+    they can be recovered from."""
+
+    FULL = {
+        "activity": {"summaryDTO": {"averageHR": 150}},
+        "splits": {"lapDTOs": [{"distance": 1000.0, "duration": 360.0}]},
+        "typedSplits": {"splits": [{"type": "INTERVAL_ACTIVE", "duration": 360.0}]},
+        "splitSummaries": {"splitSummaries": [{"splitType": "RWD_RUN", "duration": 360.0}]},
+    }
+
+    def test_a_failed_section_keeps_the_stored_one_and_its_raw_source(self, pg_database, pg_user):
+        repo = PostgresHealthRepository(pg_database)
+        repo.upsert_activity_detail(user_id=pg_user, activity_id="p1", raw_data=self.FULL, sync_run_id=None)
+        later = {"activity": {"summaryDTO": {"averageHR": 151}},
+                 "typedSplits": self.FULL["typedSplits"],
+                 "splitsError": "upstream timeout", "splitSummariesError": "upstream timeout"}
+        failed = repo.upsert_activity_detail(user_id=pg_user, activity_id="p1", raw_data=later, sync_run_id=None)
+        assert failed == ("splits", "splitSummaries")
+        stored = repo.get_activity_detail(pg_user, "p1")
+        assert stored["splits"] == self.FULL["splits"]
+        assert stored["splitSummaries"] == self.FULL["splitSummaries"]
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT raw_data FROM garmin_activity_details WHERE activity_id = 'p1'")
+            (raw,) = cur.fetchone()
+        assert raw["splits"] == self.FULL["splits"]                 # the recovery source survives
+        assert raw["activity"]["summaryDTO"]["averageHR"] == 151    # what did arrive is updated
+        assert raw["unavailable"] == ["splits", "splitSummaries"]
+
+    def test_a_complete_later_fetch_replaces_and_clears_the_mark(self, pg_database, pg_user):
+        repo = PostgresHealthRepository(pg_database)
+        repo.upsert_activity_detail(user_id=pg_user, activity_id="p2",
+                                    raw_data={"splitsError": "x", "typedSplits": self.FULL["typedSplits"]},
+                                    sync_run_id=None)
+        assert repo.upsert_activity_detail(user_id=pg_user, activity_id="p2", raw_data=self.FULL, sync_run_id=None) == ()
+        assert repo.get_activity_detail(pg_user, "p2")["splits"] == self.FULL["splits"]
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT raw_data ? 'unavailable' FROM garmin_activity_details WHERE activity_id = 'p2'")
+            assert cur.fetchone() == (False,)

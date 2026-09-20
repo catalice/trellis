@@ -396,6 +396,9 @@ def _fmt_run_detail(detail: dict) -> str:
         if running.get("avg_hr"):
             r.append(f"avg HR {running['avg_hr']}")
         lines.append(", ".join(r) + " — judge the run on this, not the overall average")
+    if detail.get("not_fetched"):
+        lines.append("Not fetched from Garmin at the last sync (request failed): "
+                     + ", ".join(detail["not_fetched"]) + " — what's below may be incomplete.")
     splits = detail.get("splits") or []
     if splits:
         aggregated = any(s.get("count") for s in splits)

@@ -210,7 +210,7 @@ class HealthRepository(Protocol):
         """All synced activities from `since` on — the Watcher's training frame."""
         ...
 
-    def upsert_activity_detail(self, *, user_id: UUID, activity_id: str, raw_data: dict[str, Any], sync_run_id: UUID | None) -> None: ...
+    def upsert_activity_detail(self, *, user_id: UUID, activity_id: str, raw_data: dict[str, Any], sync_run_id: UUID | None) -> tuple[str, ...]: ...
     def get_activity_detail(self, user_id: UUID, activity_id: str) -> dict | None: ...
     def start_sync(self, run: HealthSyncRun) -> HealthSyncRun: ...
     def finish_sync(self, run: HealthSyncRun) -> HealthSyncRun: ...
@@ -389,7 +389,8 @@ class PostgresHealthRepository:
         with self.database.connect() as connection:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
-                    "SELECT splits, split_summaries, typed_splits, exercise_sets"
+                    "SELECT splits, split_summaries, typed_splits, exercise_sets,"
+                    " raw_data->'unavailable' AS unavailable"
                     " FROM garmin_activity_details WHERE user_id = %s AND activity_id = %s",
                     (user_id, activity_id),
                 )
@@ -401,12 +402,32 @@ class PostgresHealthRepository:
                     "splitSummaries": row.get("split_summaries") or {},
                     "typedSplits": row.get("typed_splits") or {},
                     "exerciseSets": row.get("exercise_sets") or {},
+                    # Sections the last fetch failed to refresh.
+                    "unavailable": list(row.get("unavailable") or []),
                 }
 
     def upsert_activity_detail(
         self, *, user_id: UUID, activity_id: str,
         raw_data: dict[str, Any], sync_run_id: UUID | None,
-    ) -> None:
+    ) -> tuple[str, ...]:
+        """Store one activity's detail. Returns the sections that FAILED to
+        refresh. The worker fetches each section separately and names a failure
+        as '<key>Error'; a section that failed keeps what is stored — in its
+        column and in the raw payload, the only place a lost section can be
+        recovered from."""
+        failed = tuple(k for k in _DETAIL_SECTIONS if f"{k}Error" in raw_data)
+        # An empty section with no error is Garmin having nothing to say (a run
+        # has no exercise sets): not a failure to report, and never a reason to
+        # blank what is stored.
+        kept = {k for k in _DETAIL_SECTIONS if k in failed or not _detail_section(raw_data, k, None)}
+        arrived = {k: v for k, v in raw_data.items()
+                   if not k.endswith("Error") and k not in kept}
+        if failed:
+            arrived["unavailable"] = list(failed)
+
+        def section(key: str) -> str | None:
+            return None if key in kept else _json(_detail_section(raw_data, key, None))
+
         with self.database.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -415,26 +436,26 @@ class PostgresHealthRepository:
                         user_id, activity_id, raw_data, splits, split_summaries,
                         typed_splits, exercise_sets, sync_run_id, updated_at
                     ) VALUES (
-                        %s, %s, %s::jsonb, %s::jsonb, %s::jsonb,
-                        %s::jsonb, %s::jsonb, %s, NOW()
+                        %s, %s, %s::jsonb, COALESCE(%s::jsonb, '[]'::jsonb), COALESCE(%s::jsonb, '{}'::jsonb),
+                        COALESCE(%s::jsonb, '{}'::jsonb), COALESCE(%s::jsonb, '{}'::jsonb), %s, NOW()
                     )
                     ON CONFLICT (user_id, activity_id) DO UPDATE SET
-                        raw_data = EXCLUDED.raw_data,
-                        splits = EXCLUDED.splits,
-                        split_summaries = EXCLUDED.split_summaries,
-                        typed_splits = EXCLUDED.typed_splits,
-                        exercise_sets = EXCLUDED.exercise_sets,
+                        raw_data = (garmin_activity_details.raw_data - 'unavailable') || %s::jsonb,
+                        splits = COALESCE(%s::jsonb, garmin_activity_details.splits),
+                        split_summaries = COALESCE(%s::jsonb, garmin_activity_details.split_summaries),
+                        typed_splits = COALESCE(%s::jsonb, garmin_activity_details.typed_splits),
+                        exercise_sets = COALESCE(%s::jsonb, garmin_activity_details.exercise_sets),
                         sync_run_id = EXCLUDED.sync_run_id,
                         updated_at = NOW()
                     """,
                     (
-                        user_id, activity_id,
-                        _json(raw_data),
-                        _json(_detail_section(raw_data, "splits", [])),
-                        _json(_detail_section(raw_data, "splitSummaries", {})),
-                        _json(_detail_section(raw_data, "typedSplits", {})),
-                        _json(_detail_section(raw_data, "exerciseSets", {})),
+                        user_id, activity_id, _json(arrived),
+                        section("splits"), section("splitSummaries"),
+                        section("typedSplits"), section("exerciseSets"),
                         sync_run_id,
+                        _json(arrived),
+                        section("splits"), section("splitSummaries"),
+                        section("typedSplits"), section("exerciseSets"),
                     ),
                 )
                 summary_dto = (raw_data.get("activity") or {}).get("summaryDTO") or {}
@@ -456,6 +477,8 @@ class PostgresHealthRepository:
                             user_id, activity_id,
                         ),
                     )
+
+        return failed
 
     def start_sync(self, run: HealthSyncRun) -> HealthSyncRun:
         if run.status is not HealthSyncStatus.RUNNING:
@@ -577,9 +600,12 @@ def _load_provenance(data: dict[str, Any]) -> GarminHealthProvenance:
     )
 
 
+_DETAIL_SECTIONS = ("splits", "splitSummaries", "typedSplits", "exerciseSets")
+
+
 def _detail_section(
-    raw_data: dict[str, Any], key: str, default: list[Any] | dict[str, Any],
-) -> list[Any] | dict[str, Any]:
+    raw_data: dict[str, Any], key: str, default: list[Any] | dict[str, Any] | None,
+) -> list[Any] | dict[str, Any] | None:
     # Garmin sends a section as a list or as an object wrapping one (laps arrive
     # as {"lapDTOs": [...]}). Either is kept as sent — narrowing to the default's
     # type silently stored [] for every lap object.

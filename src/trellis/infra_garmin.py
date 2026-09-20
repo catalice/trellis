@@ -593,9 +593,10 @@ class GarminSyncService:
                 start_date=start_date, end_date=today, now=now,
                 limit=activity_limit_per_day,
             )
-            detail_count = self._sync_activity_details(
+            detail_count, detail_unavailable = self._sync_activity_details(
                 user_id, session_dump, now=now, limit=activity_details_limit,
             )
+            unavailable = {**unavailable, **detail_unavailable}
         except Exception as error:
             self.connection_repository.mark_sync_failure(user_id, _safe_error(error))
             raise
@@ -695,10 +696,11 @@ class GarminSyncService:
 
     def _sync_activity_details(
         self, user_id: UUID, session_dump: str, *, now: datetime, limit: int,
-    ) -> int:
+    ) -> tuple[int, dict[str, tuple[str, ...]]]:
+        """Returns (activities refreshed, {label: sections not refreshed})."""
         from trellis.infra_tracking import HealthSyncKind, HealthSyncRun
         if limit == 0 or not hasattr(self.health_repository, "latest_activities"):
-            return 0
+            return 0, {}
         run = self.health_repository.start_sync(
             HealthSyncRun(
                 user_id=user_id, kind=HealthSyncKind.ACTIVITY_DETAILS,
@@ -706,18 +708,21 @@ class GarminSyncService:
             )
         )
         count = 0
+        unavailable: dict[str, tuple[str, ...]] = {}
         try:
             activities = self.health_repository.latest_activities(
                 user_id, limit=limit, activity_type=None,
             )
             for activity in activities:
                 detail = self.client.activity_detail(session_dump, activity.activity_id)
-                self.health_repository.upsert_activity_detail(
+                missed = self.health_repository.upsert_activity_detail(
                     user_id=user_id,
                     activity_id=activity.activity_id,
                     raw_data=dict(detail.raw),
                     sync_run_id=run.id,
                 )
+                if missed:
+                    unavailable[f"activity {activity.name or activity.activity_id}"] = tuple(missed)
                 count += 1
         except Exception as error:
             self.health_repository.finish_sync(
@@ -727,7 +732,7 @@ class GarminSyncService:
         self.health_repository.finish_sync(
             run.succeeded(completed_at=now, records_upserted=count)
         )
-        return count
+        return count, unavailable
 
 
 # ---------------------------------------------------------------------------
