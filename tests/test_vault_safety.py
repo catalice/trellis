@@ -220,3 +220,27 @@ class TestEffortPageEdgeCases:
         repo.save(replace(_effort("Garden!", first.obsidian_path), user_id=uid))
         assert svc.delete_if_empty(uid, first.id, TestEffortServiceThroughTheRealVault._NoCaptures()) == "deleted_page_kept"
         assert (tmp_path / first.obsidian_path).exists()
+
+
+class TestInterruptedWrites:
+    """Opening a file for writing truncates it first. A write that dies half-way
+    (disk full) must leave the page — and the handwriting on it — as it was."""
+
+    def test_an_interrupted_map_update_leaves_the_page_intact(self, tmp_path, monkeypatch):
+        from pathlib import Path
+        vault, thread = _vault(tmp_path), uuid4()
+        vault.learn_map("Rome", "first body", thread_id=thread)
+        page = tmp_path / "Atlas/Maps/Rome.md"
+        page.write_text(page.read_text() + "\nMy own thought about the Gracchi.\n")
+        before = page.read_text()
+
+        real_write = Path.write_text
+        def dies_half_way(self, data, *args, **kwargs):
+            real_write(self, data[:40], *args, **kwargs)
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(Path, "write_text", dies_half_way)
+        vault.learn_map("Rome", "second body", thread_id=thread)      # must not raise
+        monkeypatch.undo()
+
+        assert page.read_text() == before
+        assert [p.name for p in page.parent.iterdir()] == ["Rome.md"]   # no debris left behind

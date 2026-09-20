@@ -26,6 +26,7 @@ break the bot.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from uuid import UUID
@@ -113,6 +114,23 @@ views:
       - property: file.name
         direction: DESC
 """
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    """Write the whole page beside its destination, then swap it in. Opening a
+    file for writing truncates it first, so a write that dies half-way (disk
+    full) would otherwise take the page — and any handwriting on it — with it.
+    On failure the original is untouched and nothing is left behind."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 _MAP_BEGIN = "<!-- trellis:map:{}:begin — generated; your own notes go outside these markers -->"
@@ -855,11 +873,11 @@ class ObsidianVault:
             region = (f"{_MAP_BEGIN.format(tag)}\n# {title}\n\n{body}\n{_MAP_END.format(tag)}")
             for path in (folder / f"{safe}.md", folder / f"{safe} ({tag[:8]}).md"):
                 if not path.exists():
-                    path.write_text(region + "\n", encoding="utf-8")
+                    _write_atomically(path, region + "\n")
                     return
                 merged = _merge_map_page(path.read_text(encoding="utf-8"), region, title, body, tag)
                 if merged is not None:
-                    path.write_text(merged, encoding="utf-8")
+                    _write_atomically(path, merged)
                     return
             _log.warning("learn map: no free page name for %r — not written", title)
         except Exception:
@@ -941,9 +959,7 @@ class ObsidianVault:
                     lines[0] = f"# {effort.title}"
                 # Temp + atomic replace: a failed write (disk full) leaves the
                 # old page intact and no truncated new one behind.
-                tmp = new.with_suffix(".md.tmp")
-                tmp.write_text("\n".join(lines), encoding="utf-8")
-                tmp.replace(new)
+                _write_atomically(new, "\n".join(lines))
                 if not keep_old:        # a page another effort still uses is copied, not moved
                     old.unlink()
                 return "moved"
