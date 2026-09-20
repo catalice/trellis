@@ -20,7 +20,7 @@ from uuid import UUID
 
 from trellis.core_actions import done, failed, partial, refused, unknown
 from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
-from trellis.domain_move_service import AmbiguousWorkout, NoSuchWorkout
+from trellis.domain_move_service import AmbiguousWorkout, NoSuchProposal, NoSuchWorkout, ProposalNotOpen, ProposalNotSeen
 
 _log = logging.getLogger(__name__)
 
@@ -63,8 +63,11 @@ MOVE_GET_TOOL: dict = {
 MOVE_UPDATE_TOOL: dict = {
     "name": "move_update",
     "description": (
-        "Write to the training record. what=plan: store the plan — saves MERGE by date "
-        "(days sent replace same-dated days, days not sent survive; nothing is removed unless "
+        "Write to the training record. what=plan: a plan change is THEIR decision, so it goes one of "
+        "three ways. instructed=<their words>: they asked for this change — stored now. Neither: your "
+        "own suggestion — HELD as a proposal, nothing stored; show them exactly that week. "
+        "agree=<proposal id>: they said yes in a LATER message — stores the proposal as it was shown, "
+        "not a new one. Stored days MERGE by date (days not sent survive; nothing is removed unless "
         "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
         "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
         "The activity is never guessed: a day with several needs sport, and one not synced yet is refused. "
@@ -86,6 +89,14 @@ MOVE_UPDATE_TOOL: dict = {
                     '"detail": "the session"}, ...]}. Real dates from move_get week. '
                     'Strength days are "strength", never "rest".'
                 ),
+            },
+            "instructed": {
+                "type": "string",
+                "description": "plan: their own words asking for this change, copied from the message you are answering. Checked against it.",
+            },
+            "agree": {
+                "type": "string",
+                "description": "plan: the id of the proposal they have just said yes to. Send no plan with it. 'withdraw' = they said no.",
             },
             "replace_week": {
                 "type": "boolean",
@@ -247,7 +258,7 @@ def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_s
     that took Move from five tools to four). The proven handlers stay behind it."""
     what = str(input_dict.get("what", "")).strip().lower()
     if what == "plan":
-        return _update_plan(user_id, input_dict, move_service=move_service)
+        return _plan_change(user_id, input_dict, now, move_service=move_service)
     if what == "baseline":
         if not str(input_dict.get("baseline", "")).strip():
             return refused("baseline is required — the fitness baseline text.")
@@ -256,6 +267,70 @@ def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_s
     if what == "workout":
         return _update_workout(user_id, input_dict, move_service=move_service)
     return refused("Unknown request. Use what: plan, baseline, or workout.")
+
+
+def _week_lines(plan: dict) -> str:
+    return "\n".join("  " + _fmt_session(s) for s in plan.get("week", []) if isinstance(s, dict) and s.get("date"))
+
+
+def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+    """Whose decision is it? Their instruction is stored; their yes stores the
+    proposal they were shown; anything else is held as a proposal."""
+    agree = str(input_dict.get("agree", "")).strip()
+    if agree:
+        return _answer_proposal(user_id, agree, now, move_service=move_service)
+
+    instructed = str(input_dict.get("instructed", "")).strip()
+    if instructed:
+        if move_service.asked_for(user_id, instructed):
+            return _update_plan(user_id, input_dict, move_service=move_service)
+        return refused("Those words aren't in the message you're answering, so this isn't their instruction. "
+                       "Copy their wording exactly — or send the change without `instructed` to propose it.")
+
+    plan = input_dict.get("plan")
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except json.JSONDecodeError:
+            plan = None
+    if not isinstance(plan, dict) or not [s for s in (plan.get("week") or []) if isinstance(s, dict) and s.get("date")]:
+        return refused("A proposal needs a plan with dated days: {'arc': ..., 'week': [{'date', 'type', 'detail'}]}.")
+    try:
+        proposal = move_service.propose_plan(user_id, plan=plan, replace_week=bool(input_dict.get("replace_week", False)), now=now)
+    except Exception:
+        _log.warning("move_update propose failed", exc_info=True)
+        return unknown("Holding the proposal hit an error — it may or may not be held. Nothing was stored in the plan.")
+    return done(f"PROPOSED — NOT STORED. Held as proposal {proposal.id}. The stored plan is unchanged.\n"
+                f"Show them exactly this, and ask:\n{_week_lines(proposal.plan)}\n"
+                f"On their yes (a later message): move_update what=plan agree={proposal.id}. "
+                f"If they want it different, propose again — this one is replaced.")
+
+
+def _answer_proposal(user_id: UUID, agree: str, now: datetime, *, move_service) -> str:
+    if agree.lower() == "withdraw":
+        gone = move_service.withdraw_proposal(user_id, now=now)
+        return done("Proposal withdrawn. The stored plan is unchanged.") if gone else refused("There is no open proposal.")
+    try:
+        proposal_id = UUID(agree)
+    except ValueError:
+        return refused(f"{agree!r} is not a proposal id.")
+    try:
+        goals = move_service.training_goals(user_id)
+        proposal, saved = move_service.agree_proposal(
+            user_id, proposal_id, goal_id=goals[0].id if goals else None, now=now)
+    except NoSuchProposal:
+        return refused("No proposal with that id.")
+    except ProposalNotOpen as state:
+        return refused(f"That proposal is {state} — it can't be agreed. Read the open one in context, or propose again.")
+    except ProposalNotSeen:
+        return refused("That proposal was made in THIS turn — they haven't seen it, so they can't have agreed. "
+                       "Show it and ask. Nothing was stored.")
+    except Exception:
+        _log.warning("move_update agree failed", exc_info=True)
+        return unknown("Storing the agreed proposal hit an error part-way — it may or may not have saved. Read the stored plan before saying which.")
+    week = [s for s in saved.plan.get("week", []) if isinstance(s, dict) and s.get("date")]
+    return done(f"Stored exactly what was proposed:\n{_week_lines(proposal.plan)}\n"
+                f"Stored week now holds {len(week)} session(s).")
 
 
 def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
@@ -498,6 +573,20 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
         except Exception:
             _log.warning("training_context: plan load failed", exc_info=True)
 
+        # Unfinished business is a RECORD, not something to remember: a proposal
+        # they haven't answered is shown until they do.
+        try:
+            waiting = move_service.open_proposal(user_id)
+            if waiting is not None:
+                parts.append(
+                    f"PROPOSED BY YOU, NOT AGREED, NOT STORED — proposal {waiting.id}, "
+                    f"made {waiting.created_at.astimezone(move_service.timezone).strftime('%a %-d %b %H:%M')}:\n"
+                    f"{_week_lines(waiting.plan)}\n"
+                    "Theirs to answer. Yes → agree=<id>. Changes → propose again. No → agree='withdraw'."
+                )
+        except Exception:
+            _log.warning("training_context: open proposal failed", exc_info=True)
+
         # Readiness/recovery (sleep, HRV, body battery) lives in the Sense room and
         # is surfaced every turn by sense_snapshot; the coach reads it from context
         # and factors it into how hard to push.
@@ -531,14 +620,19 @@ def move_snapshot(move_service) -> ContextLoader:
     run (if planned) so the coach always knows it exists. Readiness is in the Sense
     room's snapshot, not duplicated here."""
     def loader(user_id: UUID, now: datetime) -> str | None:
+        lines = []
         try:
             session = move_service.todays_session(user_id, now)
+            if session:
+                lines.append(f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}")
         except Exception:
             _log.warning("move_snapshot session failed", exc_info=True)
-            return None
-        if not session:
-            return None
-        return f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
+        try:
+            if move_service.open_proposal(user_id) is not None:
+                lines.append("Training: a week you proposed is waiting for their answer.")
+        except Exception:
+            _log.warning("move_snapshot proposal failed", exc_info=True)
+        return "\n".join(lines) or None
 
     return loader
 

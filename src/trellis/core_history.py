@@ -11,6 +11,10 @@ from trellis.infra_postgres import PostgresDatabase
 _log = logging.getLogger(__name__)
 
 
+# How a turn Trellis starts by itself is marked on the user side of the conversation.
+SCHEDULED_TURN = "[Scheduled check-in."
+
+
 @dataclass(frozen=True)
 class ConversationTurn:
     id: UUID
@@ -62,6 +66,23 @@ class PostgresConversationHistory:
             )
             for row in reversed(rows)
         ]
+
+    def their_last_message(self, user_id: UUID) -> str | None:
+        """What THEY last said — the message a running turn is answering (it is
+        stored before the turn runs). A scheduled check-in arrives on the user
+        side but is not them speaking, so it is never returned: nothing in it
+        can count as their instruction."""
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT content FROM conversation_turns WHERE user_id = %s AND role = 'user'"
+                    " ORDER BY created_at DESC LIMIT 1",
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        if not row or str(row[0]).startswith(SCHEDULED_TURN):
+            return None
+        return row[0]
 
     def last_routed(self, user_id: UUID) -> tuple[list[str], datetime] | None:
         """Which houses the person's most recent message was routed to, and when

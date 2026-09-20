@@ -10,6 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from trellis.core_assembler import Assembler
 from trellis.core_config import Settings
+from trellis.core_history import SCHEDULED_TURN
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_postgres import PostgresDatabase
 from trellis.domain_focus_service import ReminderService
@@ -35,7 +36,7 @@ def _check_in_message(label: str) -> str:
     """What the oracle receives when a check-in fires. It arrives on the user
     side of the conversation, so it says plainly that it isn't them speaking."""
     return (
-        "[Scheduled check-in. This is the instruction they set for you to run "
+        f"{SCHEDULED_TURN} This is the instruction they set for you to run "
         f"at this time, not a message from them: \"{label}\". "
         "Read what you need, then speak to them first — as if you'd walked in.]"
     )

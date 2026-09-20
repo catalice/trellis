@@ -325,6 +325,7 @@ def main() -> None:
         garmin_sync=garmin_sync,
         health_repo=health_reader,
         projection=vault,
+        their_message=history.their_last_message,
     )
 
     # --- Registry ---

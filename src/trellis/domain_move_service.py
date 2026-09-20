@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from trellis.domain_move_models import RunLog, TrainingPlan
+from trellis.domain_move_models import PlanProposal, RunLog, TrainingPlan
 from trellis.domain_move_repo import TrainingRepository
 
 _log = logging.getLogger(__name__)
@@ -58,6 +58,24 @@ class AmbiguousWorkout(ValueError):
         self.candidates = candidates
 
 
+def _plain(text: str) -> str:
+    """Words only, lower case — so a quote matches however it was punctuated."""
+    return " ".join(re.sub(r"[^\w\s]", " ", str(text).lower()).split())
+
+
+class NoSuchProposal(LookupError):
+    """No proposal with that id for this person."""
+
+
+class ProposalNotOpen(ValueError):
+    """Already answered, or replaced by a newer one — its status is the message."""
+
+
+class ProposalNotSeen(ValueError):
+    """Made in THIS turn: the person cannot have agreed to what they have not
+    been shown. Agreement is only ever to a proposal from an earlier turn."""
+
+
 class NoSuchWorkout(LookupError):
     """The day has activities, but none of the sport named (not synced yet?)."""
     def __init__(self, sport: str, that_day: list) -> None:
@@ -91,7 +109,9 @@ class MoveService:
         garmin_sync: GarminSyncPort | None = None,
         health_repo=None,  # stored activity details (fetch-through cache)
         projection=None,   # vault view with .plan_changed(user_id); best-effort
+        their_message=None,  # (user_id) -> the message this turn answers, or None
     ) -> None:
+        self._their_message = their_message
         self._repo = repo
         self._goals = goals
         self._tz = tz
@@ -100,6 +120,10 @@ class MoveService:
         self._garmin_sync = garmin_sync
         self._health = health_repo
         self._projection = projection
+
+    @property
+    def timezone(self) -> tzinfo:
+        return self._tz
 
     def _project_plan(self, user_id: UUID) -> None:
         """Refresh the vault's Training/Plan.md. Never raises — a failed vault
@@ -115,6 +139,57 @@ class MoveService:
 
     def get_plan(self, user_id: UUID) -> TrainingPlan | None:
         return self._repo.get(user_id)
+
+    # -- Whose decision a plan change is ---------------------------------------
+    # The plan was stored in the turn it was first suggested, then stored again,
+    # differently, after they objected. Two doors replace that one:
+    #   their instruction — they asked for this change, in words Python can find
+    #                       in their message: stored now, no second asking.
+    #   Trellis's proposal — held as a record; stored only when a LATER message
+    #                       agrees to it, and what is stored is that record.
+
+    def asked_for(self, user_id: UUID, their_words: str) -> bool:
+        """True when `their_words` really is part of the message being answered —
+        at least three words of it, their wording. The model points at the
+        instruction; Python checks it is there."""
+        if self._their_message is None:
+            return False
+        try:
+            message = self._their_message(user_id) or ""
+        except Exception:
+            _log.warning("could not read the message being answered", exc_info=True)
+            return False
+        quoted, said = _plain(their_words), _plain(message)
+        return len(quoted.split()) >= 3 and quoted in said
+
+    def propose_plan(self, user_id: UUID, *, plan: dict, replace_week: bool, now: datetime) -> PlanProposal:
+        week = [s for s in (plan.get("week") or []) if isinstance(s, dict) and s.get("date")]
+        held = {**plan, "week": sorted(week, key=lambda s: str(s["date"]))}
+        return self._repo.save_proposal(PlanProposal(
+            id=uuid4(), user_id=user_id, plan=held, replace_week=replace_week,
+            status="open", created_at=now,
+        ))
+
+    def open_proposal(self, user_id: UUID) -> PlanProposal | None:
+        return self._repo.open_proposal(user_id)
+
+    def agree_proposal(self, user_id: UUID, proposal_id: UUID, *, goal_id: UUID | None, now: datetime) -> tuple[PlanProposal, TrainingPlan]:
+        proposal = self._repo.get_proposal(user_id, proposal_id)
+        if proposal is None:
+            raise NoSuchProposal(str(proposal_id))
+        if proposal.status != "open":
+            raise ProposalNotOpen(proposal.status)
+        if proposal.created_at >= now:
+            raise ProposalNotSeen(str(proposal_id))
+        saved = self.save_plan(user_id, plan=proposal.plan, goal_id=goal_id, replace_week=proposal.replace_week)
+        self._repo.resolve_proposal(proposal.id, "agreed", now)
+        return proposal, saved
+
+    def withdraw_proposal(self, user_id: UUID, *, now: datetime) -> PlanProposal | None:
+        proposal = self._repo.open_proposal(user_id)
+        if proposal is not None:
+            self._repo.resolve_proposal(proposal.id, "withdrawn", now)
+        return proposal
 
     def save_plan(
         self,
