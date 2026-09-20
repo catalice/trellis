@@ -52,7 +52,7 @@ LOG_STATE_TOOL: dict = {
             },
             "felt_at": {
                 "type": "string",
-                "description": "State: when it was felt, if not now — local YYYY-MM-DDTHH:MM. Omit for now.",
+                "description": "When this account is ABOUT, if not now — local YYYY-MM-DDTHH:MM. Dates everything in the call: state, meds, sleep. Omit for now.",
             },
             "energy": {
                 "type": "integer", "minimum": 1, "maximum": 5,
@@ -68,7 +68,7 @@ LOG_STATE_TOOL: dict = {
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "As they said it."},
-                        "time": {"type": "string", "description": "Local HH:MM, if said."},
+                        "time": {"type": "string", "description": "Local HH:MM on that day, if said. Unreadable is refused."},
                     },
                     "required": ["name"],
                 },
@@ -195,19 +195,43 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
                 return refused(f"period_date '{period_date_str}' isn't a valid "
                                "YYYY-MM-DD date — nothing was logged.")
 
+    # ONE account lands on ONE day. felt_at dates everything in this call — the
+    # state, the meds, the sleep. ("Yesterday I felt low, took my meds at nine
+    # and slept six hours" used to put the state on yesterday and the rest on
+    # today.) Every time is read BEFORE anything is written: a time that can't
+    # be read is refused, never quietly turned into "now".
+    felt_at = None
+    felt_str = str(input_dict.get("felt_at", "")).strip()
+    if felt_str:
+        try:
+            felt_at = datetime.fromisoformat(felt_str)
+            if felt_at.tzinfo is None:
+                felt_at = felt_at.replace(tzinfo=tz)
+        except ValueError:
+            return refused(f"felt_at {felt_str!r} isn't a time I can read — use local "
+                           "YYYY-MM-DDTHH:MM. Nothing was logged.")
+    when = felt_at or now                                  # the moment this account is about
+    backdated = when.astimezone(tz).date() != now.astimezone(tz).date()
+    on_day = f" on {when.astimezone(tz).strftime('%a %-d %b')}" if backdated else ""
+
+    med_times: list[datetime] = []
+    for med in input_dict.get("meds") or []:
+        if not isinstance(med, dict) or not med.get("name"):
+            continue
+        time_str = str(med.get("time", "")).strip()
+        taken = when
+        if time_str:
+            try:
+                h, m = time_str.split(":")
+                taken = when.astimezone(tz).replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+            except (ValueError, AttributeError):
+                return refused(f"The time {time_str!r} for {med['name']} isn't one I can read — "
+                               "use HH:MM, or leave it out. Nothing was logged.")
+        med_times.append(taken)
+
     # A state entry needs their words; pure events (period/meds/sleep) don't —
     # forcing a note here is how phantom state rows got fabricated (3 Aug).
     if note:
-        felt_at = None
-        felt_str = str(input_dict.get("felt_at", "")).strip()
-        if felt_str:
-            try:
-                felt_at = datetime.fromisoformat(felt_str)
-                if felt_at.tzinfo is None:
-                    felt_at = felt_at.replace(tzinfo=tz)
-            except ValueError:
-                felt_at = None
-
         extra = input_dict.get("extra")
         log = sense_service.log_state(
             user_id, note,
@@ -223,26 +247,16 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
                 f"mood {log.mood}" if log.mood else "",
             ) if s
         )
-        parts.append(f"State logged{f' ({scores})' if scores else ''}.")
+        parts.append(f"State logged{f' ({scores})' if scores else ''}{on_day}.")
 
-    for med in input_dict.get("meds") or []:
-        if not isinstance(med, dict) or not med.get("name"):
-            continue
-        occurred = now
+    meds = [m for m in (input_dict.get("meds") or []) if isinstance(m, dict) and m.get("name")]
+    for med, occurred in zip(meds, med_times):
         time_str = str(med.get("time", "")).strip()
-        if time_str:
-            try:
-                h, m = time_str.split(":")
-                occurred = now.astimezone(tz).replace(
-                    hour=int(h), minute=int(m), second=0, microsecond=0
-                )
-            except (ValueError, AttributeError):
-                pass
         sense_service.log_event(
             user_id, TrackingEventType.MEDS,
             detail=str(med["name"]).strip(), occurred_at=occurred,
         )
-        parts.append(f"Meds logged: {med['name']}{f' at {time_str}' if time_str else ''}.")
+        parts.append(f"Meds logged: {med['name']}{f' at {time_str}' if time_str else ''}{on_day}.")
 
     sleep_hours = input_dict.get("sleep_hours")
     sleep_quality = input_dict.get("sleep_quality")
@@ -251,9 +265,9 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
             user_id, TrackingEventType.SLEEP,
             detail=str(sleep_quality).strip() if sleep_quality else None,
             value=float(sleep_hours) if sleep_hours is not None else None,
-            occurred_at=now,
+            occurred_at=when,
         )
-        parts.append("Sleep logged.")
+        parts.append(f"Sleep logged{on_day}.")
 
     if period in ("started", "ended"):
         sense_service.log_event(

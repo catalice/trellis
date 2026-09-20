@@ -19,7 +19,11 @@ Focus on the {domain} domain. Past tense: what they said, what was done, what \
 was left open. Never state what is currently true or decided — the stores hold \
 that, and this will be read days later.
 
-100 words max. Plain text, no headers.\
+If an earlier record is given, it is about to be REPLACED by what you write. \
+Carry forward, in a closing "Still open:" line, anything it left open that the \
+transcript did not settle. Drop what was settled or no longer matters.
+
+120 words max. Plain text, no headers.\
 """
 
 
@@ -46,15 +50,21 @@ def _trimmed_window(conversation_messages: list[dict]) -> list[dict]:
     return list(reversed(trimmed))
 
 
-def _transcript(conversation_messages: list[dict]) -> str:
+def _transcript(conversation_messages: list[dict], earlier: tuple | None = None) -> str:
     """The conversation as ONE document to record — handed over as chat turns,
     a model continues the chat instead (20 Sep 2026: a 'summary' came back as
-    an imitation of the last assistant turn)."""
+    an imitation of the last assistant turn). The record it will replace comes
+    first: a summary written without reading the last one loses every thread
+    that has scrolled out of the newest turns."""
     lines = [
         f"{'They' if m.get('role') == 'user' else 'Trellis'}: {str(m.get('content') or '').strip()}"
         for m in conversation_messages
     ]
-    return "Transcript:\n\n" + "\n\n".join(lines) + "\n\nWrite the record now."
+    before = ""
+    if earlier and earlier[0]:
+        when = earlier[1].strftime("%-d %b %Y") if earlier[1] else "earlier"
+        before = f"Earlier record (up to {when}):\n{earlier[0].strip()}\n\n"
+    return before + "Transcript:\n\n" + "\n\n".join(lines) + "\n\nWrite the record now."
 
 
 def make_summariser(
@@ -62,7 +72,7 @@ def make_summariser(
     model: str = "openai/gpt-oss-20b",
     fallback=None,                    # a core_model.ModelConnector — its small model
 ) -> Callable:
-    def _via_groq(system_prompt: str, conversation_messages: list[dict]) -> str | None:
+    def _via_groq(system_prompt: str, conversation_messages: list[dict], earlier=None) -> str | None:
         if groq_client is None:
             return None
         try:
@@ -70,7 +80,7 @@ def make_summariser(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": _transcript(conversation_messages)},
+                    {"role": "user", "content": _transcript(conversation_messages, earlier)},
                 ],
                 max_tokens=1000,   # a reasoning model spends tokens before it writes
                 temperature=0,
@@ -80,12 +90,12 @@ def make_summariser(
             _log.warning("groq summarisation failed", exc_info=True)
             return None
 
-    def _via_fallback(system_prompt: str, conversation_messages: list[dict]) -> str | None:
+    def _via_fallback(system_prompt: str, conversation_messages: list[dict], earlier=None) -> str | None:
         if fallback is None:
             return None
         try:
             return fallback.complete(
-                system_prompt, _transcript(conversation_messages), max_tokens=1024, tier="small",
+                system_prompt, _transcript(conversation_messages, earlier), max_tokens=1024, tier="small",
             ).strip() or None
         except Exception:
             _log.warning("fallback summarisation failed", exc_info=True)
@@ -98,8 +108,15 @@ def make_summariser(
                 return
             conversation_messages = _trimmed_window(history.to_messages(turns))
             system_prompt = _SYSTEM_PROMPT.format(domain=domain)
-            summary = (_via_groq(system_prompt, conversation_messages)
-                       or _via_fallback(system_prompt, conversation_messages))
+            # None means nothing is stored. A read that FAILED is not that: the
+            # record is about to be replaced, so without it nothing is written.
+            try:
+                earlier = history.domain_summary(user_id, domain)
+            except Exception:
+                _log.warning("earlier summary for '%s' unreadable; keeping it", domain, exc_info=True)
+                return
+            summary = (_via_groq(system_prompt, conversation_messages, earlier)
+                       or _via_fallback(system_prompt, conversation_messages, earlier))
             if not summary:
                 return
             # turns_covered stores the TOTAL turn count at summarisation time —

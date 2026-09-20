@@ -41,6 +41,7 @@ class CaptureRepository(Protocol):
     def list_for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]: ...
     def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
     def get(self, user_id: UUID, capture_id: UUID) -> Capture | None: ...
+    def count_unassigned_before(self, user_id: UUID, *, before: date) -> int: ...
 
 
 class EffortRepository(Protocol):
@@ -228,6 +229,10 @@ class BrainDumpService:
                     created_at=now,
                     updated_at=now,
                 ))
+                # The same rule as TaskService: a seed planted by a dump is a
+                # seed — it used to skip the index and never resurface.
+                if task.kind == TaskKind.SEED and self._memory is not None:
+                    self._memory.remember(user_id, "seed", task.id, task.embedding_text())
                 tasks.append(task)
 
         if self._projection:
@@ -262,6 +267,13 @@ class CaptureService:
     def list_unassigned(self, user_id: UUID, *, days: int = 30) -> list[Capture]:
         since = (datetime.now(timezone.utc) - timedelta(days=days)).date()
         return self._repo.list_unassigned(user_id, since=since)
+
+    def count_unassigned_older_than(self, user_id: UUID, *, days: int = 30) -> int:
+        before = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        return self._repo.count_unassigned_before(user_id, before=before)
+
+    def get(self, user_id: UUID, capture_id: UUID) -> Capture | None:
+        return self._repo.get(user_id, capture_id)
 
     def for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]:
         return self._repo.list_for_effort(user_id, effort_id)
@@ -501,8 +513,7 @@ class TaskService:
         # Seeds are the associative gold — half-formed curiosities that should
         # resurface when a new thought rhymes with them. Todos are transient, so
         # only seeds get filed into the meaning index.
-        if task.kind == TaskKind.SEED and self._memory is not None:
-            self._memory.remember(user_id, "seed", task.id, task.embedding_text())
+        self._index(task)
         self._vault_refresh(user_id)
         return task
 
@@ -530,6 +541,7 @@ class TaskService:
             id=uuid4(), task_id=task_id, user_id=user_id,
             event_type="completed", reason=None, occurred_at=now,
         ))
+        self._index(updated)
         self._vault_refresh(user_id)
         return updated
 
@@ -566,12 +578,21 @@ class TaskService:
         if due is not None:
             kwargs["due_at"] = _parse_local_due(due, self._tz)
         updated = self._repo.update(task_id, **kwargs)
-        # A dropped seed should stop surfacing in recall (e.g. one that just
-        # graduated into an effort — the effort carries the meaning now).
-        if updated.status == TaskStatus.DROPPED and self._memory is not None:
-            self._memory.forget("seed", task_id)
+        self._index(updated)
         self._vault_refresh(user_id)
         return updated
+
+    def _index(self, task: Task) -> None:
+        """ONE rule for the search index, applied after any change: an open seed
+        is indexed with its CURRENT words; anything else isn't in the index. A
+        rename re-indexes (the old words used to linger); a seed that becomes a
+        todo, or is dropped or done, leaves; a todo that becomes a seed enters."""
+        if self._memory is None:
+            return
+        if task.kind == TaskKind.SEED and task.status == TaskStatus.OPEN:
+            self._memory.remember(task.user_id, "seed", task.id, task.embedding_text())
+        else:
+            self._memory.forget("seed", task.id)
 
     def delete(self, user_id: UUID, task_id: UUID) -> bool:
         """Erase an erroneous task (duplicate, mis-extraction) — not a decision.

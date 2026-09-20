@@ -390,6 +390,18 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 ---
 
+## Which store is right when they disagree
+
+- **The database is the record.** Everything else is a copy or a view.
+- **The search index is rebuilt from it.** One rule per kind decides what is indexed (an open seed, with its current words); `MemoryIndex.reconcile` repairs missing, stale, never-embedded and orphaned rows; `scripts/backfill_embeddings.py` runs it and fails loudly if it can't finish.
+- **Trellis's own vault text is rebuilt from it** — tracking pages, tasks, the plan, Brain pages, the marked region of a map. An entry for another day rewrites THAT day and month, not just the current ones.
+- **Writing done by hand in the vault is its own authority.** It is never deleted, overwritten or "repaired". Only text that still reads exactly as Trellis wrote it is ever removed.
+- **Conversation summaries are narrative, not state.** Each one reads the record it replaces and carries open threads forward; none says what is currently true.
+- **When one store can't be updated, the result says so** (`core_actions.Erased.uncertain`, a `partial` outcome) — never a clean success the stores can't vouch for.
+- **A listing shows fragments and says so; the whole record is read by id** (`focus_get what='capture'`, `learn_get what='entry'`). "Nothing there" is only said about the window that was looked at.
+
+---
+
 ## Future UI compatibility
 
 1. **Services return typed data, not strings.** Tool handler converts to string for Claude, REST endpoint converts to JSON. Service is indifferent to both.
@@ -422,7 +434,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - `.env` is gitignored — contains live bot token, API key, secrets. Never log or expose.
 - DB reset (full wipe): `docker compose down -v && docker compose up --build -d`
 - Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
-- Embedding backfill (safe to re-run): `uv run python scripts/backfill_embeddings.py`
+- Embedding backfill (safe to re-run, bot STOPPED — a write landing mid-run is undone): `docker compose stop trellis`, `uv run python scripts/backfill_embeddings.py`, check exit 0, `docker compose start trellis`
 - Tests: `.venv/bin/pytest tests/ -q`
 - Scenarios (`tests/test_scenarios.py`, `tests/harness.py`): one set, run with a scripted model always, and with the real model when `TRELLIS_EVAL=1` — an evaluation of the model, not a gate on the software. Add a scenario immediately before fixing the fault it shows.
 - The embedding model is baked into the image (Dockerfile) — the bot embeds offline at runtime.

@@ -20,6 +20,9 @@ from trellis.domain_learn_service import SourceRequiredError
 
 _log = logging.getLogger(__name__)
 
+_ENTRY_FRAGMENT = 160    # how much of a piece the map shows
+_ENTRY_PAGE = 3000       # how much one page of a full read shows
+
 ContextLoader = Callable[[UUID, datetime], "str | None"]
 
 
@@ -33,13 +36,16 @@ LEARN_GET_TOOL: dict = {
         "Read a map before teaching or testing on it. Their positions are already "
         "in context; the map itself is not.\n"
         "threads: every thread and its 'you are here'.\n"
-        "map: one thread in full — regions, pieces, sources, test history."
+        "map: one thread — regions, pieces with ids, sources with URLs, test history. Long pieces are cut and say so.\n"
+        "entry: one piece in full, a page at a time (thread, id, page) — read it before teaching from it."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "what": {"type": "string", "enum": ["threads", "map"]},
-            "thread": {"type": "string", "description": "map: the thread's title."},
+            "what": {"type": "string", "enum": ["threads", "map", "entry"]},
+            "thread": {"type": "string", "description": "map, entry: the thread's title."},
+            "id": {"type": "string", "description": "entry: its id, from the map."},
+            "page": {"type": "integer", "description": "entry: which page, from 1. Omit for the first."},
         },
         "required": ["what"],
     },
@@ -110,12 +116,43 @@ def handle_learn_get(user_id: UUID, input_dict: dict, now: datetime, *, learn_se
         if not entries:
             lines.append("Nothing placed yet.")
         for e in entries:
-            src = f" [source: {e.source_title or e.source_url}]" if e.source_url else ""
+            # A source ALWAYS shows its URL — a title alone can't be followed back.
+            src = ""
+            if e.source_url:
+                src = f" [source: {e.source_title} — {e.source_url}]" if e.source_title else f" [source: {e.source_url}]"
             region = f"({e.region}) " if e.region else "(unplaced) "
-            lines.append(f"  {region}{e.kind}: {e.content[:160]}{src}")
+            content = e.content.strip()
+            if len(content) > _ENTRY_FRAGMENT:
+                content = (f"{content[:_ENTRY_FRAGMENT]}… [cut — {len(content)} characters in all; "
+                           f"learn_get what='entry' thread='{thread.title}' id='{e.id}' reads the whole of it]")
+            lines.append(f"  [{e.id}] {region}{e.kind}: {content}{src}")
         return "\n".join(lines)
 
-    return "Unknown what. Use: threads, map."
+    if what == "entry":
+        title = str(input_dict.get("thread", "")).strip()
+        thread = next((t for t in learn_service.list_threads(user_id) if t.title.lower() == title.lower()), None)
+        if thread is None:
+            return f"No thread called '{title}'. learn_get what='threads' lists them."
+        raw_id = str(input_dict.get("id", "")).strip()
+        entry = next((e for e in learn_service.entries(user_id, thread) if str(e.id) == raw_id), None)
+        if entry is None:
+            return f"No entry with id {raw_id!r} on '{thread.title}' — what='map' lists them with their ids."
+        body = entry.content.strip()
+        pages = max(1, -(-len(body) // _ENTRY_PAGE))
+        try:
+            page = int(input_dict.get("page") or 1)
+        except (TypeError, ValueError):
+            page = 1
+        if page < 1 or page > pages:
+            return f"That entry has {pages} page(s) — ask for page 1 to {pages}."
+        head = f"{thread.title} — {entry.kind}" + (f" in '{entry.region}'" if entry.region else " (unplaced)")
+        if entry.source_url:
+            head += f" — source: {entry.source_title or ''} {entry.source_url}".rstrip()
+        if pages > 1:
+            head += f" (page {page} of {pages}; pass page= for the others)"
+        return f"{head}\n{body[(page - 1) * _ENTRY_PAGE: page * _ENTRY_PAGE]}"
+
+    return "Unknown what. Use: threads, map, entry."
 
 
 def handle_learn_add(user_id: UUID, input_dict: dict, now: datetime, *, learn_service) -> str:

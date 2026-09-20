@@ -186,12 +186,14 @@ FOCUS_GET_TOOL: dict = {
         "properties": {
             "what": {
                 "type": "string",
-                "enum": ["tasks", "seeds", "goals", "inbox", "efforts", "effort", "reminders"],
+                "enum": ["tasks", "seeds", "goals", "inbox", "capture", "efforts", "effort", "reminders"],
                 "description": (
                     "tasks: open todos by urgency, plus parked. "
                     "seeds: the exploration menu. "
                     "goals: active goals. "
-                    "inbox: captures not yet homed. "
+                    "inbox: captures not yet homed, last 30 days (it says if older ones exist). "
+                    "capture: ONE capture in full, a page at a time (pass id, and page for the rest) — "
+                    "listings and recall show fragments; read the whole before answering from it. "
                     "efforts: all, by intensity. "
                     "effort: one effort's full page with note ids (pass name) — "
                     "read it before advising on a project. "
@@ -199,6 +201,8 @@ FOCUS_GET_TOOL: dict = {
                 ),
             },
             "name": {"type": "string", "description": "effort: the effort's title."},
+            "id": {"type": "string", "description": "capture: its id, from inbox, an effort page or recall."},
+            "page": {"type": "integer", "description": "capture: which page, from 1. Omit for the first."},
         },
         "required": ["what"],
     },
@@ -370,16 +374,62 @@ def _view_goals(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads
     return "\n".join(f"  [{g.id}] {g.summary()}" for g in goals)
 
 
+_INBOX_DAYS = 30
+_FRAGMENT = 300          # how much of a record a listing shows
+_PAGE = 3000             # how much of a record one page of a full read shows
+
+
+def _fragment(text: str, record_id, limit: int = _FRAGMENT) -> str:
+    """A listing shows a fragment — and SAYS so, with how to read the rest.
+    Storage nobody can read back isn't memory."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return (f"{text[:limit]}… [cut — {len(text)} characters in all; "
+            f"focus_get what='capture' id='{record_id}' reads the whole of it]")
+
+
 def _view_inbox(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
-    captures = ctx.capture_service.list_unassigned(user_id)
+    captures = ctx.capture_service.list_unassigned(user_id, days=_INBOX_DAYS)
+    older = ctx.capture_service.count_unassigned_older_than(user_id, days=_INBOX_DAYS)
+    # Absence is said WITH ITS SCOPE: this view only looks back 30 days.
+    beyond = (f" {older} older unhomed capture(s) exist beyond that window — not shown here."
+              if older else "")
     if not captures:
-        return "Inbox is clear — no unassigned captures."
-    lines = [f"Unassigned captures ({len(captures)}):"]
+        return f"No unhomed captures from the last {_INBOX_DAYS} days.{beyond}"
+    lines = [f"Unhomed captures, last {_INBOX_DAYS} days ({len(captures)}):{beyond}"]
     for c in captures:
         date_str = c.created_at.astimezone(ctx.tz).strftime("%d %b")
         summary = c.summary or c.raw[:60]
         lines.append(f"  [{c.id}] {date_str} — {summary}")
     return "\n".join(lines)
+
+
+def _view_capture(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
+    """One capture, whole: their raw words and the cleaned version, a page at a
+    time. The id comes from the inbox, an effort page, or recall."""
+    raw_id = str(input_dict.get("id", "")).strip()
+    try:
+        capture = ctx.capture_service.get(user_id, UUID(raw_id))
+    except ValueError:
+        return f"Invalid id: {raw_id!r}."
+    if capture is None:
+        return f"No capture with id {raw_id}."
+    when = capture.created_at.astimezone(ctx.tz).strftime("%a %-d %b %Y, %H:%M")
+    body = f"Their words:\n{capture.raw.strip()}"
+    if capture.synthesis and capture.synthesis.strip() != capture.raw.strip():
+        body = f"Cleaned up:\n{capture.synthesis.strip()}\n\n{body}"
+    pages = max(1, -(-len(body) // _PAGE))
+    try:
+        page = int(input_dict.get("page") or 1)
+    except (TypeError, ValueError):
+        page = 1
+    if page < 1 or page > pages:
+        return f"That capture has {pages} page(s) — ask for page 1 to {pages}."
+    head = f"Capture [{capture.id}] — {when} — {capture.summary or capture.capture_type.value}"
+    if pages > 1:
+        head += f" (page {page} of {pages}; pass page= for the others)"
+    return f"{head}\n{body[(page - 1) * _PAGE: page * _PAGE]}"
 
 
 def _view_efforts(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
@@ -408,7 +458,7 @@ def _view_effort(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusRead
     for c in captures:
         when = c.created_at.astimezone(ctx.tz).strftime("%d %b")
         body = (c.synthesis or c.raw or "").strip()
-        lines.append(f"  [{c.id}] {when} — {body[:300]}")
+        lines.append(f"  [{c.id}] {when} — {_fragment(body, c.id)}")
     return "\n".join(lines)
 
 
@@ -453,6 +503,7 @@ _GET_VIEWS: dict[str, Callable[[UUID, dict, datetime, _FocusReads], str]] = {
     "seeds": _view_seeds,
     "goals": _view_goals,
     "inbox": _view_inbox,
+    "capture": _view_capture,
     "efforts": _view_efforts,
     "effort": _view_effort,
     "reminders": _view_reminders,
@@ -1079,9 +1130,12 @@ def handle_recall(
         return "Nothing in your second brain relates closely to that yet."
     lines = ["Related in your second brain:"]
     for m in matches:
-        label = m.content[:80] + ("…" if len(m.content) > 80 else "")
         pct = round(m.similarity * 100)
+        label = m.content[:80] + ("…" if len(m.content) > 80 else "")
         lines.append(f"  [{m.entity_id}] ({m.kind}, ~{pct}%) {label}")
+    if any(len(m.content) > 80 and m.kind == "capture" for m in matches):
+        lines.append("These are fragments. focus_get what='capture' id='<id>' reads a capture in full "
+                     "— do that before answering from one.")
     return "\n".join(lines)
 
 

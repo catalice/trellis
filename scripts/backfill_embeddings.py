@@ -1,12 +1,19 @@
 """
 Backfill the meaning index for existing rows.
 
-One-time (safely re-runnable) maintenance: finds captures, efforts and seeds not
-yet in memory_index and files each one via the same MemoryIndex the app uses.
-Re-running is a no-op once everything is filed. Text composition is delegated to
-the model methods, so it can never drift from embed-on-write.
+Reconciles memory_index with the records (captures, efforts, open seeds) via the
+same MemoryIndex the app uses: files what is missing, re-files what changed or
+was never embedded, removes orphans. Re-running is a no-op once they agree. Text
+composition is delegated to the model methods, so it can never drift from
+embed-on-write.
 
-Run:  uv run python scripts/backfill_embeddings.py
+RUN IT WITH THE BOT STOPPED. It reads the records, then the index, then repairs:
+a write landing in between is undone — a fresh capture removed as an orphan, a
+rename put back to its old words. The bot is the only other index writer.
+
+    docker compose stop trellis          # Postgres stays up
+    uv run python scripts/backfill_embeddings.py ; echo "exit $?"
+    docker compose start trellis         # only after exit 0; on 1, re-run first
 """
 from __future__ import annotations
 
@@ -38,62 +45,32 @@ def main() -> int:
     database = PostgresDatabase(url)
     memory = MemoryIndex(database, LocalEmbedder())
 
-    # (entity_kind, entity_id, user_id, text) for everything not yet filed.
-    targets: list[tuple[str, object, object, str]] = []
+    # What the RECORDS say should be in the index: every capture, effort and
+    # open seed, with its current words.
+    expected: dict = {}
     with database.connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT c.id, c.user_id, c.summary, c.synthesis, c.raw
-                FROM captures c
-                LEFT JOIN memory_index m
-                    ON m.entity_kind = 'capture' AND m.entity_id = c.id
-                WHERE m.id IS NULL
-                """
-            )
+            cur.execute("SELECT id, user_id, summary, synthesis, raw FROM captures")
             for cid, user_id, summary, synthesis, raw in cur.fetchall():
-                targets.append(("capture", cid, user_id, Capture.compose_embedding_text(summary, synthesis, raw)))
-
-            cur.execute(
-                """
-                SELECT e.id, e.user_id, e.title, e.notes
-                FROM efforts e
-                LEFT JOIN memory_index m
-                    ON m.entity_kind = 'effort' AND m.entity_id = e.id
-                WHERE m.id IS NULL
-                """
-            )
+                expected[("capture", cid)] = (user_id, Capture.compose_embedding_text(summary, synthesis, raw))
+            cur.execute("SELECT id, user_id, title, notes FROM efforts")
             for eid, user_id, title, notes in cur.fetchall():
-                targets.append(("effort", eid, user_id, Effort.compose_embedding_text(title, notes)))
-
-            cur.execute(
-                """
-                SELECT t.id, t.user_id, t.title, t.description
-                FROM tasks t
-                LEFT JOIN memory_index m
-                    ON m.entity_kind = 'seed' AND m.entity_id = t.id
-                WHERE t.kind = 'seed' AND m.id IS NULL
-                """
-            )
+                expected[("effort", eid)] = (user_id, Effort.compose_embedding_text(title, notes))
+            cur.execute("SELECT id, user_id, title, description FROM tasks WHERE kind = 'seed' AND status = 'open'")
             for sid, user_id, title, description in cur.fetchall():
-                targets.append(("seed", sid, user_id, Task.compose_embedding_text(title, description)))
+                expected[("seed", sid)] = (user_id, Task.compose_embedding_text(title, description))
 
-    # remember_many batches the embeds, so the whole brain re-indexes in a couple
-    # of requests, not one per row — which is what keeps us under 15 requests/min.
-    items = [
-        (user_id, entity_kind, entity_id, text)
-        for entity_kind, entity_id, user_id, text in targets
-        if text
-    ]
-    if not items:
-        print("Nothing to backfill — the meaning index is up to date.")
-        return 0
-
-    filed = memory.remember_many(items)
-    if filed == len(items):
-        print(f"Done — filed {filed} row(s) into the meaning index.")
-    else:
-        print(f"Filed {filed}/{len(items)} row(s); the rest are pending (rate-limited) — re-run later.")
+    # Reconcile: missing rows, rows whose words changed, rows with words but no
+    # vector (the old repair only looked for MISSING rows, so after vectors were
+    # cleared it called a searchless index up to date), and orphans.
+    report = memory.reconcile(expected)
+    print("index reconciled — "
+          f"missing {report['missing']}, stale {report['stale']}, never embedded {report['unembedded']}, "
+          f"orphaned {report['orphaned']}; filed {report['filed']}, removed {report['removed']}")
+    if report["failed"]:
+        print(f"{report['failed']} row(s) could NOT be repaired — the index is still out of step. Re-run.",
+              file=sys.stderr)
+        return 1
     return 0
 
 

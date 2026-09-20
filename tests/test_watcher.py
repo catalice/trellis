@@ -328,3 +328,50 @@ class TestTrend(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEveryTrackedKindReachesTheFrame:
+    """'Every tracked kind' was stored and never shown: the extra dimensions a
+    state carries (anxiety, cramps, …) were left out of the daily frame, so
+    neither sense_get's day view nor the Watcher's verification could see them."""
+
+    def _frame(self, states):
+        from datetime import date
+        from zoneinfo import ZoneInfo
+        from trellis.core_watcher import build_daily_frame
+        return build_daily_frame(uuid4(), states=states, events=[], health_rows=[], runs=[],
+                                 tz=ZoneInfo("UTC"), today=date(2026, 3, 11))
+
+    def _state(self, day, extra, **scores):
+        from datetime import datetime, timezone
+        from trellis.domain_sense_models import StateLog
+        when = datetime(2026, 3, day, 9, 0, tzinfo=timezone.utc)
+        return StateLog(id=uuid4(), user_id=uuid4(), note="n", energy=scores.get("energy"),
+                        mood=scores.get("mood"), felt_at=when, logged_at=when, extra=extra)
+
+    def test_numeric_kinds_are_averaged_per_day_and_flags_are_kept(self):
+        from datetime import date
+        frame = self._frame([self._state(10, {"anxiety": 4, "cramps": True}), self._state(10, {"anxiety": 2}),
+                             self._state(11, {"restless_legs": True})])
+        assert frame[date(2026, 3, 10)]["anxiety"] == 3.0
+        assert frame[date(2026, 3, 10)]["cramps"] is True
+        assert frame[date(2026, 3, 11)]["restless_legs"] is True
+        assert "anxiety" not in frame[date(2026, 3, 11)]             # absent means not logged, never zero
+
+    def test_a_kind_cannot_overwrite_a_built_in_column(self):
+        from datetime import date
+        frame = self._frame([self._state(10, {"mood": 1, "sleep_hours": 99}, mood=4)])
+        row = frame[date(2026, 3, 10)]
+        assert row["mood"] == 4.0 and "sleep_hours" not in row
+        assert row["tracked_mood"] == 1.0 and row["tracked_sleep_hours"] == 99.0
+
+    def test_the_reserved_list_matches_what_the_frame_really_writes(self):
+        """If the frame grows a column, a tracked kind of that name must not overwrite it."""
+        import re
+        from pathlib import Path
+        from trellis.core_watcher import _FRAME_COLUMNS
+        source = (Path(__file__).parent.parent / "src" / "trellis" / "core_watcher.py").read_text()
+        body = source[source.index("def build_daily_frame("):]
+        body = body[:body.index("\ndef ", 10)]
+        written = set(re.findall(r'row\([^)]*\)\["([a-z_]+)"\]', body)) | set(re.findall(r'setdefault\("([a-z_]+)"', body))
+        assert written <= _FRAME_COLUMNS, written - _FRAME_COLUMNS

@@ -291,3 +291,41 @@ class TestRollbackReconcilesInFlightReminders:
         assert after[ran.id].recurrence is None                              # the next weekly one already exists
         assert "interrupted" in after[interrupted.id].label and "not been run again" in after[interrupted.id].label
         assert after[untouched.id].label == "tomorrow's thing"
+
+
+class TestLastRoutedHouses:
+    def test_the_persons_latest_message_gives_its_houses(self, pg_database, pg_user):
+        from trellis.core_history import PostgresConversationHistory
+        history = PostgresConversationHistory(pg_database)
+        assert history.last_routed(pg_user) is None
+        history.append(pg_user, "user", "shall we move the run?", metadata={"domains": ["move"]})
+        history.append(pg_user, "assistant", "I'd move it to Thursday — good?")
+        houses, when = history.last_routed(pg_user)
+        assert houses == ["move"] and when is not None          # the assistant's turn is skipped
+
+
+class TestIndexReconciliationAgainstPostgres:
+    class _Embedder:
+        def embed(self, texts):
+            return [[0.0] * 384 for _ in texts]
+
+    def test_rows_with_words_but_no_vector_are_found_and_repaired(self, pg_database, pg_user):
+        """Migration 010 cleared every vector; the old repair looked only for
+        MISSING rows and reported a searchless index as up to date."""
+        from uuid import uuid4
+        from trellis.infra_memory import MemoryIndex
+        index = MemoryIndex(pg_database, self._Embedder())
+        kept, stale, orphan = uuid4(), uuid4(), uuid4()
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM memory_index WHERE user_id = %s", (pg_user,))
+            for eid, content in ((kept, "alpha"), (stale, "old words"), (orphan, "its record is gone")):
+                cur.execute("INSERT INTO memory_index (user_id, entity_kind, entity_id, content, embedding)"
+                            " VALUES (%s, 'capture', %s, %s, NULL)", (pg_user, eid, content))
+        mine = {k: v for k, v in index.held().items() if k[1] in (kept, stale, orphan)}
+        assert all(has_vector is False for _, has_vector in mine.values())
+
+        report = index.reconcile({("capture", kept): (pg_user, "alpha"), ("capture", stale): (pg_user, "new words")})
+        assert (report["unembedded"], report["stale"], report["failed"]) == (1, 1, 0)
+        after = index.held()
+        assert after[("capture", kept)] == ("alpha", True) and after[("capture", stale)] == ("new words", True)
+        assert ("capture", orphan) not in after
