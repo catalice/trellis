@@ -115,13 +115,45 @@ views:
 """
 
 
+_MAP_BEGIN = "<!-- trellis:map:{}:begin — generated; your own notes go outside these markers -->"
+_MAP_END = "<!-- trellis:map:{}:end -->"
+
+
+def _merge_map_page(existing: str, region: str, title: str, body: str, tag: str) -> str | None:
+    """The page text with this thread's generated region refreshed, everything
+    else untouched. None when the page isn't this thread's to write."""
+    begin, end = _MAP_BEGIN.format(tag), _MAP_END.format(tag)
+    if begin in existing and end in existing:
+        head, rest = existing.split(begin, 1)
+        _, tail = rest.split(end, 1)
+        return head + region + tail
+    if "<!-- trellis:map:" in existing:
+        return None                      # another thread's page
+    if not (existing.startswith(f"# {title}\n") and "*Updated " in existing):
+        return None                      # not a page Trellis generated
+    # A page from before markers existed. If it is exactly what Trellis would
+    # have written (the dated line aside), it converts cleanly. Anything else
+    # may hold writing done by hand, so all of it is kept below the new region.
+    def undated(text: str) -> str:
+        return "\n".join(ln for ln in text.strip().splitlines() if not ln.startswith("*Updated "))
+    if undated(existing) == undated(f"# {title}\n\n{body}"):
+        return region + "\n"
+    return (region + "\n\n---\n*The page as it was before Trellis began marking its own part. "
+            "Anything you wrote is in here; delete what you don't need.*\n\n" + existing)
+
+
 def _has_authored_content(page: str) -> bool:
     """True when an effort page holds anything beyond what effort_created wrote:
-    the title, the intensity line, the section heading. Effort notes and filed
-    captures count as content — when in doubt, the page is kept."""
+    its title line, the intensity line, the section heading. Only the FIRST
+    heading is the generated title — a later one is someone's note. Effort notes
+    and filed captures count as content; when in doubt, the page is kept."""
+    seen_title = False
     for line in page.splitlines():
         line = line.strip()
-        if not line or line.startswith("# ") or line == "## Research & notes":
+        if not line or line == "## Research & notes":
+            continue
+        if line.startswith("# ") and not seen_title:
+            seen_title = True
             continue
         if line.startswith("_Intensity:") and line.endswith("_"):
             continue
@@ -809,38 +841,29 @@ class ObsidianVault:
         drawn by the user in conversation; this is its window. Same write-only
         never-raise contract as every projection.
 
-        A page is only ever overwritten by the thread that owns it: generated
-        pages end with a marker naming their thread. A name already taken — by
-        another thread whose title sanitises alike, or by a page written by
-        hand — sends this map to '<title> (<id>).md' instead."""
+        Only the GENERATED REGION is ever replaced — the text between this
+        thread's begin/end markers. Anything written above or below it by hand
+        stays. A name taken by another thread, or by a page Trellis didn't
+        generate, sends this map to '<title> (<id>).md' instead."""
         try:
             if not self._vault.exists():
                 return
             safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Untitled"
             folder = self._vault / "Atlas" / "Maps"
             folder.mkdir(parents=True, exist_ok=True)
-            marker = f"<!-- trellis:map:{thread_id} -->" if thread_id else None
-            path = folder / f"{safe}.md"
-            if path.exists() and not self._map_is_ours(path, title, marker):
-                path = folder / f"{safe} ({str(thread_id)[:8] if thread_id else 'map'}).md"
-                if path.exists() and not self._map_is_ours(path, title, marker):
-                    _log.warning("learn map: no free page name for %r — not written", title)
+            tag = str(thread_id) if thread_id else "map"
+            region = (f"{_MAP_BEGIN.format(tag)}\n# {title}\n\n{body}\n{_MAP_END.format(tag)}")
+            for path in (folder / f"{safe}.md", folder / f"{safe} ({tag[:8]}).md"):
+                if not path.exists():
+                    path.write_text(region + "\n", encoding="utf-8")
                     return
-            page = f"# {title}\n\n{body}"
-            if marker:
-                page += f"\n\n{marker}\n"
-            path.write_text(page, encoding="utf-8")
+                merged = _merge_map_page(path.read_text(encoding="utf-8"), region, title, body, tag)
+                if merged is not None:
+                    path.write_text(merged, encoding="utf-8")
+                    return
+            _log.warning("learn map: no free page name for %r — not written", title)
         except Exception:
             _log.warning("learn map write failed", exc_info=True)
-
-    @staticmethod
-    def _map_is_ours(path: Path, title: str, marker: str | None) -> bool:
-        text = path.read_text(encoding="utf-8")
-        if "<!-- trellis:map:" in text:
-            return marker is not None and marker in text
-        # Pages generated before markers existed: ours only if the heading is
-        # exactly this thread's title and nothing suggests another author.
-        return marker is not None and text.startswith(f"# {title}\n") and "*Updated " in text
 
     def watcher_page(self, body: str) -> None:
         """The window into the slow mind — everything the Watcher is thinking,
@@ -898,7 +921,7 @@ class ObsidianVault:
             _log.warning("obsidian: effort page removal failed", exc_info=True)
             return "kept"
 
-    def effort_page_moved(self, old_path: str | None, effort: Effort) -> str:
+    def effort_page_moved(self, old_path: str | None, effort: Effort, keep_old: bool = False) -> str:
         """Rename = move the page: write under the new name, remove the old.
         Content is preserved; a ghost is never left behind; a page already at
         the destination is never overwritten. 'moved' | 'created' | 'collision'
@@ -921,7 +944,8 @@ class ObsidianVault:
                 tmp = new.with_suffix(".md.tmp")
                 tmp.write_text("\n".join(lines), encoding="utf-8")
                 tmp.replace(new)
-                old.unlink()
+                if not keep_old:        # a page another effort still uses is copied, not moved
+                    old.unlink()
                 return "moved"
             if not new.exists():
                 self.effort_created(effort)

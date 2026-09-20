@@ -101,7 +101,7 @@ class VaultProjection(Protocol):
     def research_saved(self, capture: Capture) -> None: ...
     def page_exists(self, obsidian_path: str) -> bool: ...
     def effort_page_removed(self, obsidian_path: str) -> str: ...   # removed | kept | missing
-    def effort_page_moved(self, old_path: str | None, effort: Effort) -> str: ...
+    def effort_page_moved(self, old_path: str | None, effort: Effort, keep_old: bool = False) -> str: ...
 
 
 class Memory(Protocol):
@@ -350,6 +350,11 @@ class EffortService:
             return None
         return effort, captures.for_effort(user_id, effort.id)
 
+    def _page_shared(self, user_id: UUID, path: str, effort_id: UUID) -> bool:
+        """Older installs can hold two efforts on one page (titles that sanitise
+        alike). Until they're separated, that page is never moved or removed."""
+        return any(e.obsidian_path == path and e.id != effort_id for e in self._repo.list_all(user_id))
+
     def _page_taken(self, user_id: UUID, path: str, *, ignoring: UUID | None = None) -> bool:
         if any(e.obsidian_path == path and e.id != ignoring for e in self._repo.list_all(user_id)):
             return True
@@ -366,10 +371,13 @@ class EffortService:
         if captures.for_effort(user_id, effort_id):
             return "not_empty"
         old_path = effort.obsidian_path
+        shared = bool(old_path) and self._page_shared(user_id, old_path, effort_id)
         if not self._repo.delete(user_id, effort_id):
             return "not_found"
         if self._memory is not None:
             self._memory.forget("effort", effort_id)
+        if shared:
+            return "deleted_page_kept"      # another effort still lives on that page
         if self._projection is not None and old_path:
             try:
                 if self._projection.effort_page_removed(old_path) == "kept":
@@ -390,6 +398,7 @@ class EffortService:
             # Checked BEFORE anything changes: a rename never lands on a page
             # that belongs to another effort or was written by hand.
             raise PageTaken(new_path)
+        shared = bool(old_path) and self._page_shared(user_id, old_path, effort_id)
         if not self._repo.rename(user_id, effort_id, new_title, new_path):
             return None
         renamed = self._repo.get(effort_id)
@@ -398,7 +407,7 @@ class EffortService:
         self._embed(renamed)
         if self._projection is not None:
             try:
-                self._projection.effort_page_moved(old_path, renamed)
+                self._projection.effort_page_moved(old_path, renamed, keep_old=shared)
             except Exception:
                 _log.warning("effort page move failed", exc_info=True)
         return renamed

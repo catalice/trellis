@@ -145,3 +145,78 @@ class TestEffortServiceThroughTheRealVault:
         assert effort.obsidian_path != "Efforts/Garden.md"
         assert (tmp_path / "Efforts/Garden.md").read_text() == "Mine.\n"
         assert (tmp_path / effort.obsidian_path).exists()
+
+
+class TestMapPagesKeepWhatWasAddedByHand:
+    """The ownership marker says who generated a page, not that nobody edited it."""
+
+    def test_a_paragraph_added_in_the_vault_survives_the_next_update(self, tmp_path):
+        vault, thread = _vault(tmp_path), uuid4()
+        vault.learn_map("Rome", "first body", thread_id=thread)
+        page = tmp_path / "Atlas/Maps/Rome.md"
+        page.write_text(page.read_text() + "\nMy own thought about the Gracchi.\n")
+        vault.learn_map("Rome", "second body", thread_id=thread)
+        text = page.read_text()
+        assert "second body" in text and "first body" not in text
+        assert "My own thought about the Gracchi." in text
+
+    def test_writing_above_the_generated_part_survives_too(self, tmp_path):
+        vault, thread = _vault(tmp_path), uuid4()
+        vault.learn_map("Rome", "first body", thread_id=thread)
+        page = tmp_path / "Atlas/Maps/Rome.md"
+        page.write_text("A note to self at the very top.\n\n" + page.read_text())
+        vault.learn_map("Rome", "second body", thread_id=thread)
+        assert page.read_text().startswith("A note to self at the very top.")
+        assert "second body" in page.read_text()
+
+    def test_a_page_from_before_markers_with_additions_loses_nothing(self, tmp_path):
+        vault = _vault(tmp_path)
+        page = tmp_path / "Atlas/Maps/Rome.md"
+        page.parent.mkdir(parents=True)
+        page.write_text("# Rome\n\n*Updated Mon 1 January 2026*\n\n## Republic\n- consuls\n\nMy own margin note.\n")
+        vault.learn_map("Rome", "*Updated Tue 2 January 2026*\n\n## Republic\n- consuls\n- tribunes", thread_id=uuid4())
+        text = page.read_text()
+        assert "- tribunes" in text and "My own margin note." in text
+
+    def test_a_purely_generated_page_from_before_markers_converts_cleanly(self, tmp_path):
+        vault = _vault(tmp_path)
+        page = tmp_path / "Atlas/Maps/Rome.md"
+        page.parent.mkdir(parents=True)
+        page.write_text("# Rome\n\n*Updated Mon 1 January 2026*\n\n## Republic\n- consuls")
+        vault.learn_map("Rome", "*Updated Tue 2 January 2026*\n\n## Republic\n- consuls", thread_id=uuid4())
+        assert page.read_text().count("- consuls") == 1
+
+
+class TestEffortPageEdgeCases:
+    def test_a_note_written_as_a_heading_counts_as_writing(self, tmp_path):
+        vault, effort = _vault(tmp_path), _effort("Garden", "Efforts/Garden.md")
+        vault.effort_created(effort)
+        page = tmp_path / "Efforts/Garden.md"
+        page.write_text(page.read_text() + "\n# Quince before the frost\n")
+        assert vault.effort_page_removed(effort.obsidian_path) == "kept"
+
+    def test_renaming_an_effort_whose_page_is_shared_leaves_the_page_for_the_other(self, tmp_path):
+        from datetime import datetime
+        from trellis.domain_focus_service import EffortService
+        repo = TestEffortServiceThroughTheRealVault._Repo()
+        svc, uid = EffortService(repo, projection=_vault(tmp_path)), uuid4()
+        first = svc.find_or_create(uid, "Garden", datetime.now(timezone.utc))
+        # A second effort that shares the first one's page — how older installs can look.
+        from dataclasses import replace
+        second = replace(_effort("Garden!", first.obsidian_path), user_id=uid)
+        repo.save(second)
+        (tmp_path / first.obsidian_path).write_text("# Garden\n\nShared notes.\n")
+        svc.rename(uid, first.id, "Orchard")
+        assert (tmp_path / first.obsidian_path).read_text() == "# Garden\n\nShared notes.\n"
+        assert "Shared notes." in (tmp_path / "Efforts/Orchard.md").read_text()
+
+    def test_erasing_an_effort_whose_page_is_shared_keeps_the_page(self, tmp_path):
+        from datetime import datetime
+        from dataclasses import replace
+        from trellis.domain_focus_service import EffortService
+        repo = TestEffortServiceThroughTheRealVault._Repo()
+        svc, uid = EffortService(repo, projection=_vault(tmp_path)), uuid4()
+        first = svc.find_or_create(uid, "Garden", datetime.now(timezone.utc))
+        repo.save(replace(_effort("Garden!", first.obsidian_path), user_id=uid))
+        assert svc.delete_if_empty(uid, first.id, TestEffortServiceThroughTheRealVault._NoCaptures()) == "deleted_page_kept"
+        assert (tmp_path / first.obsidian_path).exists()
