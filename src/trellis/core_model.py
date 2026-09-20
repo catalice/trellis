@@ -85,4 +85,3 @@ class ModelConnector(Protocol):
         `tier` picks the model: 'main', or 'small' for cheap background work.
         Returns the text ('' if the model said nothing); raises on failure."""
         ...
-

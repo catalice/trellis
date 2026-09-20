@@ -73,9 +73,12 @@ class ScriptedModel:
 
 @dataclass
 class ToolCallRecord:
+    """One ATTEMPT. Recorded before the handler runs, so an attempt that raises
+    part-way — after it has already changed something — is still on record."""
     name: str
     input: dict
-    result: str
+    result: str | None = None           # what the handler returned, if it returned
+    raised: BaseException | None = None  # what it raised, if it raised
 
 
 class SimulatedTools:
@@ -97,12 +100,16 @@ class SimulatedTools:
 
     def _handler(self, name: str, behaviour) -> Callable[[dict], str]:
         def handle(input_dict: dict) -> str:
-            if isinstance(behaviour, BaseException):
-                self.calls.append(ToolCallRecord(name, dict(input_dict), f"<raised {type(behaviour).__name__}>"))
-                raise behaviour
-            result = behaviour(input_dict) if callable(behaviour) else str(behaviour)
-            self.calls.append(ToolCallRecord(name, dict(input_dict), result))
-            return result
+            record = ToolCallRecord(name, dict(input_dict))
+            self.calls.append(record)                    # the attempt, before anything can go wrong
+            try:
+                if isinstance(behaviour, BaseException):
+                    raise behaviour
+                record.result = behaviour(input_dict) if callable(behaviour) else str(behaviour)
+            except BaseException as error:
+                record.raised = error
+                raise
+            return record.result
         return handle
 
 

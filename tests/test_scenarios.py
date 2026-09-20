@@ -118,7 +118,7 @@ def test_scripted(scenario: Scenario) -> None:
 
 def _real_model():
     """The provider chosen in configuration — never named here."""
-    if not os.getenv("TRELLIS_EVAL"):
+    if os.getenv("TRELLIS_EVAL") != "1":          # exactly "1": "0" and "false" must not spend money
         pytest.skip("real-model evaluation is opt-in: TRELLIS_EVAL=1")
     from trellis.core_config import Settings
     from trellis.core_main import build_model
@@ -133,3 +133,31 @@ def test_real_model(scenario: Scenario) -> None:
     outcome = run(scenario, model=_real_model())
     for check in scenario.checks:
         check(outcome)
+
+
+# --- the harness itself ----------------------------------------------------------------
+
+def test_an_attempt_that_changes_something_then_raises_is_still_on_record():
+    """'The action happened, the acknowledgement was lost' — the case stage 3 is about."""
+    from harness import SimulatedTools
+    stored = []
+
+    def save_then_time_out(args):
+        stored.append(args["text"])
+        raise TimeoutError("no acknowledgement")
+
+    tools = SimulatedTools({"save_note": (SAVE_NOTE, save_then_time_out)})
+    with pytest.raises(TimeoutError):
+        tools.handlers["save_note"]({"text": "boiler"})
+    assert stored == ["boiler"]                                     # the effect happened
+    assert len(tools.calls) == 1 and isinstance(tools.calls[0].raised, TimeoutError)
+    assert tools.calls[0].result is None
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "", "true", "yes"])
+def test_only_the_documented_value_enables_paid_evaluation(monkeypatch, value):
+    monkeypatch.setenv("TRELLIS_EVAL", value)
+    monkeypatch.setattr("trellis.core_main.build_model",
+                        lambda settings: pytest.fail("a disabled setting reached the real-model factory"))
+    with pytest.raises(pytest.skip.Exception):
+        _real_model()

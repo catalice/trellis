@@ -158,6 +158,10 @@ decisions, with no procedural coaching.
   required only for the providers selected.
 - Provider features stay inside the connector — no lowest-common-denominator
   text interface.
+- One exception stands: conversation summaries go to Groq first, directly,
+  with the connector's small model as the fallback. That is the behaviour from
+  before the boundary, kept as it was; folding Groq behind a connector is a
+  follow-up, not part of this step.
 - A second live provider is deferred. The scripted model proves separation, not
   portability: the result is *prepared for alternative providers*, not
   *interchangeable*.
@@ -180,9 +184,9 @@ pauses for independent review **before deployment**. Review findings are
 resolved before deploying.
 
 1. After stage 1 — data protection and access restrictions complete.
-2. After stage 2 — regression harness and model boundary complete. Then after
-   stage 3 — truthful outcomes complete. (Split at the user's instruction,
-   20 September: review after each phase.)
+2. After stages 2–3 together — regression harness, model boundary and truthful
+   outcomes complete. This is the gate before merge and deployment. (Stage 2
+   was also looked at on its own, as an interim checkpoint, on 20 September.)
 3. After stage 4 — retrieval, memory and answer completeness complete.
 4. After stage 5 — evidence and Watcher changes complete.
 5. Before stage 6 — a readiness review before the ownership trial starts.
