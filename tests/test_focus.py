@@ -1126,3 +1126,35 @@ class TestGoalLabels:
         updated = svc.update(UID, g.id, label=None, now=NOW)
         assert updated.label is None
         assert not updated.is_training_goal()
+
+
+class TestRecurringRemindersKeepLocalTime:
+    """A 09:00 reminder is 09:00 on the wall, before and after the clocks change.
+    Advancing the stored UTC instant by 24h drifted it to 08:00 (or 10:00)."""
+
+    def test_daily_across_the_autumn_clock_change(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_service import _next_occurrence
+        madrid = ZoneInfo("Europe/Madrid")
+        before = datetime(2026, 10, 24, 7, 0, tzinfo=timezone.utc)        # 09:00 in Madrid (UTC+2)
+        now = datetime(2026, 10, 24, 7, 0, 5, tzinfo=timezone.utc)
+        nxt = _next_occurrence(before, "daily", now, madrid)
+        assert nxt.astimezone(madrid).strftime("%d %H:%M") == "25 09:00"   # clocks went back overnight
+        assert nxt.astimezone(timezone.utc).hour == 8                      # so the instant moved an hour
+
+    def test_weekly_across_the_spring_clock_change(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_service import _next_occurrence
+        madrid = ZoneInfo("Europe/Madrid")
+        before = datetime(2027, 3, 22, 8, 0, tzinfo=timezone.utc)         # Monday 09:00 Madrid (UTC+1)
+        nxt = _next_occurrence(before, "weekly", before + timedelta(seconds=5), madrid)
+        assert nxt.astimezone(madrid).strftime("%d %H:%M") == "29 09:00"
+
+    def test_downtime_still_lands_strictly_in_the_future_at_the_same_local_time(self):
+        from zoneinfo import ZoneInfo
+        from trellis.domain_focus_service import _next_occurrence
+        madrid = ZoneInfo("Europe/Madrid")
+        before = datetime(2026, 10, 20, 7, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)           # a week down, across the change
+        nxt = _next_occurrence(before, "daily", now, madrid)
+        assert nxt > now and nxt.astimezone(madrid).strftime("%d %H:%M") == "28 09:00"

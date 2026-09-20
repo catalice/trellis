@@ -643,7 +643,7 @@ class ReminderService:
         return self.set(
             user_id,
             reminder.label,
-            _next_occurrence(reminder.remind_at, reminder.recurrence or "daily", now),
+            _next_occurrence(reminder.remind_at, reminder.recurrence or "daily", now, self._tz),
             task_id=reminder.task_id,
             recurrence=reminder.recurrence,
             kind=reminder.kind,
@@ -733,11 +733,17 @@ class GoalService:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _next_occurrence(after: datetime, recurrence: str, now: datetime) -> datetime:
-    nxt = _advance(after, recurrence)
+def _next_occurrence(after: datetime, recurrence: str, now: datetime, tz: tzinfo | None = None) -> datetime:
+    """The next firing, at the same time ON THE WALL in the person's timezone.
+    A recurrence is a local habit ("09:00 every day"), not a fixed gap between
+    instants: stepping the stored UTC instant by 24h drifts it an hour at every
+    clock change. Arithmetic on a datetime in a named zone is wall-clock
+    arithmetic, so the step is taken there and converted back."""
+    local = after.astimezone(tz) if tz is not None else after
+    nxt = _advance(local, recurrence)
     while nxt <= now:
         nxt = _advance(nxt, recurrence)
-    return nxt
+    return nxt.astimezone(timezone.utc) if tz is not None else nxt
 
 
 def _advance(dt: datetime, recurrence: str) -> datetime:
