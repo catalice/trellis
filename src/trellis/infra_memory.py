@@ -15,7 +15,7 @@ persistently down (see take_failure_alert).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -36,6 +36,41 @@ class SemanticMatch:
     entity_id: UUID
     content: str              # the text that was filed, for display
     similarity: float         # 0..1, higher = closer in meaning
+
+
+@dataclass
+class ReconcilePlan:
+    """What it takes to make the index agree with the records."""
+    to_index: list = field(default_factory=list)     # [((kind, id), (user_id, text))] — missing, stale or never embedded
+    orphans: list = field(default_factory=list)      # [(kind, id)] — index rows whose record is gone
+    missing: int = 0
+    stale: int = 0
+    unembedded: int = 0
+
+
+def plan_reconciliation(expected: dict, indexed: dict) -> ReconcilePlan:
+    """`expected`: {(kind, id): (user_id, text)} — what the records say now.
+    `indexed`: {(kind, id): (content, has_vector)} — what the index holds.
+    Pure: decides, touches nothing. A row is re-indexed when it is MISSING, when
+    its words no longer match (STALE), or when it has words but no vector
+    (UNEMBEDDED — vectors were cleared and the old repair only looked for missing
+    rows, so it called a searchless index up to date)."""
+    plan = ReconcilePlan()
+    for key, (user_id, text) in expected.items():
+        if not text:
+            continue
+        held = indexed.get(key)
+        if held is None:
+            plan.missing += 1
+        elif held[0] != text:
+            plan.stale += 1
+        elif not held[1]:
+            plan.unembedded += 1
+        else:
+            continue
+        plan.to_index.append((key, (user_id, text)))
+    plan.orphans = [key for key in indexed if key not in expected]
+    return plan
 
 
 class MemoryIndex:
@@ -116,6 +151,25 @@ class MemoryIndex:
             # the honest count is zero (the loop count once inflated backfills).
             _log.warning("memory_index batch upsert failed", exc_info=True)
             return 0
+
+    def held(self) -> dict:
+        """{(kind, id): (content, has_vector)} for every row in the index."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT entity_kind, entity_id, content, embedding IS NOT NULL FROM memory_index")
+                return {(kind, eid): (content, has_vector) for kind, eid, content, has_vector in cur.fetchall()}
+
+    def reconcile(self, expected: dict) -> dict:
+        """Make the index agree with the records. Returns counts, including
+        `failed` — rows that should be indexed and could not be, which a caller
+        must not report as success."""
+        plan = plan_reconciliation(expected, self.held())
+        removed = sum(1 for kind, eid in plan.orphans if self.forget(kind, eid))
+        items = [(user_id, kind, eid, text) for (kind, eid), (user_id, text) in plan.to_index]
+        filed = self.remember_many(items) if items else 0
+        return {"missing": plan.missing, "stale": plan.stale, "unembedded": plan.unembedded,
+                "orphaned": len(plan.orphans), "removed": removed, "filed": filed,
+                "failed": (len(items) - filed) + (len(plan.orphans) - removed)}
 
     def forget(self, entity_kind: str, entity_id: UUID) -> bool:
         """Drop an entity's card — call when the underlying thing is deleted or
