@@ -468,6 +468,12 @@ class ObsidianVault:
             _log.warning("obsidian: daily property refresh failed", exc_info=True)
         return written
 
+    def tracking_day_changed(self, user_id: UUID, day: date) -> list[str]:
+        """An entry was ADDED to a day that isn't today (a backdated account):
+        the same views need rewriting as when one is erased — that day's note
+        and that month's History page. Returns the pages that couldn't be."""
+        return self.tracking_entry_erased(user_id, day)
+
     def tracking_entry_erased(self, user_id: UUID, day: date) -> list[str]:
         """An entry felt on `day` was erased: rewrite the views it was IN — that
         day's note properties and that month's History page — not just the

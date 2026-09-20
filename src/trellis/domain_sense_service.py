@@ -82,8 +82,19 @@ class SenseService:
         ))
         if self._projection:
             self._projection.state_logged(log)
-            self._projection.tracking_changed(user_id)
+            self._refresh_views(user_id, log.felt_at, now)
         return log
+
+    def _refresh_views(self, user_id: UUID, when: datetime, now: datetime | None) -> None:
+        """Rewrite the vault views an entry lands in. An entry for another day (a
+        backdated account, a correction) belongs on THAT day's note and THAT
+        month's page — refreshing only the current ones left it off both."""
+        day = when.astimezone(self._tz).date()
+        today = (now or datetime.now(self._tz)).astimezone(self._tz).date()
+        if day != today and hasattr(self._projection, "tracking_day_changed"):
+            self._projection.tracking_day_changed(user_id, day)
+        else:
+            self._projection.tracking_changed(user_id)
 
     def log_event(
         self,
@@ -103,7 +114,7 @@ class SenseService:
             occurred_at=occurred_at,
         ))
         if self._projection:
-            self._projection.tracking_changed(user_id)
+            self._refresh_views(user_id, occurred_at, None)
         return event
 
     def day_rows(self, user_id: UUID, *, since, until, now) -> dict:
