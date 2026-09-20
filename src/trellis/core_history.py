@@ -179,19 +179,20 @@ class PostgresConversationHistory:
                     (user_id, user_id, keep),
                 )
 
-    def domain_summary(self, user_id: UUID, domain: str) -> str | None:
-        """Returns the stored conversation summary for this user+domain, or None."""
+    def domain_summary(self, user_id: UUID, domain: str) -> tuple[str, datetime] | None:
+        """The stored conversation summary for this user+domain and when it was
+        written — a summary with no date reads as the present. None if empty."""
         with self.database.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT summary FROM conversation_summaries
+                    SELECT summary, updated_at FROM conversation_summaries
                     WHERE user_id = %s AND domain = %s
                     """,
                     (user_id, domain),
                 )
                 row = cur.fetchone()
-        return row[0] if row else None
+        return (row[0], row[1]) if row and row[0] else None
 
     def save_domain_summary(
         self, user_id: UUID, domain: str, summary: str, turns_covered: int

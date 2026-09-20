@@ -759,7 +759,8 @@ class Watcher:
         for domain in ("focus", "sense", "move"):
             summary = self._history.domain_summary(user_id, domain)
             if summary:
-                parts.append(f"CONVERSATION ({domain}): {summary}")
+                text, written = summary
+                parts.append(f"CONVERSATION ({domain}, up to {written.date().isoformat()}): {text}")
         return "\n".join(parts)
 
     # -- surfacing ------------------------------------------------------------

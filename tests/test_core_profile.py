@@ -4,9 +4,16 @@ import unittest
 from datetime import date, timedelta
 from uuid import UUID, uuid4
 
+from datetime import datetime, timezone
+
+from trellis.core_meta_tool import handle_save_preferences, handle_update_current_context
 from trellis.core_profile import (
-    CurrentContext,
+    CONTEXT_CAP,
+    AtCap,
+    ContextEntry,
     CurrentContextService,
+    LineGuard,
+    TooLong,
     UserProfile,
     UserProfileService,
 )
@@ -30,14 +37,47 @@ class FakeUserProfileRepository:
 
 class FakeCurrentContextRepository:
     def __init__(self):
-        self._contexts: dict[UUID, CurrentContext] = {}
+        self.entries: list[ContextEntry] = []
 
-    def get(self, user_id: UUID) -> CurrentContext | None:
-        return self._contexts.get(user_id)
+    def live(self, user_id: UUID, today: date) -> list[ContextEntry]:
+        return sorted(
+            (e for e in self.entries if e.user_id == user_id and e.expires_on >= today),
+            key=lambda e: e.said_on, reverse=True,
+        )
 
-    def upsert(self, context: CurrentContext) -> CurrentContext:
-        self._contexts[context.user_id] = context
-        return context
+    def add(self, entry: ContextEntry) -> ContextEntry:
+        self.entries.append(entry)
+        return entry
+
+    def remove(self, user_id: UUID, entry_id: UUID) -> bool:
+        before = len(self.entries)
+        self.entries = [e for e in self.entries if e.id != entry_id]
+        return len(self.entries) < before
+
+
+class FakeEmbedder:
+    """Bag-of-words vectors: shared words = similar. Enough to test the wiring."""
+    def embed(self, texts):
+        vocab = sorted({w for t in texts for w in t.lower().split()})
+        return [[float(t.lower().split().count(w)) for w in vocab] for t in texts]
+
+
+class FakePreferencesRepository:
+    def __init__(self):
+        self.rules: list[dict] = []
+
+    def list_rules(self, user_id, domain=None):
+        return list(self.rules)
+
+    def add_rule(self, user_id, domain, rule):
+        self.rules.append({"id": uuid4(), "domain": domain, "rule": rule})
+
+    def update_rule(self, user_id, rule_id, rule):
+        for r in self.rules:
+            if r["id"] == rule_id:
+                r["rule"] = rule
+                return True
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -85,66 +125,94 @@ class TestUserProfileService(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# CurrentContextService
+# CurrentContextService — a short dated log, shape enforced in Python
 # ---------------------------------------------------------------------------
 
 class TestCurrentContextService(unittest.TestCase):
     def setUp(self):
         self.repo = FakeCurrentContextRepository()
-        self.service = CurrentContextService(self.repo)
+        self.service = CurrentContextService(self.repo, LineGuard(FakeEmbedder()))
         self.user_id = uuid4()
         self.today = date(2026, 6, 21)
 
-    def test_get_valid_returns_none_when_no_context(self):
-        self.assertIsNone(self.service.get_valid(self.user_id, self.today))
+    def test_entry_is_dated_by_python_and_lapses_after_a_fortnight(self):
+        entry, similar = self.service.add(self.user_id, "back sore since the long run", today=self.today)
+        self.assertEqual(self.today, entry.said_on)
+        self.assertEqual(self.today + timedelta(days=14), entry.expires_on)
+        self.assertIsNone(similar)
+        self.assertEqual([], self.service.live(self.user_id, self.today + timedelta(days=15)))
 
-    def test_get_valid_returns_none_when_expired(self):
-        self.service.update(self.user_id, physical_notes="Back sore",
-                            valid_days=1, today=date(2026, 6, 1))
-        self.assertIsNone(self.service.get_valid(self.user_id, self.today))
+    def test_until_overrides_the_fortnight(self):
+        entry, _ = self.service.add(self.user_id, "travelling", today=self.today, until=date(2026, 9, 1))
+        self.assertEqual(date(2026, 9, 1), entry.expires_on)
 
-    def test_get_valid_returns_context_when_valid(self):
-        self.service.update(self.user_id, physical_notes="Back sore",
-                            valid_days=14, today=self.today)
-        ctx = self.service.get_valid(self.user_id, self.today)
-        self.assertIsNotNone(ctx)
-        self.assertEqual("Back sore", ctx.physical_notes)
+    def test_over_the_word_limit_is_refused_not_trimmed(self):
+        with self.assertRaises(TooLong) as caught:
+            self.service.add(self.user_id, "one two three four five six seven eight nine ten eleven", today=self.today)
+        self.assertEqual((11, 10), (caught.exception.words, caught.exception.limit))
+        self.assertEqual([], self.repo.entries)
 
-    def test_update_sets_valid_until(self):
-        ctx = self.service.update(self.user_id, valid_days=7, today=self.today)
-        self.assertEqual(self.today + timedelta(days=7), ctx.valid_until)
+    def test_a_near_repeat_is_saved_and_named(self):
+        self.service.add(self.user_id, "back sore since the long run", today=self.today)
+        entry, similar = self.service.add(self.user_id, "back sore since the long run yesterday", today=self.today)
+        self.assertEqual("back sore since the long run", similar)
+        self.assertIn(entry, self.repo.entries)
 
-    def test_update_merges_fields(self):
-        self.service.update(self.user_id, physical_notes="Back sore",
-                            valid_days=14, today=self.today)
-        ctx = self.service.update(self.user_id, misc_notes="Travelling",
-                                  valid_days=14, today=self.today)
-        self.assertEqual("Back sore", ctx.physical_notes)
-        self.assertEqual("Travelling", ctx.misc_notes)
+    def test_full_context_refuses_and_hands_back_what_is_there(self):
+        for n in range(CONTEXT_CAP):
+            self.service.add(self.user_id, f"thing number {n} zz{n}", today=self.today)
+        with self.assertRaises(AtCap) as caught:
+            self.service.add(self.user_id, "one more", today=self.today)
+        self.assertEqual(CONTEXT_CAP, len(caught.exception.entries))
 
-    def test_update_overwrites_specified_field(self):
-        self.service.update(self.user_id, physical_notes="Old",
-                            valid_days=14, today=self.today)
-        ctx = self.service.update(self.user_id, physical_notes="New",
-                                  valid_days=14, today=self.today)
-        self.assertEqual("New", ctx.physical_notes)
+    def test_remove_by_their_words_needs_exactly_one_match(self):
+        self.service.add(self.user_id, "back sore since the long run", today=self.today)
+        self.service.add(self.user_id, "back at work on Monday", today=self.today)
+        self.assertIsNone(self.service.remove(self.user_id, "back", today=self.today))
+        gone = self.service.remove(self.user_id, "sore", today=self.today)
+        self.assertEqual("back sore since the long run", gone.text)
+        self.assertEqual(1, len(self.service.live(self.user_id, self.today)))
 
-    def test_for_coach_includes_all_set_fields(self):
-        ctx = self.service.update(self.user_id, physical_notes="Back sore",
-                                  cognitive_notes="Foggy", misc_notes="Travelling",
-                                  valid_days=14, today=self.today)
-        text = ctx.for_coach()
-        self.assertIn("Back sore", text)
-        self.assertIn("Foggy", text)
-        self.assertIn("Travelling", text)
 
-    def test_for_coach_omits_none_fields(self):
-        ctx = self.service.update(self.user_id, misc_notes="Trip planning",
-                                  valid_days=14, today=self.today)
-        text = ctx.for_coach()
-        self.assertIn("Trip planning", text)
-        self.assertNotIn("Physical", text)
-        self.assertNotIn("cognitive", text.lower())
+class TestContextAndPreferenceHandlers(unittest.TestCase):
+    NOW = datetime(2026, 6, 21, 10, 0, tzinfo=timezone.utc)
+
+    def setUp(self):
+        self.guard = LineGuard(FakeEmbedder(), reference=["Never invent data"])
+        self.service = CurrentContextService(FakeCurrentContextRepository(), self.guard)
+        self.prefs = FakePreferencesRepository()
+        self.user_id = uuid4()
+
+    def test_context_refusal_tells_the_model_the_limit(self):
+        out = handle_update_current_context(
+            self.user_id, {"text": "a b c d e f g h i j k l"}, self.NOW, context_service=self.service)
+        self.assertIn("12 words, the limit is 10", out)
+
+    def test_context_bad_until_saves_nothing(self):
+        out = handle_update_current_context(
+            self.user_id, {"text": "travelling", "until": "next week"}, self.NOW, context_service=self.service)
+        self.assertIn("YYYY-MM-DD", out)
+        self.assertEqual([], self.service.live(self.user_id, self.NOW.date()))
+
+    def test_long_preference_is_refused_on_add_and_update(self):
+        long_rule = "please always make sure that you never ever do this one thing"
+        out = handle_save_preferences(self.user_id, {"action": "add", "text": long_rule}, self.NOW,
+                                      preferences_repository=self.prefs, guard=self.guard)
+        self.assertIn("Not saved", out)
+        self.assertEqual([], self.prefs.rules)
+        self.prefs.add_rule(self.user_id, "global", "Short rule")
+        out = handle_save_preferences(
+            self.user_id, {"action": "update", "rule_id": str(self.prefs.rules[0]["id"]), "text": long_rule},
+            self.NOW, preferences_repository=self.prefs, guard=self.guard)
+        self.assertIn("Not saved", out)
+        self.assertEqual("Short rule", self.prefs.rules[0]["rule"])
+
+    def test_preference_repeating_the_constitution_is_saved_and_named(self):
+        out = handle_save_preferences(self.user_id, {"action": "add", "text": "Never invent data please"},
+                                      self.NOW, preferences_repository=self.prefs, guard=self.guard)
+        self.assertIn("Rule saved", out)
+        self.assertIn("Never invent data", out)
+        self.assertEqual(1, len(self.prefs.rules))
 
 
 if __name__ == "__main__":

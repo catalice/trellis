@@ -72,12 +72,19 @@ silently discard.
 """
 
 
+def constitution_lines() -> list[str]:
+    """The constitution's rules, one per item — so a preference that repeats
+    one can be noticed (one home per rule)."""
+    rules = _SYSTEM_BASE.split("\nListening\n", 1)[-1]
+    return [ln.removeprefix("- ").strip() for ln in rules.splitlines() if len(ln.split()) > 3]
+
+
 class _HistoryRepo(Protocol):
     def append(self, user_id: UUID, role: str, content: str, metadata: dict | None = None) -> None: ...
     def recent(self, user_id: UUID, limit: int) -> list: ...
     def recent_window(self, user_id: UUID, *, since, cap: int) -> list: ...
     def to_messages(self, turns: list) -> list[dict]: ...
-    def domain_summary(self, user_id: UUID, domain: str) -> str | None: ...
+    def domain_summary(self, user_id: UUID, domain: str) -> tuple[str, datetime] | None: ...
     def turn_count(self, user_id: UUID) -> int: ...
     def max_turns_covered(self, user_id: UUID) -> int: ...
     def prune(self, user_id: UUID, keep: int = 50) -> None: ...
@@ -247,7 +254,9 @@ class Assembler:
         for domain in sorted_domains:
             summary = self._history.domain_summary(user_id, domain)
             if summary:
-                parts.append(f"[{domain} conversation history]\n{summary}")
+                text, written = summary
+                day = written.astimezone(self._timezone).strftime("%-d %b") if self._timezone else written.strftime("%-d %b")
+                parts.append(f"[{domain} — what was discussed, up to {day}]\n{text}")
 
         return "\n\n---\n\n".join(parts)
 

@@ -14,13 +14,12 @@ from uuid import UUID
 _log = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are summarising a conversation for future context.
-Focus on the {domain} domain. Capture:
-- Key decisions made
-- Current state (what's in progress, what was completed)
-- Important context that would be useful in future conversations
+You are recording what a conversation covered, for future context.
+Focus on the {domain} domain. Past tense: what they said, what was done, what \
+was left open. Never state what is currently true or decided — the stores hold \
+that, and this will be read days later.
 
-Be concise. 150 words max. Plain text, no headers.\
+100 words max. Plain text, no headers.\
 """
 
 

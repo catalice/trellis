@@ -354,7 +354,7 @@ Three tiers. Every piece of data belongs in exactly one.
 
 **Tier 1a — The core (big brain, always loaded, every turn):**
 - **Profile** — who Cat is, physiology, background
-- **Life context** — user-managed via `update_current_context`. "Big deadline in 3 weeks." Affects everything.
+- **Life context** — a short dated log (migration 026): one line per entry, their words, Python-dated, each lapsing on its own. Decisions and facts no store holds — never interpretation, never anything a store can compute. `update_current_context` add/remove.
 - The core is deliberately minimal. The test for core membership: *needed on EVERY call?* If not → it's a house.
 
 **Tier 1b — House-routed** (loaded when the house lights up):
@@ -399,6 +399,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - **Content belongs to Claude.** Never hardcode session content, coaching rules, or synthesis logic in Python.
 - **max_tokens too low truncates JSON silently.** Always set 16000+ for structured responses (on Sonnet 5, thinking shares the max_tokens cap).
 - **Preferences are rows.** One rule, one row, one id (migration 021) — add/list/update/remove individually; a new rule can never touch an old one. They project to Atlas/Brain/Preferences.md, where the user reviews them.
+- **Python shapes what the model writes into always-loaded slots.** Context lines and preference rules: 10 words, refused if longer, never trimmed; a near-repeat is saved and named (`LineGuard`). Narrative memory never states what is currently true — stores and computed lines do; summaries are dated and past-tense.
 - **Exactness ≠ permanence.** One exact prescription per session (her preference row, not prompt text — given options she'll overreach or always take the easy one), but every prescription is re-chosen in the weekly review — never carried forward by default. When the review happens is hers too (the check-in reminder), not the coach's.
 - **Don't revert a commit by amending.** Create a new commit.
 - **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.

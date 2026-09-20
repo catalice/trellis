@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from psycopg2.extras import RealDictCursor
 
@@ -42,26 +42,67 @@ class UserProfile:
 
 
 @dataclass(frozen=True)
-class CurrentContext:
+class ContextEntry:
+    """One line of life context: their words, the day they said it, when it lapses."""
+    id: UUID
     user_id: UUID
-    physical_notes: str | None
-    cognitive_notes: str | None
-    misc_notes: str | None
-    valid_until: date
-    updated_at: datetime
+    text: str
+    said_on: date
+    expires_on: date
 
-    def is_valid(self, today: date) -> bool:
-        return self.valid_until >= today
 
-    def for_coach(self) -> str:
-        lines = []
-        if self.physical_notes:
-            lines.append(f"Physical (current): {self.physical_notes}")
-        if self.cognitive_notes:
-            lines.append(f"Life/cognitive (current): {self.cognitive_notes}")
-        if self.misc_notes:
-            lines.append(f"Other (current): {self.misc_notes}")
-        return "\n".join(lines)
+WORD_LIMIT = 10          # one line, not waffle — context entries and preference rules alike
+CONTEXT_CAP = 12         # live context entries; the slot loads every turn
+CONTEXT_DAYS = 14
+_SIMILAR = 0.78         # bge-small: real repeats ~0.80+, different rules ≤0.67; a false warning is cheap
+
+
+class TooLong(ValueError):
+    def __init__(self, words: int, limit: int) -> None:
+        super().__init__(f"{words} words, limit {limit}")
+        self.words, self.limit = words, limit
+
+
+class AtCap(ValueError):
+    def __init__(self, entries: list) -> None:
+        super().__init__("context is full")
+        self.entries = entries
+
+
+class LineGuard:
+    """Shape control for anything the model writes that loads every turn. Python
+    can't judge wording; it can refuse length and notice a near-repeat."""
+
+    def __init__(self, embedder=None, *, limit: int = WORD_LIMIT, reference: list[str] | None = None) -> None:
+        self._embedder = embedder
+        self.limit = limit
+        self._reference = list(reference or [])
+
+    def check_length(self, text: str) -> None:
+        words = len(text.split())
+        if words > self.limit:
+            raise TooLong(words, self.limit)
+
+    def similar(self, text: str, others: list[str]) -> str | None:
+        """The closest existing line if it's near enough to be the same rule,
+        else None. No embedder, or a failed embed, means no warning — never a block."""
+        pool = [o for o in [*others, *self._reference] if o and o != text]
+        if self._embedder is None or not pool:
+            return None
+        try:
+            vectors = self._embedder.embed([text, *pool])
+        except Exception:
+            return None
+        if not vectors:
+            return None
+        head, rest = vectors[0], vectors[1:]
+        def cos(a, b):
+            dot = sum(x * y for x, y in zip(a, b))
+            na = sum(x * x for x in a) ** 0.5
+            nb = sum(y * y for y in b) ** 0.5
+            return dot / (na * nb) if na and nb else 0.0
+        score, line = max(((cos(head, v), o) for v, o in zip(rest, pool)), key=lambda s: s[0])
+        return line if score >= _SIMILAR else None
 
 
 # ---------------------------------------------------------------------------
@@ -74,8 +115,9 @@ class UserProfileRepository(Protocol):
 
 
 class CurrentContextRepository(Protocol):
-    def get(self, user_id: UUID) -> CurrentContext | None: ...
-    def upsert(self, context: CurrentContext) -> CurrentContext: ...
+    def live(self, user_id: UUID, today: date) -> list[ContextEntry]: ...
+    def add(self, entry: ContextEntry) -> ContextEntry: ...
+    def remove(self, user_id: UUID, entry_id: UUID) -> bool: ...
 
 
 # ---------------------------------------------------------------------------
@@ -111,42 +153,41 @@ class UserProfileService:
 
 
 class CurrentContextService:
-    def __init__(self, repository: CurrentContextRepository) -> None:
+    def __init__(self, repository: CurrentContextRepository, guard: LineGuard | None = None) -> None:
         self.repository = repository
+        self.guard = guard or LineGuard()
 
-    def get(self, user_id: UUID) -> CurrentContext | None:
-        """The stored context even if EXPIRED — the Brain page shows truth."""
-        return self.repository.get(user_id)
+    def live(self, user_id: UUID, today: date) -> list[ContextEntry]:
+        """Unexpired entries, newest first."""
+        return self.repository.live(user_id, today)
 
-    def get_valid(self, user_id: UUID, today: date) -> CurrentContext | None:
-        ctx = self.repository.get(user_id)
-        if ctx is None or not ctx.is_valid(today):
+    def add(
+        self, user_id: UUID, text: str, *, today: date, until: date | None = None,
+    ) -> tuple[ContextEntry, str | None]:
+        """Returns the saved entry and the near-duplicate line it resembles, if any.
+        Raises TooLong / AtCap — refused, never trimmed."""
+        text = " ".join(text.split())
+        self.guard.check_length(text)
+        current = self.repository.live(user_id, today)
+        if len(current) >= CONTEXT_CAP:
+            raise AtCap(current)
+        similar = self.guard.similar(text, [e.text for e in current])
+        entry = self.repository.add(ContextEntry(
+            id=uuid4(), user_id=user_id, text=text, said_on=today,
+            expires_on=until or today + timedelta(days=CONTEXT_DAYS),
+        ))
+        return entry, similar
+
+    def remove(self, user_id: UUID, text: str, *, today: date) -> ContextEntry | None:
+        """Remove the one live entry these words point at; None when they match
+        nothing or more than one."""
+        needle = " ".join(text.lower().split())
+        hits = [e for e in self.repository.live(user_id, today) if needle and needle in e.text.lower()]
+        exact = [e for e in hits if e.text.lower() == needle]
+        chosen = exact or hits
+        if len(chosen) != 1:
             return None
-        return ctx
-
-    def update(
-        self,
-        user_id: UUID,
-        *,
-        physical_notes: str | None = None,
-        cognitive_notes: str | None = None,
-        misc_notes: str | None = None,
-        valid_days: int = 14,
-        today: date,
-    ) -> CurrentContext:
-        existing = self.repository.get(user_id)
-        ctx = CurrentContext(
-            user_id=user_id,
-            physical_notes=physical_notes if physical_notes is not None
-                           else (existing.physical_notes if existing else None),
-            cognitive_notes=cognitive_notes if cognitive_notes is not None
-                            else (existing.cognitive_notes if existing else None),
-            misc_notes=misc_notes if misc_notes is not None
-                       else (existing.misc_notes if existing else None),
-            valid_until=today + timedelta(days=valid_days),
-            updated_at=datetime.now(timezone.utc),
-        )
-        return self.repository.upsert(ctx)
+        return chosen[0] if self.repository.remove(user_id, chosen[0].id) else None
 
 
 # ---------------------------------------------------------------------------
@@ -197,45 +238,46 @@ class PostgresCurrentContextRepository:
     def __init__(self, database: PostgresDatabase) -> None:
         self.database = database
 
-    def get(self, user_id: UUID) -> CurrentContext | None:
-        with self.database.connect() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM current_context WHERE user_id = %s", (user_id,))
-                row = cur.fetchone()
-        return self._row(row) if row else None
-
-    def upsert(self, context: CurrentContext) -> CurrentContext:
+    def live(self, user_id: UUID, today: date) -> list[ContextEntry]:
         with self.database.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
-                    INSERT INTO current_context
-                        (user_id, physical_notes, cognitive_notes, misc_notes, valid_until, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        physical_notes = EXCLUDED.physical_notes,
-                        cognitive_notes = EXCLUDED.cognitive_notes,
-                        misc_notes = EXCLUDED.misc_notes,
-                        valid_until = EXCLUDED.valid_until,
-                        updated_at = EXCLUDED.updated_at
+                    SELECT * FROM context_entries
+                    WHERE user_id = %s AND expires_on >= %s
+                    ORDER BY said_on DESC, created_at DESC
+                    """,
+                    (user_id, today),
+                )
+                return [self._row(r) for r in cur.fetchall()]
+
+    def add(self, entry: ContextEntry) -> ContextEntry:
+        with self.database.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO context_entries (id, user_id, text, said_on, expires_on)
+                    VALUES (%s, %s, %s, %s, %s)
                     RETURNING *
                     """,
-                    (
-                        context.user_id, context.physical_notes, context.cognitive_notes,
-                        context.misc_notes, context.valid_until, context.updated_at,
-                    ),
+                    (entry.id, entry.user_id, entry.text, entry.said_on, entry.expires_on),
                 )
                 return self._row(cur.fetchone())
 
+    def remove(self, user_id: UUID, entry_id: UUID) -> bool:
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM context_entries WHERE user_id = %s AND id = %s",
+                    (user_id, entry_id),
+                )
+                return cur.rowcount > 0
+
     @staticmethod
-    def _row(row: dict) -> CurrentContext:
-        return CurrentContext(
-            user_id=row["user_id"],
-            physical_notes=row["physical_notes"],
-            cognitive_notes=row["cognitive_notes"],
-            misc_notes=row["misc_notes"],
-            valid_until=row["valid_until"],
-            updated_at=row["updated_at"],
+    def _row(row: dict) -> ContextEntry:
+        return ContextEntry(
+            id=row["id"], user_id=row["user_id"], text=row["text"],
+            said_on=row["said_on"], expires_on=row["expires_on"],
         )
 
 

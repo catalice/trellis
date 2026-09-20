@@ -8,7 +8,7 @@ from uuid import UUID
 from anthropic import Anthropic
 from telegram import Update
 
-from trellis.core_assembler import Assembler
+from trellis.core_assembler import Assembler, constitution_lines
 from trellis.core_config import Settings
 from trellis.core_history import PostgresConversationHistory
 from trellis.core_meta_tool import meta_tools
@@ -31,6 +31,7 @@ from trellis.infra_search import SearchGateway
 from trellis.infra_postgres import PostgresDatabase
 from trellis.core_profile import (
     CurrentContextService,
+    LineGuard,
     PostgresCurrentContextRepository,
     PostgresPreferencesRepository,
     PostgresUserProfileRepository,
@@ -119,14 +120,13 @@ def _profile_loader(svc: UserProfileService):
 
 def _current_context_loader(svc: CurrentContextService):
     def loader(user_id: UUID, now: datetime) -> str | None:
-        ctx = svc.get_valid(user_id, now.date())
-        if ctx:
-            text = ctx.for_coach()
-            return f"[Current context]\n{text}" if text else None
-        # Empty or expired: their life moved on and this slot went dark —
-        # surface it so a natural moment refills it (never nag).
-        state = "EXPIRED" if svc.get(user_id) is not None else "empty"
-        return (f"[Current context] {state} — ask what's live in their life "
+        entries = svc.live(user_id, now.date())
+        if entries:
+            return "[Live — their words]\n" + "\n".join(
+                f"{e.said_on.strftime('%-d %b')}: {e.text}" for e in entries)
+        # Nothing live: their life moved on and this slot went dark — surface
+        # it so a natural moment refills it (never nag).
+        return ("[Live — their words] empty — ask what's live in their life "
                 "when a natural moment comes.")
     return loader
 
@@ -225,7 +225,10 @@ def main() -> None:
 
     # --- Permanent context services ---
     profile_service = UserProfileService(PostgresUserProfileRepository(database))
-    context_service = CurrentContextService(PostgresCurrentContextRepository(database))
+    # Shape control for what the model writes into always-loaded slots: a word
+    # limit, and a near-repeat warning against their rows and the constitution.
+    line_guard = LineGuard(embedder, reference=constitution_lines())
+    context_service = CurrentContextService(PostgresCurrentContextRepository(database), line_guard)
 
     # --- Second brain domain services ---
     capture_repo = PostgresCaptureRepository(database)
@@ -369,7 +372,7 @@ def main() -> None:
         vault.brain_changed(
             uid,
             profile=profile_service.get(uid),
-            context=context_service.get(uid),
+            context=context_service.live(uid, datetime.now(timezone.utc).date()),
             pref_rules=preferences_repository.list_rules(uid),
             kinds=state_repo.tracked_kinds(uid),
         )
@@ -383,7 +386,8 @@ def main() -> None:
                 tz=settings.timezone,
             ),
         ),
-        *meta_tools(context_service, preferences_repository, brain_changed=brain_refresh),
+        *meta_tools(context_service, preferences_repository, brain_changed=brain_refresh,
+                    guard=line_guard),
         (
             PATTERN_RESPONSE_TOOL,
             lambda uid, inp, now: handle_pattern_response(uid, inp, now, watcher=watcher),

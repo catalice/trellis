@@ -758,16 +758,12 @@ class ObsidianVault:
                 lines.append("*Empty — onboarding fills this.*\n")
             (folder / "Profile.md").write_text("\n".join(lines), encoding="utf-8")
 
-            lines = ["# Current context\n", stamp]
-            if context is not None:
-                until = getattr(context, "valid_until", None)
-                if until:
-                    lines.append(f"*Valid until {until}*\n")
-                for label, val in (("Now", getattr(context, "misc_notes", None)),
-                                   ("Physical", getattr(context, "physical_notes", None)),
-                                   ("Cognitive", getattr(context, "cognitive_notes", None))):
-                    if val:
-                        lines.append(f"**{label}:** {val}\n")
+            lines = ["# Current context\n", stamp,
+                     "*One line each, dated. To drop one, tell Trellis — quote it.*\n"]
+            if context:
+                for e in context:
+                    lines.append(f"- {e.said_on.strftime('%-d %b')}: {e.text}  \n"
+                                 f"  *until {e.expires_on.strftime('%-d %b')}*\n")
             else:
                 lines.append("*Empty — tell Trellis what's live in your life.*\n")
             (folder / "Context.md").write_text("\n".join(lines), encoding="utf-8")
