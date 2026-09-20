@@ -31,7 +31,7 @@ Fill in `.env`:
 | Variable | What it is |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | from BotFather |
-| `TELEGRAM_ALLOWED_USERS` | your numeric Telegram id (comma-separated if several) |
+| `TELEGRAM_ALLOWED_USERS` | your numeric Telegram id. Empty admits nobody — start the bot and send it `/start` to learn your id. Trellis answers in private chats only, never in groups |
 | `ANTHROPIC_API_KEY` | your API key |
 | `ANTHROPIC_MODEL` | leave the default unless you know why |
 | `DATABASE_URL` | leave the default for Docker |

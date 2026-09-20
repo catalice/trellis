@@ -7,8 +7,10 @@ services:
       POSTGRES_USER: trellis
       POSTGRES_PASSWORD: trellis
       POSTGRES_DB: trellis
+    # This machine only. The bot reaches Postgres over the compose network; the
+    # published port is for local tools, never the LAN.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - trellis_postgres:/var/lib/postgresql/data
     healthcheck:

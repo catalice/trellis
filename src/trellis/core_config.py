@@ -70,6 +70,12 @@ class Settings:
             raise ValueError("ANTHROPIC_API_KEY is required")
         if not self.obsidian_vault.is_dir():
             raise ValueError(f"Obsidian vault does not exist: {self.obsidian_vault}")
+        if len(self.telegram_allowed_users) > 1:
+            # One vault, one set of Brain pages, one life. A second person's
+            # notes would be projected into the first person's vault.
+            raise ValueError(
+                "TELEGRAM_ALLOWED_USERS names more than one person. Trellis serves "
+                "one person per instance — run a separate instance for each.")
 
     def validate_health(self) -> None:
         if not self.health_worker_url.strip():

@@ -192,8 +192,7 @@ class TelegramTrellis:
             try:
                 users = await asyncio.to_thread(self.database.list_users)
                 for user_id, tg_id in users:
-                    if (self.settings.telegram_allowed_users
-                            and tg_id not in self.settings.telegram_allowed_users):
+                    if not self._is_allowed(tg_id):
                         continue
                     old = await asyncio.to_thread(self._message_log.get_marker, tg_id)
                     sent = await application.bot.send_message(
@@ -257,10 +256,7 @@ class TelegramTrellis:
         now = datetime.now(timezone.utc)
         users = await asyncio.to_thread(self.database.list_users)
         for user_id, telegram_user_id in users:
-            if (
-                self.settings.telegram_allowed_users
-                and telegram_user_id not in self.settings.telegram_allowed_users
-            ):
+            if not self._is_allowed(telegram_user_id):
                 continue
             due = await asyncio.to_thread(
                 self.reminders.upcoming, user_id, hours=0, now=now
@@ -324,6 +320,16 @@ class TelegramTrellis:
                         self.logger.warning("Failed to deliver check-in", exc_info=True)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if self._user(update) is None:
+            chat = update.effective_chat
+            if chat is not None and chat.type == "private":
+                # Setup help, nothing private: their own id is what the
+                # allowlist needs.
+                await update.message.reply_text(
+                    f"This Trellis isn't set up for you. Your Telegram id is "
+                    f"{update.effective_user.id} — its owner adds it to TELEGRAM_ALLOWED_USERS."
+                )
+            return
         await update.message.reply_text(
             "Trellis is ready. Send tasks, ideas, questions or a full brain dump. "
             "I'll preserve the original and organise what's useful."
@@ -449,12 +455,19 @@ class TelegramTrellis:
         except Exception:
             self.logger.warning("Failed to send embed-failure alert", exc_info=True)
 
+    def _is_allowed(self, telegram_user_id: int) -> bool:
+        """Only ids named in TELEGRAM_ALLOWED_USERS. An empty list admits
+        nobody — an unconfigured bot must not be an open one."""
+        return telegram_user_id in self.settings.telegram_allowed_users
+
     def _user(self, update: Update):
+        # A private chat with an allowed person, or nothing. In a group the
+        # reply — built from their private context — would be read by everyone.
+        chat = update.effective_chat
+        if chat is None or chat.type != "private":
+            return None
         telegram_user_id = update.effective_user.id
-        if (
-            self.settings.telegram_allowed_users
-            and telegram_user_id not in self.settings.telegram_allowed_users
-        ):
+        if not self._is_allowed(telegram_user_id):
             return None
         return self.database.ensure_user(
             telegram_user_id,
