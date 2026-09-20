@@ -63,8 +63,50 @@ def test_one_person_per_instance_is_enforced_at_startup(tmp_path):
     import pytest
     from trellis.core_config import Settings
     base = Settings.from_env()
-    one = dataclasses.replace(base, telegram_bot_token="t", anthropic_api_key="k",
+    one = dataclasses.replace(base, telegram_bot_token="t", anthropic_api_key="k", database_url="dsn",
                               obsidian_vault=tmp_path, telegram_allowed_users=frozenset({1}))
     one.validate()
     with pytest.raises(ValueError, match="one person per instance"):
         dataclasses.replace(one, telegram_allowed_users=frozenset({1, 2})).validate()
+
+
+class TestDatabaseCredentials:
+    """The install's own password, whatever characters it holds, and no public default."""
+
+    def _settings(self, monkeypatch, **env):
+        from trellis.core_config import Settings
+        for key in ("DATABASE_URL", "POSTGRES_PASSWORD", "POSTGRES_HOST", "POSTGRES_PORT"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr("trellis.core_config.load_dotenv", lambda *a, **k: None)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        return Settings.from_env()
+
+    def test_a_password_with_url_characters_connects_as_typed(self, monkeypatch):
+        from psycopg2.extensions import parse_dsn
+        awkward = "p@ss/w%rd with:space?&#"
+        settings = self._settings(monkeypatch, POSTGRES_PASSWORD=awkward, POSTGRES_HOST="postgres", POSTGRES_PORT="5432")
+        parsed = parse_dsn(settings.database_url)
+        assert parsed["password"] == awkward
+        assert (parsed["host"], parsed["port"], parsed["user"], parsed["dbname"]) == ("postgres", "5432", "trellis", "trellis")
+
+    def test_an_explicit_database_url_still_wins(self, monkeypatch):
+        settings = self._settings(monkeypatch, DATABASE_URL="postgresql://u:p@h:1/d", POSTGRES_PASSWORD="x")
+        assert settings.database_url == "postgresql://u:p@h:1/d"
+
+    def test_no_credentials_means_no_connection_string_and_a_clear_refusal(self, monkeypatch, tmp_path):
+        import dataclasses
+        import pytest
+        settings = self._settings(monkeypatch)
+        assert "trellis:trellis" not in settings.database_url
+        ready = dataclasses.replace(settings, telegram_bot_token="t", anthropic_api_key="k",
+                                    obsidian_vault=tmp_path, telegram_allowed_users=frozenset({1}))
+        with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+            ready.validate()
+
+    def test_the_repository_ships_no_default_database_password(self):
+        from pathlib import Path
+        root = Path(__file__).parent.parent
+        for name in ("docker-compose.yml", ".env.example", "src/trellis/core_config.py", "scripts/backfill_embeddings.py"):
+            assert "trellis:trellis@" not in (root / name).read_text(), name
+        assert ":-trellis}" not in (root / "docker-compose.yml").read_text()

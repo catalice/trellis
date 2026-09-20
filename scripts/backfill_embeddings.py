@@ -21,16 +21,21 @@ from trellis.infra_embeddings import LocalEmbedder
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_postgres import PostgresDatabase
 
-# Host-reachable URL for the running container (compose exposes 5432 -> 5433).
-DB_URL = os.getenv(
-    "BACKFILL_DATABASE_URL", "postgresql://trellis:trellis@localhost:5433/trellis"
-)
+# Host-reachable by default (compose publishes Postgres on this machine's 5433).
+# Read lazily, in main(): the .env that holds the credentials is loaded there.
+def _db_url() -> str:
+    from trellis.core_config import database_dsn
+    return os.getenv("BACKFILL_DATABASE_URL", "").strip() or database_dsn()
 
 
 def main() -> int:
     load_dotenv()
     # Local embedder — no key needed.
-    database = PostgresDatabase(DB_URL)
+    url = _db_url()
+    if not url:
+        print("No database credentials: set POSTGRES_PASSWORD (or DATABASE_URL) in .env", file=sys.stderr)
+        return 2
+    database = PostgresDatabase(url)
     memory = MemoryIndex(database, LocalEmbedder())
 
     # (entity_kind, entity_id, user_id, text) for everything not yet filed.

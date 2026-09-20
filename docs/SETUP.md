@@ -34,10 +34,9 @@ Fill in `.env`:
 | `TELEGRAM_ALLOWED_USERS` | your numeric Telegram id. Empty admits nobody — start the bot and send it `/start` to learn your id. Trellis answers in private chats only, never in groups |
 | `ANTHROPIC_API_KEY` | your API key |
 | `ANTHROPIC_MODEL` | leave the default unless you know why |
-| `DATABASE_URL` | leave the default for Docker |
 | `OBSIDIAN_VAULT` | absolute path to your vault folder on the host |
 | `TRELLIS_TIMEZONE` | your IANA timezone, e.g. `Europe/London` |
-| `POSTGRES_PASSWORD` | your own database password — set it **before** the first start. The database is only reachable from this machine either way |
+| `POSTGRES_PASSWORD` | **required** — your own database password, any characters, set **before** the first start. There is no default. The database is only reachable from this machine |
 | `TRELLIS_SECRET_KEY` | any long random string — encrypts stored Garmin sessions |
 | `HEALTH_WORKER_SECRET` | any long random string — auths the Garmin worker |
 | `GROQ_API_KEY` | optional, voice notes |

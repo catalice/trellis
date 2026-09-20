@@ -8,6 +8,27 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 
+def database_dsn() -> str:
+    """How to reach Postgres. An explicit DATABASE_URL wins. Otherwise the DSN is
+    built from parts, so the install's own POSTGRES_PASSWORD works whatever
+    characters it holds — a password pasted into a URL breaks on '/', '%' or '@'.
+    There is no default password: no credentials, no connection string."""
+    url = os.getenv("DATABASE_URL", "").strip()
+    if url:
+        return url
+    password = os.getenv("POSTGRES_PASSWORD", "")
+    if not password:
+        return ""
+    from psycopg2.extensions import make_dsn
+    return make_dsn(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=os.getenv("POSTGRES_PORT", "5433"),      # the port compose publishes to this machine
+        dbname=os.getenv("POSTGRES_DB", "trellis"),
+        user=os.getenv("POSTGRES_USER", "trellis"),
+        password=password,
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -42,10 +63,7 @@ class Settings:
                 "ANTHROPIC_MODEL",
                 "claude-sonnet-5",
             ),
-            database_url=os.getenv(
-                "DATABASE_URL",
-                "postgresql://trellis:trellis@localhost:5433/trellis",
-            ),
+            database_url=database_dsn(),
             obsidian_vault=Path(
                 os.getenv("OBSIDIAN_VAULT", "./vault")
             ).expanduser(),
@@ -64,6 +82,9 @@ class Settings:
         )
 
     def validate(self) -> None:
+        if not self.database_url:
+            raise ValueError(
+                "No database credentials: set POSTGRES_PASSWORD in .env (or a full DATABASE_URL)")
         if not self.telegram_bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
         if not self.anthropic_api_key:
