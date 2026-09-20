@@ -204,7 +204,10 @@ class TestOracleSilentFinish:
         class FakeClient:
             def __init__(self, resps): self.messages = FakeMessages(resps)
 
-        return Oracle(client=FakeClient(responses), model="test")
+        # Through the real Anthropic connector, fed Anthropic-shaped responses:
+        # the behaviour these tests lock must hold across the model boundary.
+        from trellis.infra_anthropic import AnthropicConnector
+        return Oracle(AnthropicConnector(FakeClient(responses), "test"))
 
     def test_silent_end_turn_is_nudged_once(self):
         """A silent end_turn after tools now gets ONE nudge call asking the
@@ -300,10 +303,11 @@ class TestOracleDeliversEveryStep:
             def __init__(self, resps): self.messages = Msgs(resps)
 
         from trellis.core_oracle import Oracle
-        oracle = Oracle(client=Client([
+        from trellis.infra_anthropic import AnthropicConnector
+        oracle = Oracle(AnthropicConnector(Client([
             self._Resp("tool_use", [self._Block(type="text", text="Answer."), self._tool()]),
             self._Resp("end_turn", [self._Block(type="text", text="More.")]),
-        ]), model="test")
+        ]), "test"))
         oracle.run("sys", [{"role": "user", "content": "q"}],
                    tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "ok"})
         rider = seen[1]["messages"][-1]["content"][-1]["text"]

@@ -2,7 +2,7 @@
 Handles one conversation turn end to end.
 
 Knows about: context layer ordering, domain routing, history, tool binding.
-Does NOT know about: Claude API, specific domains, DB schemas.
+Does NOT know about: any model provider's API, specific domains, DB schemas.
 
 To change context layer order or content: edit _build_context.
 To add a domain: edit main.py only — nothing here changes.
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 from uuid import UUID
 
+from trellis.core_model import SystemPrompt
 from trellis.core_oracle import Oracle
 from trellis.core_registry import ContextLoader, TrellisRegistry
 from trellis.core_router import Router
@@ -147,14 +148,9 @@ class Assembler:
         _log.debug("routed %s → %s", message[:60], domains)
 
         context = self._build_context(user_id, now, domains)
-        # System as two blocks: the constitution never changes, so it (plus the
-        # tool schemas before it) caches at a tenth of the price; the context
-        # block is the volatile tail.
-        system = [
-            {"type": "text", "text": _SYSTEM_BASE,
-             "cache_control": {"type": "ephemeral"}},
-            {"type": "text", "text": f"---\n\n{context}"},
-        ]
+        # The constitution never changes; the context is this turn's. Said so,
+        # a connector can cache the stable part (with the tool definitions).
+        system = SystemPrompt(stable=_SYSTEM_BASE, volatile=context)
 
         tool_schemas, bound_handlers = self._build_tools(user_id, now, domains)
 
@@ -166,12 +162,9 @@ class Assembler:
             {"role": "user", "content": message},
         ]
         # History is append-only within the day, so its prefix is stable —
-        # mark the last history message and the whole prefix caches too.
+        # mark where it ends and a connector can cache the whole prefix too.
         if len(messages) >= 2 and isinstance(messages[-2].get("content"), str):
-            messages[-2]["content"] = [{
-                "type": "text", "text": messages[-2]["content"],
-                "cache_control": {"type": "ephemeral"},
-            }]
+            messages[-2] = {**messages[-2], "stable_prefix": True}
 
         # The user's message is persisted BEFORE the oracle runs: if the API
         # dies past its retries mid-turn, tool side effects from earlier

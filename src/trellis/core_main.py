@@ -14,6 +14,7 @@ from trellis.core_history import PostgresConversationHistory
 from trellis.core_meta_tool import meta_tools
 from trellis.core_onboarding import ONBOARDING_SYSTEM, needs_onboarding, onboarding_tools
 from trellis.core_oracle import Oracle
+from trellis.infra_anthropic import AnthropicConnector
 from trellis.core_registry import TrellisRegistry
 from trellis.core_summariser import make_summariser
 from trellis.core_telegram import TelegramTrellis, make_transcriber
@@ -361,7 +362,7 @@ def main() -> None:
         rooms=MOVE_ROOMS,
     )
 
-    oracle = Oracle(client=anthropic_client, model=settings.anthropic_model)
+    oracle = Oracle(AnthropicConnector(anthropic_client, settings.anthropic_model))
 
     # --- The Watcher (the big brain's slow mind) ---
     # Discovery is the ONLY source of hypotheses — nothing is planted here.
