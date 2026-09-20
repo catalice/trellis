@@ -36,4 +36,5 @@ class LearnEntry:
     region: str | None = None           # where THEY placed it on the map
     source_url: str | None = None
     source_title: str | None = None
+    source_basis: str | None = None       # how much of the source was reached when kept; None = never checked
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

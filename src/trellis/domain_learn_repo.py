@@ -72,12 +72,12 @@ class PostgresLearnRepository:
                     """
                     INSERT INTO learn_entries
                         (id, user_id, thread_id, kind, region, content,
-                         source_url, source_title, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         source_url, source_title, source_basis, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (entry.id, entry.user_id, entry.thread_id, str(entry.kind),
                      entry.region, entry.content, entry.source_url,
-                     entry.source_title, entry.created_at),
+                     entry.source_title, entry.source_basis, entry.created_at),
                 )
                 cur.execute(
                     "UPDATE learn_threads SET updated_at = NOW() WHERE id = %s",
@@ -109,5 +109,6 @@ def _entry(row: dict) -> LearnEntry:
         id=row["id"], user_id=row["user_id"], thread_id=row["thread_id"],
         kind=EntryKind(row["kind"]), content=row["content"],
         region=row.get("region"), source_url=row.get("source_url"),
-        source_title=row.get("source_title"), created_at=row["created_at"],
+        source_title=row.get("source_title"), source_basis=row.get("source_basis"),
+        created_at=row["created_at"],
     )

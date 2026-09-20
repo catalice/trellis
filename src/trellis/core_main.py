@@ -265,7 +265,7 @@ def main() -> None:
     reminder_service = ReminderService(reminder_repo, settings.timezone, projection=vault)
     goal_service = GoalService(goal_repo)
     learn_service = LearnService(
-        PostgresLearnRepository(database), settings.timezone, projection=vault,
+        PostgresLearnRepository(database), settings.timezone, projection=vault, sources=web_search,
     )
 
     def _dump_hints(uid) -> str | None:

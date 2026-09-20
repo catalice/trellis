@@ -68,6 +68,35 @@ class TestSourceInTruth:
                           source_title="Example History", now=NOW)
         assert e.source_url == "https://example.org/nato"
 
+    def test_a_kept_source_records_how_much_of_it_was_reached(self):
+        """A URL is not a reading: 'fetched' used to mean only that a link was present."""
+        from types import SimpleNamespace
+        reads = SimpleNamespace(read=lambda url: SimpleNamespace(basis="abstract only"))
+        svc = LearnService(FakeRepo(), TZ, sources=reads)
+        thread = svc.find_or_create_thread(UID, "Sleep", NOW)
+        e = svc.add_entry(UID, thread, kind=EntryKind.SOURCE, content="Caffeine and sleep onset",
+                          source_url="https://pubmed.ncbi.nlm.nih.gov/1/", now=NOW)
+        assert e.source_basis == "abstract only"
+
+    def test_an_unreadable_source_is_kept_and_says_it_was_not_read(self):
+        from types import SimpleNamespace
+        from trellis.domain_learn_tool import handle_learn_add, handle_learn_get
+        svc = LearnService(FakeRepo(), TZ, sources=SimpleNamespace(read=lambda url: None))
+        svc.find_or_create_thread(UID, "Sleep", NOW)
+        reply = handle_learn_add(UID, {"what": "entry", "thread": "Sleep", "kind": "source",
+                                       "content": "Paywalled review", "source_url": "https://example.org/p"},
+                                 NOW, learn_service=svc)
+        assert "could NOT be read" in reply
+        assert "[source, not read: https://example.org/p]" in handle_learn_get(
+            UID, {"what": "map", "thread": "Sleep"}, NOW, learn_service=svc)
+
+    def test_material_is_never_checked_as_a_source(self):
+        from types import SimpleNamespace
+        def boom(url): raise AssertionError("only a kept reference is read")
+        svc = LearnService(FakeRepo(), TZ, sources=SimpleNamespace(read=boom))
+        thread = svc.find_or_create_thread(UID, "Sleep", NOW)
+        assert svc.add_entry(UID, thread, kind=EntryKind.MATERIAL, content="their words", now=NOW).source_basis is None
+
     def test_tool_teaches_when_source_missing(self):
         svc = _svc()
         svc.find_or_create_thread(UID, "Geopolitics", NOW)
