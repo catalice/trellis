@@ -152,6 +152,29 @@ class SenseService:
             "window_end": last + timedelta(days=max(gaps)),
         }
 
+    def logged_summary(self, user_id: UUID, *, days: int, now: datetime) -> list[dict]:
+        """Computed from the log — never typed, never stale. Per medication name
+        and per extra tracked kind: on how many days, and when last. A list of
+        events can't show absence; the last date can."""
+        since = now - timedelta(days=days)
+        today = now.astimezone(self._tz).date()
+        seen: dict[str, set] = {}
+        for e in self._repo.list_events_since(user_id, since=since):
+            if e.event_type != TrackingEventType.MEDS:
+                continue   # sleep is daily; periods have the cycle line
+            words = [w for w in (e.detail or "").lower().split() if not any(c.isdigit() for c in w)]
+            seen.setdefault(" ".join(words) or "meds", set()).add(
+                e.occurred_at.astimezone(self._tz).date())
+        for s in self._repo.list_states_since(user_id, since=since):
+            for kind in (s.extra or {}):
+                seen.setdefault(str(kind), set()).add(s.felt_at.astimezone(self._tz).date())
+        rows = [
+            {"name": name, "days": len(dates), "last": max(dates),
+             "days_ago": (today - max(dates)).days}
+            for name, dates in seen.items()
+        ]
+        return sorted(rows, key=lambda r: (r["days_ago"], r["name"]))
+
     def tracked_kinds(self, user_id: UUID) -> list[str]:
         return self._repo.tracked_kinds(user_id)
 

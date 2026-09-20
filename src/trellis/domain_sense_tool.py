@@ -275,6 +275,17 @@ def handle_log_state(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
 # Formatting
 # ---------------------------------------------------------------------------
 
+def _fmt_logged(rows: list) -> "str | None":
+    """The computed 30-day line: what was logged, on how many days, when last."""
+    if not rows:
+        return None
+    bits = []
+    for r in rows:
+        ago = "today" if r["days_ago"] == 0 else f"{r['days_ago']}d ago"
+        bits.append(f"{r['name']} {r['days']}d, last {r['last'].strftime('%-d %b')} ({ago})")
+    return "[Logged, last 30 days — computed] " + "; ".join(bits)
+
+
 def _fmt_tracking(states: list, events: list, tz) -> "str | None":
     """Recent state logs + events with IDs (IDs let delete_entry erase a specific
     entry). None when there's nothing. Used by the context loader."""
@@ -375,6 +386,12 @@ def sense_context_loader(sense_service, tz) -> ContextLoader:
                 )
         except Exception:
             _log.warning("cycle summary failed", exc_info=True)
+        try:
+            logged = _fmt_logged(sense_service.logged_summary(user_id, days=30, now=now))
+            if logged:
+                parts.append(logged)
+        except Exception:
+            _log.warning("logged summary failed", exc_info=True)
         try:
             kinds = sense_service.tracked_kinds(user_id)
             if kinds:

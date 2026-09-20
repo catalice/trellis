@@ -277,3 +277,40 @@ class TestCycleSummary:
     def test_single_start_returns_none(self):
         from datetime import date as d
         assert self._svc([d(2026, 9, 5)]).cycle_summary("uid") is None
+
+
+class TestLoggedSummary:
+    """The computed 30-day line: absence must be visible, so the last date rides along."""
+
+    def _svc(self):
+        return SenseService(FakeStateRepo(), TZ)
+
+    def test_one_dose_long_ago_reads_as_one_day_and_how_long_since(self):
+        svc = self._svc()
+        svc.log_event(UID, TrackingEventType.MEDS, detail="Vitamin D 1000iu",
+                      occurred_at=NOW - timedelta(days=6))
+        rows = svc.logged_summary(UID, days=30, now=NOW)
+        assert rows == [{"name": "vitamin d", "days": 1,
+                         "last": (NOW - timedelta(days=6)).astimezone(TZ).date(), "days_ago": 6}]
+
+    def test_doses_group_by_name_and_count_days_not_rows(self):
+        svc = self._svc()
+        for back in (1, 1, 3):
+            svc.log_event(UID, TrackingEventType.MEDS, detail="magnesium 200mg",
+                          occurred_at=NOW - timedelta(days=back))
+        svc.log_event(UID, TrackingEventType.MEDS, detail="magnesium",
+                      occurred_at=NOW - timedelta(days=5))
+        (row,) = svc.logged_summary(UID, days=30, now=NOW)
+        assert (row["name"], row["days"], row["days_ago"]) == ("magnesium", 3, 1)
+
+    def test_extra_kinds_count_and_sleep_is_left_out(self):
+        svc = self._svc()
+        svc.log_state(UID, "tight chest", energy=None, mood=None, extra={"anxiety": 3}, now=NOW)
+        svc.log_event(UID, TrackingEventType.SLEEP, value=7.0, occurred_at=NOW)
+        assert [r["name"] for r in svc.logged_summary(UID, days=30, now=NOW)] == ["anxiety"]
+
+    def test_outside_the_window_is_gone(self):
+        svc = self._svc()
+        svc.log_event(UID, TrackingEventType.MEDS, detail="magnesium",
+                      occurred_at=NOW - timedelta(days=40))
+        assert svc.logged_summary(UID, days=30, now=NOW) == []

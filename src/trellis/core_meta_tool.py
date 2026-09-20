@@ -21,8 +21,9 @@ _log = logging.getLogger(__name__)
 UPDATE_CONTEXT_TOOL = {
     "name": "update_current_context",
     "description": (
-        "Record what's going on in their life right now. It expires on its "
-        "own; refresh it when they tell you something that changes the picture."
+        "Record what's going on in their life right now — only what no store "
+        "holds, in their terms, no interpretation. It expires on its own; "
+        "refresh it when they tell you something that changes the picture."
     ),
     "input_schema": {
         "type": "object",
