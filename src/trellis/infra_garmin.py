@@ -545,6 +545,9 @@ class GarminSyncSummary:
     activity_detail_records: int
     start_date: date
     end_date: date
+    # Days where a Garmin request failed: ISO date -> the groups not fetched.
+    # Stored readings for those groups were kept, not refreshed.
+    unavailable: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 class GarminSyncService:
@@ -580,7 +583,7 @@ class GarminSyncService:
             raise RuntimeError("Garmin is not connected for this user.")
 
         try:
-            daily_count = self._sync_daily_health(
+            daily_count, unavailable = self._sync_daily_health(
                 user_id, session_dump,
                 start_date=start_date, end_date=today, now=now,
                 chunk_days=daily_health_chunk_days,
@@ -604,16 +607,18 @@ class GarminSyncService:
             activity_detail_records=detail_count,
             start_date=start_date,
             end_date=today,
+            unavailable=unavailable,
         )
 
     def _sync_daily_health(
         self, user_id: UUID, session_dump: str, *,
         start_date: date, end_date: date, now: datetime, chunk_days: int,
-    ) -> int:
+    ) -> tuple[int, dict[str, tuple[str, ...]]]:
         from trellis.infra_tracking import (
             GarminDailyHealthRecord, GarminHealthProvenance, HealthSyncKind, HealthSyncRun,
         )
         total = 0
+        unavailable: dict[str, tuple[str, ...]] = {}
         chunk_start = start_date
         while chunk_start <= end_date:
             chunk_end = min(chunk_start + timedelta(days=chunk_days - 1), end_date)
@@ -626,6 +631,9 @@ class GarminSyncService:
             try:
                 metrics = self.client.sync(session_dump, chunk_start, chunk_end)
                 for metric in metrics:
+                    missed = tuple(str(g) for g in (metric.raw.get("unavailable") or ()))
+                    if missed:
+                        unavailable[metric.date.isoformat()] = missed
                     self.health_repository.upsert_daily_health(
                         GarminDailyHealthRecord.from_garmin(
                             user_id, metric,
@@ -644,7 +652,7 @@ class GarminSyncService:
             )
             total += len(metrics)
             chunk_start = chunk_end + timedelta(days=1)
-        return total
+        return total, unavailable
 
     def _sync_activities(
         self, user_id: UUID, session_dump: str, *,

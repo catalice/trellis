@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
-from testcontainers.postgres import PostgresContainer
 
 from trellis.infra_postgres import PostgresDatabase
 
@@ -13,13 +14,27 @@ MIGRATIONS_DIR = Path(__file__).parent.parent / "src" / "trellis" / "migrations"
 @pytest.fixture(scope="session")
 def pg_database():
     """
-    Spin up a real Postgres container for the test session, run all migrations,
-    and return a connected PostgresDatabase. Shared across all integration tests
-    in the session to keep startup cost low.
+    A real Postgres (pgvector, as deployed) for the session, all migrations
+    applied. Tests that use it prove behaviour at the storage boundary, which
+    fake repositories cannot. Skipped when Docker isn't reachable.
     """
-    with PostgresContainer("postgres:16") as pg:
+    try:
+        from testcontainers.postgres import PostgresContainer
+        container = PostgresContainer("pgvector/pgvector:pg16")
+        container.start()
+    except Exception as error:   # no Docker, no image, no network
+        pytest.skip(f"real-database tests need Docker: {error}")
+    try:
         # testcontainers returns a SQLAlchemy-style URL; strip the driver specifier
-        url = pg.get_connection_url().replace("+psycopg2", "")
+        url = container.get_connection_url().replace("+psycopg2", "")
         database = PostgresDatabase(url)
         database.migrate(MIGRATIONS_DIR)
         yield database
+    finally:
+        container.stop()
+
+
+@pytest.fixture
+def pg_user(pg_database):
+    """A fresh user row — every table hangs off one."""
+    return pg_database.ensure_user(int(uuid4().int % 10**9), os.getenv("TRELLIS_TIMEZONE", "UTC"))

@@ -225,6 +225,11 @@ class PostgresHealthRepository:
         self.database = database
 
     def upsert_daily_health(self, record: GarminDailyHealthRecord) -> GarminDailyHealthRecord:
+        """A day is synced many times and any one Garmin endpoint can fail on any
+        of them, so a missing field means "not fetched this time", never "gone":
+        it keeps the stored reading. A real value always replaces. The raw
+        payload merges the same way; its 'unavailable' mark reflects only the
+        latest sync."""
         with self.database.connect() as connection:
             with connection.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
@@ -241,23 +246,24 @@ class PostgresHealthRepository:
                         %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s
                     )
                     ON CONFLICT (user_id, observed_on) DO UPDATE SET
-                        steps = EXCLUDED.steps,
-                        calories = EXCLUDED.calories,
-                        distance_meters = EXCLUDED.distance_meters,
-                        active_minutes = EXCLUDED.active_minutes,
-                        resting_heart_rate = EXCLUDED.resting_heart_rate,
-                        average_heart_rate = EXCLUDED.average_heart_rate,
-                        maximum_heart_rate = EXCLUDED.maximum_heart_rate,
-                        sleep_duration_minutes = EXCLUDED.sleep_duration_minutes,
-                        sleep_score = EXCLUDED.sleep_score,
-                        body_battery_maximum = EXCLUDED.body_battery_maximum,
-                        body_battery_minimum = EXCLUDED.body_battery_minimum,
-                        body_battery_end = EXCLUDED.body_battery_end,
-                        average_stress = EXCLUDED.average_stress,
-                        hrv_weekly_average = EXCLUDED.hrv_weekly_average,
-                        hrv_last_night = EXCLUDED.hrv_last_night,
-                        hrv_status = EXCLUDED.hrv_status,
-                        raw_data = EXCLUDED.raw_data,
+                        steps = COALESCE(EXCLUDED.steps, garmin_daily_health.steps),
+                        calories = COALESCE(EXCLUDED.calories, garmin_daily_health.calories),
+                        distance_meters = COALESCE(EXCLUDED.distance_meters, garmin_daily_health.distance_meters),
+                        active_minutes = COALESCE(EXCLUDED.active_minutes, garmin_daily_health.active_minutes),
+                        resting_heart_rate = COALESCE(EXCLUDED.resting_heart_rate, garmin_daily_health.resting_heart_rate),
+                        average_heart_rate = COALESCE(EXCLUDED.average_heart_rate, garmin_daily_health.average_heart_rate),
+                        maximum_heart_rate = COALESCE(EXCLUDED.maximum_heart_rate, garmin_daily_health.maximum_heart_rate),
+                        sleep_duration_minutes = COALESCE(EXCLUDED.sleep_duration_minutes, garmin_daily_health.sleep_duration_minutes),
+                        sleep_score = COALESCE(EXCLUDED.sleep_score, garmin_daily_health.sleep_score),
+                        body_battery_maximum = COALESCE(EXCLUDED.body_battery_maximum, garmin_daily_health.body_battery_maximum),
+                        body_battery_minimum = COALESCE(EXCLUDED.body_battery_minimum, garmin_daily_health.body_battery_minimum),
+                        body_battery_end = COALESCE(EXCLUDED.body_battery_end, garmin_daily_health.body_battery_end),
+                        average_stress = COALESCE(EXCLUDED.average_stress, garmin_daily_health.average_stress),
+                        hrv_weekly_average = COALESCE(EXCLUDED.hrv_weekly_average, garmin_daily_health.hrv_weekly_average),
+                        hrv_last_night = COALESCE(EXCLUDED.hrv_last_night, garmin_daily_health.hrv_last_night),
+                        hrv_status = COALESCE(EXCLUDED.hrv_status, garmin_daily_health.hrv_status),
+                        raw_data = (garmin_daily_health.raw_data - 'unavailable')
+                                   || jsonb_strip_nulls(EXCLUDED.raw_data),
                         provenance = EXCLUDED.provenance,
                         sync_run_id = EXCLUDED.sync_run_id,
                         updated_at = EXCLUDED.updated_at

@@ -210,6 +210,8 @@ class MoveService:
             "activities": getattr(summary, "activity_records", None),
             "health_records": getattr(summary, "daily_health_records", None),
             "health_through": end.isoformat() if end is not None else None,
+            # ISO date -> groups a failed Garmin request left un-refreshed.
+            "unavailable": dict(getattr(summary, "unavailable", None) or {}),
         }
 
     def review_run(self, user_id: UUID, *, which: int = 0) -> dict | None:

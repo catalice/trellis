@@ -716,3 +716,34 @@ class TestMoveUpdateFold(unittest.TestCase):
                                  {"what": "race"}, datetime.now(timezone.utc),
                                  move_service=self._service())
         self.assertIn("plan, baseline, or workout", out)
+
+
+from datetime import datetime as _dt, timezone as _tz
+
+_NOON = _dt(2026, 3, 10, 12, 0, tzinfo=_tz.utc)
+
+
+class TestPartialSyncReceipt:
+    """A sync where a Garmin request failed is reported as partial, naming what
+    wasn't refreshed — never a plain 'Synced'."""
+
+    class _Move:
+        def __init__(self, unavailable):
+            self._unavailable = unavailable
+
+        def sync_garmin(self, user_id, *, now):
+            return {"activities": 1, "health_records": 3, "health_through": "2026-03-10",
+                    "unavailable": self._unavailable}
+
+    def test_partial_names_the_day_and_the_groups(self):
+        from trellis.domain_move_tool import handle_sync_garmin
+        out = handle_sync_garmin(uuid.uuid4(), {}, _NOON,
+                                 move_service=self._Move({"2026-03-10": ("sleep", "hrv")}))
+        assert out.startswith("Partly synced Garmin")
+        assert "2026-03-10: sleep, hrv" in out
+
+    def test_complete_sync_reads_as_before(self):
+        from trellis.domain_move_tool import handle_sync_garmin
+        out = handle_sync_garmin(uuid.uuid4(), {}, _NOON,
+                                 move_service=self._Move({}))
+        assert out.startswith("Synced Garmin") and "Not refreshed" not in out

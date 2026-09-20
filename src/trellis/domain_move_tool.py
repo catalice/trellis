@@ -351,7 +351,12 @@ def handle_sync_garmin(
     if result.get("health_through"):
         days = result.get("health_records")
         bits.append(f"health up to {result['health_through']}" + (f" ({days} day(s))" if days else ""))
-    out = "Synced Garmin — " + (", ".join(bits) if bits else "done") + "."
+    missed = result.get("unavailable") or {}
+    out = ("Partly synced Garmin — " if missed else "Synced Garmin — ") + (", ".join(bits) if bits else "done") + "."
+    if missed:
+        # Partial is said as partial: the readings below may be older than this sync.
+        out += "\nNot refreshed (Garmin request failed; stored readings kept): " + "; ".join(
+            f"{day}: {', '.join(groups)}" for day, groups in sorted(missed.items()))
     # The fresh numbers ride back on the receipt: a sync that reports "done"
     # without them left the model quoting the pre-sync figure (15 Sep, body
     # battery 17 vs the 71 that had just landed). Sense owns the data; Move

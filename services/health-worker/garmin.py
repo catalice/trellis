@@ -163,6 +163,8 @@ def _fetch_daily_health_from_client(
     include_date: bool,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {"date": metric_date} if include_date else {}
+    # A request that fails is named in row["unavailable"]: the caller must be
+    # able to tell "Garmin has no reading" from "we couldn't ask".
 
     try:
         stats = garmin.get_stats(metric_date)
@@ -177,6 +179,7 @@ def _fetch_daily_health_from_client(
             row["floors_climbed"] = stats.get("floorsAscended")
     except Exception as error:
         logger.warning("Garmin activity stats failed for %s: %s", metric_date, error)
+        row.setdefault("unavailable", []).append("stats")
 
     try:
         hr = garmin.get_heart_rates(metric_date)
@@ -186,6 +189,7 @@ def _fetch_daily_health_from_client(
             row["max_hr"] = hr.get("maxHeartRate")
     except Exception as error:
         logger.warning("Garmin heart rate failed for %s: %s", metric_date, error)
+        row.setdefault("unavailable", []).append("heart_rate")
 
     try:
         sleep = garmin.get_sleep_data(metric_date)
@@ -200,6 +204,7 @@ def _fetch_daily_health_from_client(
             row["sleep_score"] = (scores.get("overall") or {}).get("value")
     except Exception as error:
         logger.warning("Garmin sleep failed for %s: %s", metric_date, error)
+        row.setdefault("unavailable", []).append("sleep")
 
     try:
         body_battery = garmin.get_body_battery(metric_date, metric_date)
@@ -217,6 +222,7 @@ def _fetch_daily_health_from_client(
             row["body_battery_drained"] = day_data.get("drained")
     except Exception as error:
         logger.warning("Garmin body battery failed for %s: %s", metric_date, error)
+        row.setdefault("unavailable", []).append("body_battery")
 
     try:
         stress = garmin.get_stress_data(metric_date)
@@ -228,6 +234,7 @@ def _fetch_daily_health_from_client(
             )
     except Exception as error:
         logger.warning("Garmin stress failed for %s: %s", metric_date, error)
+        row.setdefault("unavailable", []).append("stress")
 
     try:
         hrv = garmin.get_hrv_data(metric_date)
@@ -243,6 +250,7 @@ def _fetch_daily_health_from_client(
             row["hrv_status"] = summary.get("hrvStatusText")
     except Exception as error:
         logger.warning("Garmin HRV failed for %s: %s", metric_date, error)
+        row.setdefault("unavailable", []).append("hrv")
 
     return row
 
