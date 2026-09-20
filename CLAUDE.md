@@ -140,7 +140,7 @@ Every file in `src/trellis/` must be exactly one of these categories. Flat struc
 core_assembler.py    # one turn end to end: routing, context tiers, tool binding
 core_config.py
 core_history.py
-core_main.py         # the ONE place houses are registered and wired
+core_main.py         # the ONE place houses are registered and wired — wire() builds the app; main() runs it
 core_meta_tool.py    # always-on tools: update_current_context, save_preferences
 core_model.py        # the model boundary: what Trellis needs from a model, in its own terms — no provider
 core_onboarding.py
@@ -267,6 +267,15 @@ live in its `user_note` column (`move_update what='workout'` appends there). Syn
 never names that column, so a resync structurally cannot touch their words. Runs
 are a filtered view (`recent_runs`) for baseline math; reviews read every sport
 (`recent_workouts`).
+
+**A plan change is their decision (migration 032).** `move_update what=plan`
+goes one of three ways, decided in Python: their INSTRUCTION (their own words,
+found in the message being answered, naming what changes) is stored at once;
+anything else is HELD as a proposal and the stored plan is untouched; their YES,
+in a later turn, stores the proposal they were shown — never one composed
+afterwards. A proposal can't be agreed in the turn that made it; a yes is not an
+instruction; a scheduled check-in is never them speaking. An unanswered proposal
+stays in Move context and the snapshot — unfinished business is a record.
 
 **What it reads cross-cutting (never owns):**
 - Goals — from Focus's goals table, filtered by training label
@@ -445,5 +454,6 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
 - Embedding backfill (safe to re-run, bot STOPPED — a write landing mid-run is undone): `docker compose stop trellis`, `uv run python scripts/backfill_embeddings.py`, check exit 0, `docker compose start trellis`
 - Tests: `.venv/bin/pytest tests/ -q`
+- Whole conversations (`tests/test_planning_conversations.py`): run through `core_main.wire()` — the app as deployed, real database — and judged on what is in the database, not on wording.
 - Scenarios (`tests/test_scenarios.py`, `tests/harness.py`): one set, run with a scripted model always, and with the real model when `TRELLIS_EVAL=1` — an evaluation of the model, not a gate on the software. Add a scenario immediately before fixing the fault it shows.
 - The embedding model is baked into the image (Dockerfile) — the bot embeds offline at runtime.

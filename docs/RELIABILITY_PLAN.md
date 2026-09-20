@@ -3,7 +3,8 @@
 **Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
 Stages 2–3 (model boundary, scenario harness, truthful outcomes) reviewed together, merged and
 deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness): reviewed, three bounded corrections, merged and
-deployed 20 September 2026; the index repair (bot stopped) filed 2 missing rows and removed 1 orphan. Next: stage 5.
+deployed 20 September 2026; the index repair (bot stopped) filed 2 missing rows and removed 1 orphan.
+Stages 5–6 are built on `reliability/04-evidence-ownership` and await the combined review.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
@@ -162,6 +163,26 @@ decisions, with no procedural coaching.
 model on request): evidence, corrections, and complete planning conversations —
 including an anonymised version of a real weekly review. Anonymised means it
 passes the hygiene check and the user has read it before it is committed.
+
+**Built 20–21 September 2026, awaiting the combined review.** Decisions taken
+(the user's, on the reviewer's recommendation): a direct instruction is its own
+authorisation; Trellis's proposals need agreement, and the agreement is to the
+proposal that was shown; Trellis retrieves, prepares, holds unfinished business,
+records what is reported or observed, leads the review and returns to what is
+unresolved; the week is revisited when commitments change, at check-in and after
+a missed session — revisiting never rewrites it. Night-before watch uploads are a
+separate standing permission, NOT granted here: they wait for the readiness check.
+
+Evaluation, real model, the wired app, a fictional four-turn review (ask → life
+update → challenge → yes), judged in the database. Before the mechanism: 1 of 3
+runs passed; one stored the plan before any yes — the fault as it happened.
+After: in 4 of 4 runs nothing was stored without a yes, what was stored was
+exactly what had been shown, and the tasks they said were done were done. 2 of 4
+passed every check; the other two were judgement, not record-keeping — one
+reviewed without asking anything, one proposed (did not store) a week with a run
+cut that conflicted with nothing. The first evaluation also found a hole: a yes
+quoted as "their instruction" — closed (an instruction must name what it changes).
+Small numbers; the trial week is the real measure.
 
 **The trial.** One training week after deployment, bounded: fixed start and
 end, the agreed terms, nothing added mid-week. It answers one question — does
