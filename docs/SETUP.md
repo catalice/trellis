@@ -78,6 +78,14 @@ docker compose exec trellis python scripts/backfill_vault.py # re-project the va
 .venv/bin/pytest tests/ -q              # run tests (uv sync first)
 ```
 
+Some tests run against a real Postgres (the deployed pgvector image) and are
+skipped when Docker isn't reachable. With Colima, point them at its socket:
+
+```bash
+export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock TESTCONTAINERS_RYUK_DISABLED=true
+```
+
 The DB volume is your life data — never `docker compose down -v` casually.
 
 ## Backup and restore
