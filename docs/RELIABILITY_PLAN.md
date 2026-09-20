@@ -1,7 +1,7 @@
 # Reliability plan
 
 **Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
-Stages 2–3 are next, on their own branch.
+Stage 2 is built on `reliability/02-harness-outcomes` and awaits review; stage 3 follows on the same branch.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
@@ -180,8 +180,9 @@ pauses for independent review **before deployment**. Review findings are
 resolved before deploying.
 
 1. After stage 1 — data protection and access restrictions complete.
-2. After stages 2–3 together — regression harness, model boundary and truthful
-   outcomes complete.
+2. After stage 2 — regression harness and model boundary complete. Then after
+   stage 3 — truthful outcomes complete. (Split at the user's instruction,
+   20 September: review after each phase.)
 3. After stage 4 — retrieval, memory and answer completeness complete.
 4. After stage 5 — evidence and Watcher changes complete.
 5. Before stage 6 — a readiness review before the ownership trial starts.

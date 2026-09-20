@@ -133,8 +133,9 @@ core_config.py
 core_history.py
 core_main.py         # the ONE place houses are registered and wired
 core_meta_tool.py    # always-on tools: update_current_context, save_preferences
+core_model.py        # the model boundary: what Trellis needs from a model, in its own terms — no provider
 core_onboarding.py
-core_oracle.py       # the agentic loop (one Claude call per turn, tools until end_turn)
+core_oracle.py       # the conversation engine: one turn, tools until the model is done — speaks core_model only
 core_profile.py      # UserProfile, CurrentContext — global services
 core_registry.py     # houses register here: context loader + tools + rooms + signals
 core_router.py       # keyword fallback router (degraded mode only)
@@ -143,6 +144,7 @@ core_telegram.py
 core_watcher.py      # the slow mind: discovery (Claude, weekly) + verification (Python) + patterns table
 
 # Infrastructure — data sources and engines, not houses
+infra_anthropic.py   # the Anthropic connector — the ONLY module that imports the provider (retries, caching, message shapes)
 infra_embeddings.py  # local embedder (fastembed/bge-small) — memory + routing share it
 infra_garmin.py      # Garmin API client, sync, push, connection management
 infra_memory.py      # the Trellis-wide meaning index (embed-on-write, recall)
@@ -284,6 +286,7 @@ Deliberate understanding — a different cognitive mode from Focus (registered 3
 - **Guidance lines are short.** One rule, one or two sentences, plain. Long lines burn tokens and blur — if a rule needs a paragraph, it's two rules or it's unclear.
 - **The prompt register (applied everywhere 16 Sep 2026).** House guidance = the ROLE in that room + what the data means, nothing else. Tool description = what it does, when to reach for it, the one behaviour that would surprise you — each mechanic stated ONCE, only there. Anything about the person → a preference row (theirs to edit). Tactics and worked examples in a prompt became the ceiling (15 Sep: "the only real slot is Friday") — don't put them back.
 - Never call Claude for something Python can calculate deterministically
+- **Nothing above the model boundary names a provider.** Conversation, synthesis, discovery and summaries receive a `core_model.ModelConnector` from `core_main.build_model` — the one place a provider is chosen (`TRELLIS_MODEL_PROVIDER`). A new provider is a connector module plus a branch there.
 
 ---
 
@@ -419,4 +422,5 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
 - Embedding backfill (safe to re-run): `uv run python scripts/backfill_embeddings.py`
 - Tests: `.venv/bin/pytest tests/ -q`
+- Scenarios (`tests/test_scenarios.py`, `tests/harness.py`): one set, run with a scripted model always, and with the real model when `TRELLIS_EVAL=1` — an evaluation of the model, not a gate on the software. Add a scenario immediately before fixing the fault it shows.
 - The embedding model is baked into the image (Dockerfile) — the bot embeds offline at runtime.
