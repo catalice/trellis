@@ -2,7 +2,7 @@
 
 **Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
 Stages 2–3 (model boundary, scenario harness, truthful outcomes) reviewed together, merged and
-deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness) is next, on its own branch.
+deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness) is built on `reliability/03-retrieval-memory` and awaits review.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
@@ -119,6 +119,14 @@ components does not by itself fix a false "done".
 - House preferences stay loaded when the reply to a proposal is just "yes".
 - Unanswered parts of a message. An earlier checking step degraded replies, so:
   measure first, then trial in the harness before anything ships.
+  **Measured 20 September 2026 — nothing built.** In 16 days of history, 71 of
+  255 messages were multi-part and 1 was followed by a message reading as a
+  re-ask (a crude proxy: it can't see a miss that was noticed and let go). In
+  the harness the live model answered every part in 12 of 12 runs across four
+  multi-part scenarios, up to three parts with a dependent question. The
+  existing prevention — the person's message riding behind every round of tool
+  results — is holding. The scenarios stay as the regression cases; if the
+  proxy or the evaluation worsens, that is the evidence to build on.
 
 Done when (answer completeness): multi-part cases in the harness get every part
 answered, with no loss of reply quality on single-part cases.

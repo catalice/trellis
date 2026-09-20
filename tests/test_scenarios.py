@@ -73,6 +73,29 @@ SCENARIOS = [
         checks=[_called("save_note", text="quince"), _called("set_reminder", label="electrician"), _spoke],
     ),
     Scenario(
+        # Answer completeness, measured before anything is built for it (an earlier
+        # checking step degraded replies). Three parts: a question, an action, and
+        # a second question that depends on the first.
+        name="three parts in one message are all answered",
+        message=("Remind me on Saturday morning about the long run. Also, what is 15% of 80? "
+                 "And is 12 more or less than that?"),
+        tools={"set_reminder": (SET_REMINDER, done("Reminder set."))},
+        script=[Step(tools=(("set_reminder", {"label": "the long run", "when": "Saturday morning"}),)),
+                Step(text="Reminder's set for Saturday morning. 15% of 80 is 12 — so 12 is exactly that, neither more nor less.")],
+        checks=[_called("set_reminder", label="long run"), _said(r"\b12\b"),
+                _said(r"same|exactly|equal|neither|identical")],
+    ),
+    Scenario(
+        name="a question buried after two actions is still answered",
+        message=("Note that the quince needs planting and note that the gate latch is broken. "
+                 "By the way, how many days are there in a leap year?"),
+        tools={"save_note": (SAVE_NOTE, done("Saved."))},
+        script=[Step(tools=(("save_note", {"text": "the quince needs planting"}),
+                            ("save_note", {"text": "the gate latch is broken"}))),
+                Step(text="Both noted. A leap year has 366 days.")],
+        checks=[_called("save_note", times=2), _said(r"\b366\b")],
+    ),
+    Scenario(
         name="a tool that reports failure is reported as failure",
         message="Save a note that the boiler needs servicing.",
         tools={"save_note": (SAVE_NOTE, failed("Save failed; nothing changed."))},
