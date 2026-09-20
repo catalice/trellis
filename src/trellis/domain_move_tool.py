@@ -111,7 +111,7 @@ PUSH_TO_WATCH_TOOL: dict = {
     "name": "push_to_watch",
     "description": (
         "Put a structured workout on their Garmin watch for a date. Their watch: agree first. "
-        "Replaces any same-named workout — one fixed name per session type, or corrections stack."
+        "Pushing again for the same date and name replaces that day's workout; other days are never touched."
     ),
     "input_schema": {
         "type": "object",
@@ -305,7 +305,7 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
     except ValueError:
         return "I need a real date (YYYY-MM-DD) to schedule it — use one of this week's dates."
     try:
-        name = move_service.push_workout_to_watch(user_id, workout, on_date)
+        pushed = move_service.push_workout_to_watch(user_id, workout, on_date)
     except ValueError as exc:  # WorkoutSpecError
         return f"That workout spec didn't work: {exc}. Check the steps and try again."
     except RuntimeError as exc:
@@ -313,7 +313,12 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
     except Exception:
         _log.warning("push_to_watch failed", exc_info=True)
         return unknown("The push to Garmin hit an error part-way — the workout may or may not be on the watch. Read the watch library before saying which; do not push again blind.")
-    return f"Pushed '{name}' to your watch for {on_date.strftime('%a %d %b')}. Open Garmin and press start."
+    day = on_date.strftime('%a %d %b')
+    if pushed.old_copy_left:
+        return partial(f"Pushed '{pushed.name}' to the watch for {day} — but the earlier copy for that "
+                       "day couldn't be removed, so that day shows two. Delete the older one in Garmin.")
+    verb = "Replaced" if pushed.replaced else "Pushed"
+    return f"{verb} '{pushed.name}' on your watch for {day}. Open Garmin and press start."
 
 
 def _update_workout(user_id: UUID, input_dict: dict, *, move_service) -> str:

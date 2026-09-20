@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Protocol
+from datetime import date
 from uuid import UUID
 
 from psycopg2.extras import Json, RealDictCursor
@@ -28,6 +29,8 @@ class TrainingRepository(Protocol):
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]: ...
     def recent_workouts(self, user_id: UUID, *, limit: int) -> list[RunLog]: ...
     def set_user_note(self, user_id: UUID, activity_id: str, note: str) -> bool: ...
+    def get_watch_push(self, user_id: UUID, on_date: date, name: str) -> str | None: ...
+    def record_watch_push(self, user_id: UUID, on_date: date, name: str, workout_id: str) -> None: ...
 
 
 _ACTIVITY_COLS = (
@@ -96,6 +99,30 @@ class PostgresMoveRepository:
                     (note, user_id, activity_id),
                 )
                 return cur.rowcount > 0
+
+    def get_watch_push(self, user_id: UUID, on_date: date, name: str) -> str | None:
+        """The Garmin workout id Trellis last pushed for this date and name."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT workout_id FROM watch_pushes WHERE user_id = %s AND on_date = %s AND name = %s",
+                    (user_id, on_date, name),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+
+    def record_watch_push(self, user_id: UUID, on_date: date, name: str, workout_id: str) -> None:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO watch_pushes (user_id, on_date, name, workout_id)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id, on_date, name)
+                    DO UPDATE SET workout_id = EXCLUDED.workout_id, pushed_at = NOW()
+                    """,
+                    (user_id, on_date, name, workout_id),
+                )
 
 
 def _row(row: dict) -> TrainingPlan:

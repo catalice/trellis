@@ -175,3 +175,17 @@ class TestDurableActionRecord:
         handle = log.begin("save_note", {"text": "x"})           # must not raise
         log.finish(handle, Status.SUCCEEDED, "Saved.")           # must not raise
         assert [(e.tool, e.status) for e in log.entries] == [("save_note", Status.SUCCEEDED)]
+
+
+class TestWatchPushRecord:
+    def test_a_dated_session_is_remembered_and_a_correction_replaces_its_id(self, pg_database, pg_user):
+        from datetime import date as _date
+        from trellis.domain_move_repo import PostgresMoveRepository
+        repo = PostgresMoveRepository(pg_database)
+        monday, wednesday = _date(2026, 3, 9), _date(2026, 3, 11)
+        assert repo.get_watch_push(pg_user, monday, "Easy Run") is None
+        repo.record_watch_push(pg_user, monday, "Easy Run", "w1")
+        repo.record_watch_push(pg_user, wednesday, "Easy Run", "w2")       # same name, another day
+        repo.record_watch_push(pg_user, wednesday, "Easy Run", "w3")       # a correction
+        assert repo.get_watch_push(pg_user, monday, "Easy Run") == "w1"
+        assert repo.get_watch_push(pg_user, wednesday, "Easy Run") == "w3"

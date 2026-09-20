@@ -427,58 +427,116 @@ class TestPlanSaveMerges(unittest.TestCase):
 
 
 class TestPushReplaces(unittest.TestCase):
-    """11 Aug: three Sunday re-pushes stacked four duplicates on one day.
-    A push now deletes same-named workouts first."""
+    """A pushed workout is a DATED SESSION, identified by what Trellis itself
+    pushed for that date — never by its name. (The first version deleted every
+    same-named workout before uploading: pushing Wednesday's "Easy Run" removed
+    Monday's, and a failed upload had already deleted the old one.)"""
 
     class _Port:
-        def __init__(self, existing):
-            self.existing = existing
+        def __init__(self, fail_push=False, fail_schedule=False, fail_delete=False):
+            self.library = {}                 # workout_id -> name
+            self.scheduled = {}               # workout_id -> date
             self.deleted = []
-            self.pushed = []
-            self.scheduled = []
+            self._n = 0
+            self.fail_push, self.fail_schedule, self.fail_delete = fail_push, fail_schedule, fail_delete
 
         def list_workouts(self, user_id, *, limit=30):
-            return self.existing
+            return [{"workoutId": k, "workoutName": v} for k, v in self.library.items()]
 
         def delete_workout(self, user_id, workout_id):
+            if self.fail_delete:
+                raise ConnectionError("garmin down")
             self.deleted.append(workout_id)
+            self.library.pop(workout_id, None)
+            self.scheduled.pop(workout_id, None)
 
         def push_workout(self, user_id, workout_json):
-            self.pushed.append(workout_json.get("workoutName"))
-            return "new-id"
+            if self.fail_push:
+                raise ConnectionError("garmin down")
+            self._n += 1
+            self.library[f"w{self._n}"] = workout_json.get("workoutName")
+            return f"w{self._n}"
 
         def schedule_workout(self, user_id, workout_id, on_date):
-            self.scheduled.append((workout_id, on_date))
+            if self.fail_schedule:
+                raise ConnectionError("garmin down")
+            self.scheduled[workout_id] = on_date
 
-    def test_same_named_workouts_deleted_before_push(self):
-        import datetime as dt
-        from uuid import uuid4
+    class _Repo:
+        def __init__(self): self.pushes = {}
+        def get(self, uid): return None
+        def upsert(self, r): return r
+        def recent_runs(self, uid, *, limit): return []
+        def get_watch_push(self, uid, on_date, name): return self.pushes.get((on_date, name))
+        def record_watch_push(self, uid, on_date, name, workout_id): self.pushes[(on_date, name)] = workout_id
+
+    EASY = {"name": "Easy Run", "steps": [{"kind": "run", "duration": "40min"}]}
+
+    def _svc(self, port, repo=None):
         from zoneinfo import ZoneInfo
         from trellis.domain_move_service import MoveService
 
         class _Goals:
             def list_training_goals(self, uid): return []
+        return MoveService(repo or self._Repo(), _Goals(), ZoneInfo("Europe/Madrid"), garmin_push=port)
 
-        class _Repo:
-            def get(self, uid): return None
-            def upsert(self, r): return r
-            def recent_runs(self, uid, *, limit): return []
-            def add_run(self, r): return r
-            def update_run_note(self, uid, rid, note): return False
+    def test_two_days_with_the_same_name_both_stay_on_the_watch(self):
+        import datetime as dt
+        port, uid = self._Port(), uuid.uuid4()
+        svc = self._svc(port)
+        svc.push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 9))       # Monday
+        svc.push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))      # Wednesday, same name
+        self.assertEqual(port.deleted, [])
+        self.assertEqual(sorted(port.scheduled.values()), [dt.date(2026, 3, 9), dt.date(2026, 3, 11)])
 
-        port = self._Port(existing=[
-            {"workoutId": "111", "workoutName": "Run-Walk-Run 4:1"},
-            {"workoutId": "222", "workoutName": "Run-Walk-Run 4:1"},
-            {"workoutId": "333", "workoutName": "Something Else"},
-        ])
-        svc = MoveService(_Repo(), _Goals(), ZoneInfo("Europe/Madrid"), garmin_push=port)
-        svc.push_workout_to_watch(
-            uuid4(),
-            {"name": "Run-Walk-Run 4:1", "steps": [{"kind": "run", "duration": "40min"}]},
-            dt.date(2026, 8, 12),
-        )
-        self.assertEqual(port.deleted, ["111", "222"])
-        self.assertEqual(port.pushed, ["Run-Walk-Run 4:1"])
+    def test_a_repush_for_the_same_day_replaces_only_that_days_workout(self):
+        import datetime as dt
+        port, uid = self._Port(), uuid.uuid4()
+        svc = self._svc(port)
+        svc.push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 9))
+        svc.push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        result = svc.push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))   # a correction
+        self.assertTrue(result.replaced and not result.old_copy_left)
+        self.assertEqual(port.deleted, ["w2"])                                      # Wednesday's old one only
+        self.assertEqual(port.scheduled, {"w1": dt.date(2026, 3, 9), "w3": dt.date(2026, 3, 11)})
+
+    def test_a_failed_upload_leaves_the_previous_workout_in_place(self):
+        import datetime as dt
+        port, repo, uid = self._Port(), self._Repo(), uuid.uuid4()
+        self._svc(port, repo).push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        port.fail_push = True
+        with self.assertRaises(ConnectionError):
+            self._svc(port, repo).push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        self.assertEqual(port.deleted, [])
+        self.assertEqual(port.scheduled, {"w1": dt.date(2026, 3, 11)})
+        self.assertEqual(repo.pushes[(dt.date(2026, 3, 11), "Easy Run")], "w1")
+
+    def test_an_upload_that_cannot_be_scheduled_is_taken_back_and_the_old_one_kept(self):
+        import datetime as dt
+        port, repo, uid = self._Port(), self._Repo(), uuid.uuid4()
+        self._svc(port, repo).push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        port.fail_schedule = True
+        with self.assertRaises(ConnectionError):
+            self._svc(port, repo).push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        self.assertEqual(port.deleted, ["w2"])                          # only the unscheduled newcomer
+        self.assertEqual(list(port.library), ["w1"])
+        self.assertEqual(repo.pushes[(dt.date(2026, 3, 11), "Easy Run")], "w1")
+
+    def test_an_old_copy_that_cannot_be_removed_is_reported_not_hidden(self):
+        import datetime as dt
+        port, repo, uid = self._Port(), self._Repo(), uuid.uuid4()
+        self._svc(port, repo).push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        port.fail_delete = True
+        result = self._svc(port, repo).push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        self.assertTrue(result.old_copy_left)
+        self.assertEqual(repo.pushes[(dt.date(2026, 3, 11), "Easy Run")], "w2")     # the new one is the record
+
+    def test_a_workout_trellis_did_not_push_is_never_deleted_by_name(self):
+        import datetime as dt
+        port, uid = self._Port(), uuid.uuid4()
+        port.library["theirs"] = "Easy Run"                             # made by hand in Garmin
+        self._svc(port).push_workout_to_watch(uid, self.EASY, dt.date(2026, 3, 11))
+        self.assertIn("theirs", port.library)
 
 
 class TestStructuredSplitFilter(unittest.TestCase):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -48,6 +49,13 @@ class GarminSyncPort(Protocol):
 
 class WorkoutSpecError(ValueError):
     """The coach's workout spec couldn't be turned into a Garmin workout."""
+
+
+@dataclass(frozen=True)
+class WatchPush:
+    name: str
+    replaced: bool = False          # this date already had a workout Trellis pushed
+    old_copy_left: bool = False     # ...and removing that older copy failed
 
 
 class MoveService:
@@ -172,27 +180,44 @@ class MoveService:
 
     # -- push a structured workout to the watch (the executive-function win) ----
 
-    def push_workout_to_watch(self, user_id: UUID, spec: dict, on_date: date) -> str:
+    def push_workout_to_watch(self, user_id: UUID, spec: dict, on_date: date) -> "WatchPush":
         """Build a Garmin workout from the coach's spec and schedule it on on_date.
-        Returns the workout name for confirmation. Raises WorkoutSpecError on a bad
-        spec, or RuntimeError if Garmin isn't wired/connected."""
+        Raises WorkoutSpecError on a bad spec, RuntimeError if Garmin isn't
+        wired/connected, and whatever Garmin raised if the upload or scheduling
+        failed — in which case the watch is as it was.
+
+        A pushed workout is a DATED SESSION: what identifies it is the record of
+        what Trellis pushed for that date, never its name. The new workout goes
+        up and is scheduled FIRST; only then is this date's previous one
+        removed. So a correction replaces that day and no other, a failed
+        upload changes nothing, and a workout made by hand is never touched."""
         if self._garmin_push is None:
             raise RuntimeError("Garmin isn't set up. Connect it with /garmin_setup first.")
         workout = build_garmin_workout(spec)               # raises WorkoutSpecError
-        # A push REPLACES: same-named workouts are deleted first, so corrections
-        # update the watch instead of stacking duplicates (the 4-copies mess,
-        # 11 Aug). Best-effort — a failed cleanup never blocks the push.
-        name = str(workout.get("workoutName") or "")
-        if name:
-            try:
-                for w in self._garmin_push.list_workouts(user_id, limit=30):
-                    if w.get("workoutName") == name and w.get("workoutId"):
-                        self._garmin_push.delete_workout(user_id, str(w["workoutId"]))
-            except Exception:
-                _log.warning("push replace: could not clean same-named workouts", exc_info=True)
+        name = str(workout.get("workoutName") or "workout")
+        previous = self._repo.get_watch_push(user_id, on_date, name)
+
         workout_id = self._garmin_push.push_workout(user_id, workout)
-        self._garmin_push.schedule_workout(user_id, workout_id, on_date)
-        return str(workout.get("workoutName") or "workout")
+        try:
+            self._garmin_push.schedule_workout(user_id, workout_id, on_date)
+        except Exception:
+            # Uploaded but not scheduled: take the newcomer back, so the watch
+            # is as it was. If even that fails, the caller still hears the error.
+            try:
+                self._garmin_push.delete_workout(user_id, workout_id)
+            except Exception:
+                _log.warning("push: could not remove the unscheduled upload %s", workout_id, exc_info=True)
+            raise
+        self._repo.record_watch_push(user_id, on_date, name, workout_id)
+
+        old_copy_left = False
+        if previous and previous != workout_id:
+            try:
+                self._garmin_push.delete_workout(user_id, previous)
+            except Exception:
+                old_copy_left = True
+                _log.warning("push: the previous workout %s could not be removed", previous, exc_info=True)
+        return WatchPush(name=name, replaced=bool(previous), old_copy_left=old_copy_left)
 
     def sync_garmin(self, user_id: UUID, *, now: datetime, days: int = 3) -> dict:
         """Refresh this user's Garmin data: daily health + activities + details

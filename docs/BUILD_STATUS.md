@@ -26,7 +26,7 @@ What exists in code now. Working rules: `../CLAUDE.md`. Direction: `DIRECTION.md
 ## Operations
 
 - Deploy: `docker compose up --build` (postgres + health-worker + bot).
-- Migrations: `src/trellis/migrations/001–028`, applied on start.
+- Migrations: `src/trellis/migrations/001–029`, applied on start.
 - Nightly DB backup: `scripts/backup_db.sh` → vault `.backups/`.
 - Tests: `.venv/bin/pytest tests/ -q`.
 - Before a push: `scripts/check_public_hygiene.sh` (also the pre-push hook).
