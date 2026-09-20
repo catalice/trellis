@@ -115,6 +115,20 @@ views:
 """
 
 
+def _has_authored_content(page: str) -> bool:
+    """True when an effort page holds anything beyond what effort_created wrote:
+    the title, the intensity line, the section heading. Effort notes and filed
+    captures count as content — when in doubt, the page is kept."""
+    for line in page.splitlines():
+        line = line.strip()
+        if not line or line.startswith("# ") or line == "## Research & notes":
+            continue
+        if line.startswith("_Intensity:") and line.endswith("_"):
+            continue
+        return True
+    return False
+
+
 class ObsidianVault:
     def __init__(
         self,
@@ -790,19 +804,43 @@ class ObsidianVault:
         except Exception:
             _log.warning("brain pages write failed", exc_info=True)
 
-    def learn_map(self, title: str, body: str) -> None:
+    def learn_map(self, title: str, body: str, thread_id=None) -> None:
         """One map page per Learn thread (Atlas/Maps/<title>.md). The map is
         drawn by the user in conversation; this is its window. Same write-only
-        never-raise contract as every projection."""
+        never-raise contract as every projection.
+
+        A page is only ever overwritten by the thread that owns it: generated
+        pages end with a marker naming their thread. A name already taken — by
+        another thread whose title sanitises alike, or by a page written by
+        hand — sends this map to '<title> (<id>).md' instead."""
         try:
             if not self._vault.exists():
                 return
             safe = "".join(c for c in title if c.isalnum() or c in " -_'").strip() or "Untitled"
-            path = self._vault / "Atlas" / "Maps" / f"{safe}.md"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"# {title}\n\n{body}", encoding="utf-8")
+            folder = self._vault / "Atlas" / "Maps"
+            folder.mkdir(parents=True, exist_ok=True)
+            marker = f"<!-- trellis:map:{thread_id} -->" if thread_id else None
+            path = folder / f"{safe}.md"
+            if path.exists() and not self._map_is_ours(path, title, marker):
+                path = folder / f"{safe} ({str(thread_id)[:8] if thread_id else 'map'}).md"
+                if path.exists() and not self._map_is_ours(path, title, marker):
+                    _log.warning("learn map: no free page name for %r — not written", title)
+                    return
+            page = f"# {title}\n\n{body}"
+            if marker:
+                page += f"\n\n{marker}\n"
+            path.write_text(page, encoding="utf-8")
         except Exception:
             _log.warning("learn map write failed", exc_info=True)
+
+    @staticmethod
+    def _map_is_ours(path: Path, title: str, marker: str | None) -> bool:
+        text = path.read_text(encoding="utf-8")
+        if "<!-- trellis:map:" in text:
+            return marker is not None and marker in text
+        # Pages generated before markers existed: ours only if the heading is
+        # exactly this thread's title and nothing suggests another author.
+        return marker is not None and text.startswith(f"# {title}\n") and "*Updated " in text
 
     def watcher_page(self, body: str) -> None:
         """The window into the slow mind — everything the Watcher is thinking,
@@ -837,25 +875,42 @@ class ObsidianVault:
         except Exception:
             _log.warning("obsidian: effort page write failed", exc_info=True)
 
-    def effort_page_removed(self, obsidian_path: str) -> None:
-        """Delete an erased (empty) effort's page — the one projection that
-        removes a file, and only for a record the user chose to erase."""
+    def page_exists(self, obsidian_path: str) -> bool:
+        """Is this vault path already taken — by any page, whoever wrote it?"""
+        try:
+            return (self._vault / obsidian_path).exists()
+        except Exception:
+            return False
+
+    def effort_page_removed(self, obsidian_path: str) -> str:
+        """Remove an erased (empty) effort's page — only if nothing was written
+        on it by hand. 'removed' | 'kept' | 'missing'. The database knows the
+        effort had no captures; it cannot know what was typed into the page."""
         try:
             path = self._vault / obsidian_path
-            if path.exists():
-                path.unlink()
+            if not path.exists():
+                return "missing"
+            if _has_authored_content(path.read_text(encoding="utf-8")):
+                return "kept"
+            path.unlink()
+            return "removed"
         except Exception:
             _log.warning("obsidian: effort page removal failed", exc_info=True)
+            return "kept"
 
-    def effort_page_moved(self, old_path: str | None, effort: Effort) -> None:
+    def effort_page_moved(self, old_path: str | None, effort: Effort) -> str:
         """Rename = move the page: write under the new name, remove the old.
-        Content is preserved; a ghost is never left behind."""
+        Content is preserved; a ghost is never left behind; a page already at
+        the destination is never overwritten. 'moved' | 'created' | 'collision'
+        | 'unchanged'."""
         try:
             new = self._effort_path(effort)
             if new is None:
-                return
+                return "unchanged"
             old = (self._vault / old_path) if old_path else None
             if old is not None and old.exists() and old != new:
+                if new.exists():
+                    return "collision"
                 new.parent.mkdir(parents=True, exist_ok=True)
                 body = old.read_text(encoding="utf-8")
                 lines = body.splitlines()
@@ -867,10 +922,14 @@ class ObsidianVault:
                 tmp.write_text("\n".join(lines), encoding="utf-8")
                 tmp.replace(new)
                 old.unlink()
-            elif not new.exists():
+                return "moved"
+            if not new.exists():
                 self.effort_created(effort)
+                return "created"
+            return "unchanged"
         except Exception:
             _log.warning("obsidian: effort page move failed", exc_info=True)
+            return "unchanged"
 
     def capture_assigned(self, capture: Capture) -> None:
         if capture.effort_id is None:

@@ -16,7 +16,7 @@ _log = logging.getLogger(__name__)
 
 class MapProjection(Protocol):
     """Write-only vault view: one map page per thread. Must never raise."""
-    def learn_map(self, title: str, body: str) -> None: ...
+    def learn_map(self, title: str, body: str, thread_id=None) -> None: ...
 
 
 class SourceRequiredError(ValueError):
@@ -90,7 +90,8 @@ class LearnService:
         try:
             fresh = self._repo.get_thread_by_title(user_id, thread.title) or thread
             entries = self._repo.list_entries(user_id, thread.id)
-            self._projection.learn_map(thread.title, _map_body(fresh, entries, self._tz))
+            self._projection.learn_map(thread.title, _map_body(fresh, entries, self._tz),
+                                       thread_id=thread.id)
         except Exception:
             _log.warning("learn map projection failed", exc_info=True)
 

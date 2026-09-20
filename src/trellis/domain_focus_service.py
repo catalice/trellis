@@ -84,6 +84,13 @@ class BrainDumpClaude(Protocol):
     ) -> BrainDumpResult | None: ...
 
 
+class PageTaken(ValueError):
+    """The vault page a rename would land on already exists."""
+    def __init__(self, path: str) -> None:
+        super().__init__(path)
+        self.path = path
+
+
 class VaultProjection(Protocol):
     """Write-only view of the second brain (Obsidian). Implementations must
     never raise — a failed vault write must not break the bot."""
@@ -92,8 +99,9 @@ class VaultProjection(Protocol):
     def effort_created(self, effort: Effort) -> None: ...
     def capture_assigned(self, capture: Capture) -> None: ...
     def research_saved(self, capture: Capture) -> None: ...
-    def effort_page_removed(self, obsidian_path: str) -> None: ...
-    def effort_page_moved(self, old_path: str | None, effort: Effort) -> None: ...
+    def page_exists(self, obsidian_path: str) -> bool: ...
+    def effort_page_removed(self, obsidian_path: str) -> str: ...   # removed | kept | missing
+    def effort_page_moved(self, old_path: str | None, effort: Effort) -> str: ...
 
 
 class Memory(Protocol):
@@ -310,13 +318,20 @@ class EffortService:
         existing = self._repo.get_by_title(user_id, title)
         if existing is not None:
             return existing
+        effort_id = uuid4()
+        path = _effort_obsidian_path(title)
+        if self._page_taken(user_id, path):
+            # Another effort's title sanitises to this name, or a page was
+            # written there by hand. A new effort never moves into a page
+            # that isn't its own.
+            path = path[:-len(".md")] + f" ({str(effort_id)[:8]}).md"
         effort = self._repo.save(Effort(
-            id=uuid4(),
+            id=effort_id,
             user_id=user_id,
             title=title,
             intensity=EffortIntensity.ACTIVE,
             notes=None,
-            obsidian_path=_effort_obsidian_path(title),
+            obsidian_path=path,
             created_at=now,
             updated_at=now,
         ))
@@ -335,9 +350,16 @@ class EffortService:
             return None
         return effort, captures.for_effort(user_id, effort.id)
 
+    def _page_taken(self, user_id: UUID, path: str, *, ignoring: UUID | None = None) -> bool:
+        if any(e.obsidian_path == path and e.id != ignoring for e in self._repo.list_all(user_id)):
+            return True
+        return bool(self._projection is not None and self._projection.page_exists(path))
+
     def delete_if_empty(self, user_id: UUID, effort_id: UUID, captures) -> str:
         """Erase an effort ONLY when nothing is filed on it — the empty guard
-        is fact (Python), never judgment. 'deleted' | 'not_empty' | 'not_found'."""
+        is fact (Python), never judgment. 'deleted' | 'deleted_page_kept' |
+        'not_empty' | 'not_found'. The record goes; a page someone has written
+        on by hand stays, and the caller says so."""
         effort = self._repo.get(effort_id)
         if effort is None or effort.user_id != user_id:
             return "not_found"
@@ -350,9 +372,11 @@ class EffortService:
             self._memory.forget("effort", effort_id)
         if self._projection is not None and old_path:
             try:
-                self._projection.effort_page_removed(old_path)
+                if self._projection.effort_page_removed(old_path) == "kept":
+                    return "deleted_page_kept"
             except Exception:
                 _log.warning("effort page removal failed", exc_info=True)
+                return "deleted_page_kept"
         return "deleted"
 
     def rename(self, user_id: UUID, effort_id: UUID, new_title: str) -> Effort | None:
@@ -361,8 +385,12 @@ class EffortService:
         if effort is None or effort.user_id != user_id or not new_title.strip():
             return None
         old_path = effort.obsidian_path
-        if not self._repo.rename(user_id, effort_id, new_title,
-                                 _effort_obsidian_path(new_title)):
+        new_path = _effort_obsidian_path(new_title)
+        if new_path != old_path and self._page_taken(user_id, new_path, ignoring=effort_id):
+            # Checked BEFORE anything changes: a rename never lands on a page
+            # that belongs to another effort or was written by hand.
+            raise PageTaken(new_path)
+        if not self._repo.rename(user_id, effort_id, new_title, new_path):
             return None
         renamed = self._repo.get(effort_id)
         if renamed is None:
