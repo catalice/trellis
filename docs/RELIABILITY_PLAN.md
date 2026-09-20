@@ -147,11 +147,26 @@ database, index, vault and summaries in agreement.
 
 ### 6. One owned responsibility — trial
 
-Only after the measure has moved. Candidate: preparing and following through
-the training week. Agreed once: what it may do alone, what needs a decision,
+**Amended 20 September 2026 (the user's call): built with stage 5** — one
+branch, separate coherent commits, one evaluation set, one combined review
+before deployment. It no longer waits for the measure to move before it is
+BUILT. What still waits is independence: the trial runs bounded, and nothing
+it may do alone widens until the readiness check after it.
+
+Candidate: preparing and following through the training week. Agreed once: what it may do alone, what needs a decision,
 when it revisits. Unfinished business is a durable record, not a summary.
 Accepted when the user gives ordinary life updates and makes the real
 decisions, with no procedural coaching.
+
+**One evaluation set for stages 5–6** (scenario harness; scripted always, real
+model on request): evidence, corrections, and complete planning conversations —
+including an anonymised version of a real weekly review. Anonymised means it
+passes the hygiene check and the user has read it before it is committed.
+
+**The trial.** One training week after deployment, bounded: fixed start and
+end, the agreed terms, nothing added mid-week. It answers one question — does
+the user supervise less? — using the measure above, tagged from that week's
+history against the baseline. Then the readiness check: widen, keep, or pull back.
 
 ### Model boundary (built across stages 2–3)
 
@@ -198,8 +213,10 @@ resolved before deploying.
    outcomes complete. This is the gate before merge and deployment. (Stage 2
    was also looked at on its own, as an interim checkpoint, on 20 September.)
 3. After stage 4 — retrieval, memory and answer completeness complete.
-4. After stage 5 — evidence and Watcher changes complete.
-5. Before stage 6 — a readiness review before the ownership trial starts.
+4. After stages 5–6 together — evidence, Watcher changes and the owned
+   training week complete. One combined review, the gate before deployment.
+5. After the trial week — the readiness check, before the owned responsibility
+   is given any further independence.
 
 Within a batch, changes stay coherent and separately reviewable, and one
 coherent change per deployment still applies. There are no mandatory review
