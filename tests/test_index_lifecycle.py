@@ -34,6 +34,7 @@ class _Tasks:
         self.rows[task_id] = replace(self.rows[task_id], **changes)
         return self.rows[task_id]
     def list_open(self, user_id): return list(self.rows.values())
+    def save_event(self, event): pass
 
 
 def _seed(title="why do cities form where they do"):
@@ -59,6 +60,19 @@ class TestASeedsWordsStayCurrent:
         seed = repo.save(_seed())
         memory.remember(UID, "seed", seed.id, seed.embedding_text())
         TaskService(repo, ZoneInfo("UTC"), memory=memory).update(UID, seed.id, kind=TaskKind.TODO, now=NOW)
+        assert ("seed", seed.id) not in memory.cards
+
+    def test_a_seed_marked_done_leaves_the_index(self):
+        """Done goes through complete(), not update() — the one path that skipped
+        the rule. Driven through the handler, the way a real turn marks it done."""
+        from trellis.core_actions import Status
+        from trellis.domain_focus_tool import handle_update_task
+        memory, repo = _Memory(), _Tasks()
+        seed = repo.save(_seed())
+        memory.remember(UID, "seed", seed.id, seed.embedding_text())
+        service = TaskService(repo, ZoneInfo("UTC"), memory=memory)
+        result = handle_update_task(UID, {"task_id": str(seed.id), "status": "done"}, NOW, task_service=service)
+        assert result.status is Status.SUCCEEDED
         assert ("seed", seed.id) not in memory.cards
 
     def test_a_todo_that_becomes_a_seed_enters_it(self):

@@ -541,6 +541,7 @@ class TaskService:
             id=uuid4(), task_id=task_id, user_id=user_id,
             event_type="completed", reason=None, occurred_at=now,
         ))
+        self._index(updated)
         self._vault_refresh(user_id)
         return updated
 
