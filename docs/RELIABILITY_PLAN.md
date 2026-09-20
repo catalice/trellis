@@ -1,6 +1,7 @@
 # Reliability plan
 
-**Status:** draft for markup — 20 September 2026. Nothing here is built.
+**Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
+Stages 2–3 are next, on their own branch.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
@@ -188,6 +189,20 @@ resolved before deploying.
 Within a batch, changes stay coherent and separately reviewable, and one
 coherent change per deployment still applies. There are no mandatory review
 stops between individual fixes.
+
+## Follow-ups carried forward
+
+- **Backup lock:** the third review noted a remaining race in lock reclamation.
+  It does not corrupt a published dump and did not block the stage 1 release;
+  close it in a later batch.
+- **Off-machine backup: none exists yet.** The vault (with its hidden
+  `.backups`) and `.env` live on one machine. Deferred by the user's decision at
+  the stage 1 deploy; until it's arranged, losing the machine loses everything.
+- **Shared effort pages** from older installs are protected from moves and
+  removal but not yet separated.
+- **Pure projections** (Brain pages, task and tracking views, the training plan
+  page) are still rewritten whole; whether any of them hold hand-written content
+  is decision 5 below.
 
 ## Decisions for the user
 
