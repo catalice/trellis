@@ -83,22 +83,12 @@ Standing doc rule (her note, 4 Sep): the public docs speak to STRANGERS.
 README/SETUP/BUILD_STATUS carry no insider shorthand - every release that
 changes behaviour updates them in plain words, same discipline as tests.
 
-## Live watch (20 Sep 2026 — constitution trimmed to machinery)
+## Live watch (constitution trim, 20 Sep 2026)
 
-The base system prompt (`_SYSTEM_BASE`) was cut to instructions that hold for
-any user; the design laws and the voice moved to the user's preference rows.
-Three things can only be judged from live use. None is a known fault — each
-names the first suspect if the behaviour shows up.
-
-1. **Do the design laws still land?** They are now preference rows among many,
-   not base-prompt text. Sign: streaks, clock-time schedules or option menus
-   creeping back. First move: tighten or reorder the rows, not restore the block.
-2. **Does the source line over-trigger?** "Health, medication, science: fetch a
-   source before stating how something works." Sign: a search on every passing
-   health remark, slow replies. First move: narrow the line's wording.
-3. **Does action-eats-question return?** Three Listening lines that each came
-   from a live failure were merged into two. Sign: a tool call made, the
-   question in the same message left unanswered. First suspect: the merge.
+Not faults. Signs to watch for in live use:
+- Streaks, clock-time schedules or option menus return → the design laws carry less weight as preference rows.
+- A search on every passing health remark → the "fetch a source" line is too broad.
+- A tool call made, the question left unanswered → the merged Listening lines.
 
 Small, awaiting a yes: Watcher in-chat evidence labeled as historical examples
 (the hallucinated-effort fix); wordiness pass over the older prompts; NYT news
