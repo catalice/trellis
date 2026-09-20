@@ -910,11 +910,11 @@ def handle_delete_entry(
 WEB_SEARCH_TOOL: dict = {
     "name": "web_search",
     "description": (
-        "Search outside their brain. web: general. news: current events, newest "
-        "first. pubmed: peer-reviewed medicine. scholar: scholarly work, every "
-        "field. trials: registered clinical trials. Citation sources return "
-        "real papers with links — keepers go to a Learn map as kind='source'. "
-        "Read-only."
+        "Look outside their brain. query: FIND sources — a listing of titles, "
+        "links and fragments, never enough to explain from. read: READ one "
+        "source's own text, and be told how much of it was reached (full text, "
+        "abstract only, registry record, page text). Explain only from text you "
+        "read. Keepers go to a Learn map as kind='source'. Read-only."
     ),
     "input_schema": {
         "type": "object",
@@ -922,10 +922,14 @@ WEB_SEARCH_TOOL: dict = {
             "query": {"type": "string", "description": "What to search for. Specific. pubmed takes topic terms, not sentences."},
             "source": {
                 "type": "string", "enum": ["web", "news", "pubmed", "scholar", "trials"],
-                "description": "Default web.",
+                "description": (
+                    "With query. Default web.\n- news: newest first\n- pubmed: peer-reviewed medicine\n"
+                    "- scholar: scholarly work, every field\n- trials: registered clinical trials"
+                ),
             },
+            "read": {"type": "string", "description": "A link from a listing (or a PubMed id). Returns that source's text."},
+            "page": {"type": "integer", "description": "With read: which part of a long source. Default 1."},
         },
-        "required": ["query"],
     },
 }
 
@@ -1094,23 +1098,50 @@ def handle_web_search(
     *,
     web_search,
 ) -> str:
+    reading = str(input_dict.get("read", "")).strip()
+    if reading:
+        return _source_text(web_search, reading, input_dict.get("page"))
     query = str(input_dict.get("query", "")).strip()
     if not query:
-        return "query is required."
+        return "Give a query to find sources, or read=<link> to read one."
     source = str(input_dict.get("source", "web"))
     if source not in ("web", "news", "pubmed", "scholar", "trials"):
         source = "web"
     result = web_search.search(query, source=source)
-    if result is None:
+    if result is None or not result.results:
         return "Search came back empty or the search service is unavailable — try rephrasing, or again in a moment."
-    lines = []
-    if result.answer:
-        lines.append(result.answer)
-        lines.append("")
+    lines = [_LISTING_IS_NOT_EVIDENCE]
     for r in result.results:
         snippet = r.snippet[:200] + ("…" if len(r.snippet) > 200 else "")
         lines.append(f"- {r.title} — {r.url}\n  {snippet}")
-    return "\n".join(lines) if lines else "Nothing useful found."
+    return "\n".join(lines)
+
+
+_SOURCE_PAGE = 6000      # one part of a source's text
+_LISTING_IS_NOT_EVIDENCE = ("LISTING — titles and fragments, not evidence. Nothing here has been read. "
+                            "To explain from one, read it first: web_search read=<link>.")
+_NOT_REACHED = ("NOT READ — that source's text could not be reached (paywalled, unavailable, or not a "
+                "readable page). Nothing from it can be stated as what it says. Try another source, or "
+                "say plainly that it wasn't read.")
+
+
+def _source_text(web_search, reference: str, page_raw) -> str:
+    found = web_search.read(reference)
+    if found is None or not found.text.strip():
+        return _NOT_REACHED
+    try:
+        page = max(1, int(page_raw or 1))
+    except (TypeError, ValueError):
+        page = 1
+    pages = max(1, -(-len(found.text) // _SOURCE_PAGE))
+    if page > pages:
+        return f"That source has {pages} part{'s' if pages != 1 else ''}; there is no part {page}."
+    head = f"SOURCE TEXT — {found.basis.upper()} — {found.title or 'untitled'} — {found.url}"
+    if found.basis == "abstract only":
+        head += "\nOnly the abstract was reached: methods, results and caveats beyond it were NOT read."
+    if pages > 1:
+        head += f"\nPart {page} of {pages}" + (f" — the rest: read={found.url} page={page + 1}" if page < pages else "")
+    return f"{head}\n\n{found.text[(page - 1) * _SOURCE_PAGE: page * _SOURCE_PAGE]}"
 
 
 def handle_recall(
