@@ -37,6 +37,7 @@ Fill in `.env`:
 | `DATABASE_URL` | leave the default for Docker |
 | `OBSIDIAN_VAULT` | absolute path to your vault folder on the host |
 | `TRELLIS_TIMEZONE` | your IANA timezone, e.g. `Europe/London` |
+| `POSTGRES_PASSWORD` | your own database password — set it **before** the first start. The database is only reachable from this machine either way |
 | `TRELLIS_SECRET_KEY` | any long random string — encrypts stored Garmin sessions |
 | `HEALTH_WORKER_SECRET` | any long random string — auths the Garmin worker |
 | `GROQ_API_KEY` | optional, voice notes |
