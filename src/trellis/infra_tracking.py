@@ -420,11 +420,13 @@ class PostgresHealthRepository:
         as '<key>Error'; a section that failed keeps what is stored — in its
         column and in the raw payload, the only place a lost section can be
         recovered from."""
-        failed = tuple(k for k in _DETAIL_SECTIONS if f"{k}Error" in raw_data)
+        # EVERY '<key>Error' the worker sent, whether or not that section has a
+        # column of its own ('activity' and 'details' live only in the raw payload).
+        failed = tuple(k[:-len("Error")] for k in raw_data if k.endswith("Error") and len(k) > len("Error"))
         # An empty section with no error is Garmin having nothing to say (a run
         # has no exercise sets): not a failure to report, and never a reason to
         # blank what is stored.
-        kept = {k for k in _DETAIL_SECTIONS if k in failed or not _detail_section(raw_data, k, None)}
+        kept = set(failed) | {k for k in _DETAIL_SECTIONS if not _detail_section(raw_data, k, None)}
         arrived = {k: v for k, v in raw_data.items()
                    if not k.endswith("Error") and k not in kept}
         if failed:

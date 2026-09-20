@@ -787,3 +787,38 @@ class TestWholeSessionContainer:
                 {"type": "RWD_STAND", "duration": 300.0, "distance": 5.0},
                 {"type": "RWD_WALK", "duration": 300.0, "distance": 400.0}]
         assert [s["time"] for s in _extract_splits(self._detail(rows))] == ["5:00", "15:00", "5:00", "5:00"]
+
+
+class TestFirstReviewOfAnActivitySaysWhatFailed:
+    """The first review fetches from Garmin and stores. A section that failed in
+    that fetch must be named there and then — not only on a later, cached read."""
+
+    def test_a_failed_lap_fetch_is_named_on_the_first_review(self):
+        from types import SimpleNamespace
+        from zoneinfo import ZoneInfo
+        from trellis.domain_move_service import MoveService
+        from trellis.domain_move_tool import _fmt_run_detail
+        from trellis.infra_garmin import GarminActivityDetail
+
+        act = SimpleNamespace(garmin_activity_id="g1", name="Morning Run", ran_on=_NOON.date(),
+                              distance_km=5.0, duration_min=30.0, avg_hr=150, max_hr=165,
+                              note=None, user_note=None, activity_type="running")
+
+        class Health:
+            stored = None
+            def get_activity_detail(self, uid, aid):
+                return None                                  # never fetched before
+            def upsert_activity_detail(self, *, user_id, activity_id, raw_data, sync_run_id):
+                Health.stored = raw_data
+                return ("splits",)                           # the repository's normalised verdict
+
+        class Reader:
+            def activity_detail(self, uid, aid):
+                return GarminActivityDetail(activity_id=aid, raw={"splitsError": "upstream timeout"})
+
+        svc = MoveService.__new__(MoveService)
+        svc._health, svc._garmin_read = Health(), Reader()
+        svc._repo = SimpleNamespace(recent_workouts=lambda uid, limit: [act])
+        detail = svc.review_run(uuid.uuid4())
+        assert detail["not_fetched"] == ["splits"]
+        assert "Not fetched from Garmin" in _fmt_run_detail(detail)

@@ -132,3 +132,20 @@ class TestKeptReadingsStaySaidToBeOld:
         raw = repo.latest_daily_health(pg_user).raw
         assert raw["refreshed_at"] == {"stats": "2026-03-10T19:00:00+00:00",
                                        "sleep": "2026-03-10T07:00:00+00:00"}
+
+
+class TestEveryWorkerFailureIsKept:
+    def test_a_failed_section_without_its_own_column_is_still_reported_and_preserved(self, pg_database, pg_user):
+        repo = PostgresHealthRepository(pg_database)
+        first = {"activity": {"summaryDTO": {"averageHR": 150}}, "details": {"metrics": [1, 2, 3]},
+                 "splits": {"lapDTOs": [{"distance": 1000.0, "duration": 360.0}]}}
+        repo.upsert_activity_detail(user_id=pg_user, activity_id="e1", raw_data=first, sync_run_id=None)
+        later = {"activityError": "timeout", "detailsError": "timeout", "splits": first["splits"]}
+        failed = repo.upsert_activity_detail(user_id=pg_user, activity_id="e1", raw_data=later, sync_run_id=None)
+        assert set(failed) == {"activity", "details"}
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT raw_data FROM garmin_activity_details WHERE activity_id = 'e1'")
+            (raw,) = cur.fetchone()
+        assert raw["activity"] == first["activity"] and raw["details"] == first["details"]
+        assert set(raw["unavailable"]) == {"activity", "details"}
+        assert set(repo.get_activity_detail(pg_user, "e1")["unavailable"]) == {"activity", "details"}

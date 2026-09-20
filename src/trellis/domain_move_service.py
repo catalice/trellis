@@ -235,6 +235,7 @@ class MoveService:
             "their_words": act.user_note,
         }
         splits: list[dict] = []
+        first_fetch_failed: list[str] = []
         try:
             detail = None
             stored = (
@@ -250,10 +251,13 @@ class MoveService:
                 detail = self._garmin_read.activity_detail(user_id, act.garmin_activity_id)
                 if self._health is not None and getattr(detail, "raw", None):
                     try:
-                        self._health.upsert_activity_detail(
+                        # The repository normalises the worker's failures. Its
+                        # verdict is what this review reports — the same one a
+                        # later, cached review will read back.
+                        first_fetch_failed = list(self._health.upsert_activity_detail(
                             user_id=user_id, activity_id=act.garmin_activity_id,
                             raw_data=detail.raw, sync_run_id=None,
-                        )
+                        ) or ())
                     except Exception:
                         _log.warning("review_run: detail store failed", exc_info=True)
             if detail is not None:
@@ -264,7 +268,8 @@ class MoveService:
         for e in splits:
             e.pop("_secs", None)
             e.pop("_dist_m", None)
-        not_fetched = list((getattr(detail, "raw", None) or {}).get("unavailable") or []) if detail else []
+        not_fetched = first_fetch_failed or (
+            list((getattr(detail, "raw", None) or {}).get("unavailable") or []) if detail else [])
         return {"overall": overall, "splits": splits, "running": running, "not_fetched": not_fetched}
 
     def watch_workouts(self, user_id: UUID, *, limit: int = 15) -> list[dict]:
