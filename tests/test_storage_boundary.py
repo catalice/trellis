@@ -291,3 +291,14 @@ class TestRollbackReconcilesInFlightReminders:
         assert after[ran.id].recurrence is None                              # the next weekly one already exists
         assert "interrupted" in after[interrupted.id].label and "not been run again" in after[interrupted.id].label
         assert after[untouched.id].label == "tomorrow's thing"
+
+
+class TestLastRoutedHouses:
+    def test_the_persons_latest_message_gives_its_houses(self, pg_database, pg_user):
+        from trellis.core_history import PostgresConversationHistory
+        history = PostgresConversationHistory(pg_database)
+        assert history.last_routed(pg_user) is None
+        history.append(pg_user, "user", "shall we move the run?", metadata={"domains": ["move"]})
+        history.append(pg_user, "assistant", "I'd move it to Thursday — good?")
+        houses, when = history.last_routed(pg_user)
+        assert houses == ["move"] and when is not None          # the assistant's turn is skipped

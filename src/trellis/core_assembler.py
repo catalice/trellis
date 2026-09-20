@@ -27,6 +27,7 @@ _HISTORY_TURNS = 10           # onboarding only; the main path is time-based
 _WINDOW_HOURS = 24            # verbatim memory = the last day (the user's design) ...
 _WINDOW_CAP = 60              # ... capped so a wild day can't run away
 _SUMMARISE_AFTER = 20
+_SAME_CONVERSATION = timedelta(minutes=45)   # a bare reply this soon after answers the previous turn
 
 # Tools that change nothing. Every other tool must DECLARE how its action went
 # (core_actions); from these, a plain answer is a successful read.
@@ -91,6 +92,7 @@ class _HistoryRepo(Protocol):
     def recent_window(self, user_id: UUID, *, since, cap: int) -> list: ...
     def to_messages(self, turns: list) -> list[dict]: ...
     def domain_summary(self, user_id: UUID, domain: str) -> tuple[str, datetime] | None: ...
+    def last_routed(self, user_id: UUID) -> tuple[list[str], datetime] | None: ...
     def turn_count(self, user_id: UUID) -> int: ...
     def max_turns_covered(self, user_id: UUID) -> int: ...
     def prune(self, user_id: UUID, keep: int = 50) -> None: ...
@@ -152,6 +154,12 @@ class Assembler:
             return self._handle_onboarding_turn(user_id, message, now)
 
         domains = self._router.route(message)
+        if not domains:
+            # "Yes", "ok go", "the second one": a reply that names no house
+            # belongs to the conversation it answers. Without this, the turn
+            # that CARRIES OUT what was just agreed ran with none of that
+            # house's guidance, context or preferences.
+            domains = self._carried_domains(user_id, now)
         _log.debug("routed %s → %s", message[:60], domains)
 
         context = self._build_context(user_id, now, domains)
@@ -202,6 +210,22 @@ class Assembler:
         self._maybe_summarise(user_id, domains)
 
         return result.text
+
+    def _carried_domains(self, user_id: UUID, now: datetime) -> set[str]:
+        """The houses of the person's previous message, if it was recent enough
+        to still be the same conversation. Never raises; no history, no carry."""
+        try:
+            last = getattr(self._history, "last_routed", None)
+            found = last(user_id) if last else None
+            if not found:
+                return set()
+            domains, when = found
+            if now - when > _SAME_CONVERSATION:
+                return set()
+            return {d for d in domains if d in self._registry.domains()}
+        except Exception:
+            _log.warning("could not carry the previous turn's houses", exc_info=True)
+            return set()
 
     # --- Onboarding mode ----------------------------------------------------
 

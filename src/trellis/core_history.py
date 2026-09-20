@@ -63,6 +63,24 @@ class PostgresConversationHistory:
             for row in reversed(rows)
         ]
 
+    def last_routed(self, user_id: UUID) -> tuple[list[str], datetime] | None:
+        """Which houses the person's most recent message was routed to, and when
+        — so a bare reply ("yes") can stay in the house it answers."""
+        with self.database.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT metadata->'domains', created_at FROM conversation_turns
+                    WHERE user_id = %s AND role = 'user'
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        if not row or not isinstance(row[0], list):
+            return None
+        return [str(d) for d in row[0]], row[1]
+
     def recent_window(self, user_id: UUID, *, since, cap: int = 60) -> list[ConversationTurn]:
         """Verbatim memory is TIME-based (the user's design): everything since `since`,
         capped so a wild day can't run away. Newest-first query, returned oldest-first."""

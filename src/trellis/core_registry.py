@@ -53,6 +53,10 @@ class TrellisRegistry:
     # --- Oracle-facing interface -------------------------------------------
     # The oracle calls these. It never touches _domains directly.
 
+    def domains(self) -> set[str]:
+        """The names of the registered houses."""
+        return set(self._domains)
+
     def all_signals(self) -> dict[str, list[str]]:
         """Returns {domain_name: [signals]} for the keyword (fallback) router."""
         return {name: d.signals for name, d in self._domains.items()}
