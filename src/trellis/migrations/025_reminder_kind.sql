@@ -1,4 +1,4 @@
--- Reminders grow a KIND (her design, 15 Sep 2026): 'remind' posts the label
+-- Reminders grow a KIND (the user's design, 15 Sep 2026): 'remind' posts the label
 -- back verbatim (what always happened); 'check_in' wakes the oracle instead —
 -- the label is Trellis's instruction, it runs a normal turn and speaks first.
 -- Nothing about WHEN or WHAT a check-in covers is coded; the user words it.

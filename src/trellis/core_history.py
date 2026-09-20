@@ -64,7 +64,7 @@ class PostgresConversationHistory:
         ]
 
     def recent_window(self, user_id: UUID, *, since, cap: int = 60) -> list[ConversationTurn]:
-        """Verbatim memory is TIME-based (her design): everything since `since`,
+        """Verbatim memory is TIME-based (the user's design): everything since `since`,
         capped so a wild day can't run away. Newest-first query, returned oldest-first."""
         with self.database.connect() as conn:
             with conn.cursor() as cur:

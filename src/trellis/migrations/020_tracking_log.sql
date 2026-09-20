@@ -1,4 +1,4 @@
--- ONE tracking log (her design, 30 Aug): a row is one entry — when, their
+-- ONE tracking log (the user's design, 30 Aug): a row is one entry — when, their
 -- words, and a FACTS map. A new trackable dimension (anxiety, cramps, focus,
 -- restless legs...) is a new key in the map: data, never schema. state_logs
 -- and tracking_events fold in; the old views (states = rows with feeling

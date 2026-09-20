@@ -232,7 +232,7 @@ class TestHealthStaleness:
 
     def test_body_battery_is_the_level_not_the_days_max(self):
         """15 Sep: the line quoted the day's MAXIMUM as 'body battery' — 99 on an
-        evening she was at 15. The level is the last reading; the peak is context."""
+        evening they were at 15. The level is the last reading; the peak is context."""
         from trellis.domain_sense_tool import _fmt_health
         line = _fmt_health({"date": "2026-09-14", "body_battery_end": 15, "body_battery_high": 99})
         assert "body battery 15 as of last watch sync, peaked at 99" in line
@@ -246,7 +246,7 @@ class TestHealthStaleness:
 
 class TestCycleSummary:
     """5 Sep: nine months of cycle history was invisible to the fast mind five
-    weeks before her wedding. The maths is Python's, computed from the log."""
+    when it mattered. The maths is Python's, computed from the log."""
 
     class _Repo:
         def __init__(self, starts):

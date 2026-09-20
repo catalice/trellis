@@ -1,4 +1,4 @@
--- The chat is working memory (her design, 2 Sep): what's visible on screen
+-- The chat is working memory (the user's design, 2 Sep): what's visible on screen
 -- should match what the bot holds verbatim. This registry records every
 -- Telegram message id so a sweep can delete messages older than the context
 -- window (Telegram only allows deletion within 48h of sending).

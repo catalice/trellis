@@ -120,13 +120,13 @@ class HealthWorkerContractTest(unittest.TestCase):
         module = _load_worker_garmin()
 
         redacted = module._redact(
-            "failed for cat@example.com with secret-password and worker-secret",
-            "cat@example.com",
+            "failed for person@example.com with secret-password and worker-secret",
+            "person@example.com",
             "secret-password",
             "worker-secret",
         )
 
-        self.assertNotIn("cat@example.com", redacted)
+        self.assertNotIn("person@example.com", redacted)
         self.assertNotIn("secret-password", redacted)
         self.assertNotIn("worker-secret", redacted)
         self.assertIn("[redacted]", redacted)

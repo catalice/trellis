@@ -486,7 +486,7 @@ SENSE_ROOMS: list[str] = [
 def sense_tools(sense_service, tz) -> list[tuple[dict, Any]]:
     # log_state (the write) + sense_get (the seeing-all door, added 5 Sep 2026:
     # reads-are-context worked at two weeks of data and failed at nine months —
-    # the cycle history was invisible five weeks before her wedding).
+    # months of cycle history were invisible to the fast mind).
     return [
         (
             LOG_STATE_TOOL,

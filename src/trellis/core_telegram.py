@@ -24,7 +24,7 @@ Transcriber = Callable[[bytes], str]
 # no baked-in ping schedule; that was removed because it wasn't tied to the user's
 # choice and silently died on restart.
 #
-# Two kinds fire from the same loop (her design, 15 Sep 2026): kind='remind'
+# Two kinds fire from the same loop (the user's design, 15 Sep 2026): kind='remind'
 # posts the label back verbatim, no model; kind='check_in' runs a full oracle
 # turn with the label as Trellis's own instruction and sends what it writes —
 # the first time Trellis speaks unprompted with generated words. It speaks
@@ -178,7 +178,7 @@ class TelegramTrellis:
             await asyncio.sleep(24 * 3600)
 
     async def _marker_loop(self, application: Application) -> None:
-        """The memory-horizon marker (her design): one line each morning —
+        """The memory-horizon marker (the user's design): one line each morning —
         everything below it is verbatim memory; older lives in the records.
         Yesterday's marker is deleted so they never pile up."""
         from datetime import timedelta
@@ -212,7 +212,7 @@ class TelegramTrellis:
                 self.logger.exception("marker loop failed")
 
     async def _chat_sweep_loop(self, application: Application) -> None:
-        """Her design: the visible chat matches the verbatim window. Messages
+        """The user's design: the visible chat matches the verbatim window. Messages
         older than the TTL are deleted (Telegram allows deletion only within
         48h, so undeletable stragglers are forgotten, not retried)."""
         from datetime import timedelta

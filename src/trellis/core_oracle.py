@@ -145,7 +145,7 @@ class Oracle:
                             "tool_use_id": block.id,
                             "content": result,
                         })
-                # HER idea (item 29b): the not-answering failure is DISTANCE —
+                # The user's idea (item 29b): the not-answering failure is DISTANCE —
                 # by reply time their message is buried under tool results and
                 # recency wins. So their message rides right behind every round
                 # of results: when the model writes, their questions are the

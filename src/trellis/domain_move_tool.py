@@ -232,7 +232,7 @@ def handle_move_get(user_id: UUID, input_dict: dict, now: datetime, *, move_serv
 
 
 def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
-    """One write door for the training record (her call, 15 Sep 2026 — the fold
+    """One write door for the training record (the user's call, 15 Sep 2026 — the fold
     that took Move from five tools to four). The proven handlers stay behind it."""
     what = str(input_dict.get("what", "")).strip().lower()
     if what == "plan":

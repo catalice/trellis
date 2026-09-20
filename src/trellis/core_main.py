@@ -371,8 +371,8 @@ def main() -> None:
     )
 
     def brain_refresh(uid) -> None:
-        """Feed the vault's Brain pages from the live stores (her window into
-        everything saved about her)."""
+        """Feed the vault's Brain pages from the live stores (the user's window into
+        everything saved about them)."""
         vault.brain_changed(
             uid,
             profile=profile_service.get(uid),

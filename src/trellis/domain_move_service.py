@@ -335,7 +335,7 @@ def _extract_splits(detail: Any) -> list[dict]:
     # A STRUCTURED workout (INTERVAL_* segments present) is described by those
     # segments ALONE: warmup, work, recovery, cooldown. Garmin's run-walk
     # auto-detection interleaves dozens of RWD_* micro-segments around them,
-    # and feeding that noise to the model made it miscount her intervals
+    # and feeding that noise to the model made it miscount their intervals
     # (30 Aug: "7 rounds" for a 5-interval session). Counting is Python's job.
     structured = [
         r for r in rows

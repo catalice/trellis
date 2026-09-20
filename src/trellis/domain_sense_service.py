@@ -106,7 +106,7 @@ class SenseService:
 
     def day_rows(self, user_id: UUID, *, since, until, now) -> dict:
         """The Watcher's day-by-day view, on demand — one dict per day of
-        everything tracked. Borrow the slow mind's eyes (her design)."""
+        everything tracked. Borrow the slow mind's eyes (the user's design)."""
         from datetime import datetime as _dt, time as _t, timezone as _tz
         from trellis.core_watcher import build_daily_frame
         start_dt = _dt.combine(since, _t.min, tzinfo=self._tz)

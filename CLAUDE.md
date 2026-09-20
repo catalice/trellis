@@ -6,11 +6,11 @@ Read this before touching anything. These rules exist because we learned them th
 
 ## What Trellis is
 
-Trellis is a second brain. Not a coaching bot. Not a task manager. A persistent external mind that holds what Cat's brain can't — ideas, tasks, goals, things worth remembering — and synthesises it into something useful.
+Trellis is a second brain. Not a coaching bot. Not a task manager. A persistent external mind that holds what the user's brain can't — ideas, tasks, goals, things worth remembering — and synthesises it into something useful.
 
 **The shape: a big brain with houses.**
 
-- **The big brain** is the orchestrator plus the core — always on, every turn. It holds who Cat is (profile), what's live in her life (current context), and the snapshots. Generic chat and anything that isn't clearly about a specialist area lands here, by design. There is never a "routing failure" — worst case you're home in the big brain.
+- **The big brain** is the orchestrator plus the core — always on, every turn. It holds who the user is (profile), what's live in their life (current context), and the snapshots. Generic chat and anything that isn't clearly about a specialist area lands here, by design. There is never a "routing failure" — worst case you're home in the big brain.
 - **Houses** are specialist domains that light up only when a message means them:
   - **Move** — the running coach. The DOING side of the body: plans, workouts, races, Garmin push.
   - **Sense** — health and wellbeing tracking. The MONITORING side: mood, energy, meds, cycle, sleep, HRV, readiness. Owns the Garmin health data.
@@ -189,11 +189,11 @@ Executive function — the recording house.
 **What it owns:**
 - Brain dumps (raw text in, synthesised + triaged out)
 - Ideas (wild, half-formed, philosophical — all valid)
-- Tasks and reminders. A reminder has a `kind` (migration 025, her design 15 Sep 2026):
+- Tasks and reminders. A reminder has a `kind` (migration 025, the user's design 15 Sep 2026):
   `remind` posts the label back verbatim, no model; `check_in` wakes the oracle at that
   time — the label is Trellis's own instruction, it runs an ordinary turn and speaks
   first. What a check-in covers and when is NEVER coded; the user words the reminder.
-- Goals (a goal is just a goal — her call, 10 Sep 2026. `label` is an optional free-text tag she invents; 'race'/'aerobic'/'strength' labels feed the coach by convention, not constraint)
+- Goals (a goal is just a goal — the user's call, 10 Sep 2026. `label` is an optional free-text tag they invent; 'race'/'aerobic'/'strength' labels feed the coach by convention, not constraint)
 - Captures (links, quotes, references) and Efforts (project pages built up over time)
 - Periodic cleanup sessions ("what have I got, let's organise it") — the inbox
   via `focus_get`, effort suggestions from the oracle's own judgment in-turn, and
@@ -229,7 +229,7 @@ Health and wellbeing tracking — the monitoring house (Mind).
 
 **What it owns:**
 - Self-reported state: mood, energy, meds, sleep, period/cycle (`log_state`)
-- **The ONE tracking log** (migration 020, her design): a row = when + their words +
+- **The ONE tracking log** (migration 020, the user's design): a row = when + their words +
   a FACTS map. A new trackable kind (anxiety, cramps, restless_legs...) is a new key
   — data, never schema. The old state/event shapes are repo-composed VIEWS over the
   log (the logbook pattern); tracked kinds ride Sense context so the model reuses
@@ -317,7 +317,7 @@ Two patterns, chosen by risk profile:
 | Pattern | When to use | Why |
 |---|---|---|
 | **Dispatch read** `{house}_get(what: ...)` | All reads | Low-stakes. One tool, clear enum. |
-| **Dispatch write** `{house}_add` / `{house}_update` | Create/change verbs repeated across a house's entities | One door per verb (her call, 30 Aug — "we can always regress"). Detail lives in PER-FIELD descriptions tagged by entity, never one prose wall. The proven per-entity handlers stay behind the dispatch. log_state was the precedent: a union write that works. |
+| **Dispatch write** `{house}_add` / `{house}_update` | Create/change verbs repeated across a house's entities | One door per verb (the user's call, 30 Aug — "we can always regress"). Detail lives in PER-FIELD descriptions tagged by entity, never one prose wall. The proven per-entity handlers stay behind the dispatch. log_state was the precedent: a union write that works. |
 | **Specific named write** `push_to_watch`, `delete_entry` | Distinct acts and destructive acts | An act with its own risk profile keeps its own name — deletion must never be reachable by enum typo. |
 
 **All tools are always available** — routing never gates them. The current 18:
@@ -330,7 +330,7 @@ Two patterns, chosen by risk profile:
 
 (Onboarding mode additionally wires `save_identity`.)
 
-**The fold ladder (decision recorded 30 Aug 2026, her call):** per-entity tools →
+**The fold ladder (decision recorded 30 Aug 2026, the user's call):** per-entity tools →
 per-house verbs (`focus_add`, `learn_add` — where we are) → one global `add`/`get`/
 `update`. The last rung is NOT taken yet, deliberately: a global verb unions every
 house's fields in one schema, and we fold only on evidence. **Trigger: after ~2
@@ -339,7 +339,7 @@ logs, propose the global fold.** If the middle rung misbehaves instead, fix or
 regress it first. Candidate riding the same review: `update_current_context` +
 `save_preferences` → one meta pair.
 
-**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 18 (move folded 15 Sep — save_training_plan + update_workout → `move_update what=plan|baseline|workout`, her call; push_to_watch keeps its name as the act with its own risk. sense_get added 5 Sep — her cycle history was invisible five weeks before her wedding; the fast mind now borrows the Watcher's eyes on demand. Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — her verdicts on patterns must persist. Both flagged, both her call. complete_task folded into update_task status='done' 12 Aug — her call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
+**The tool count must not grow — ideally shrink.** The ceiling is 30; we hold at 18 (move folded 15 Sep — save_training_plan + update_workout → `move_update what=plan|baseline|workout`, the user's call; push_to_watch keeps its name as the act with its own risk. sense_get added 5 Sep — months of cycle history were invisible to the fast mind, which now borrows the Watcher's eyes on demand. Learn born 30 Aug at exactly its funnel-law budget of two. dispatch writes collapsed Focus 30 Aug: create/update x task/goal/reminder/effort folded into focus_add/focus_update. cleanup_session retired 30 Aug — its inbox was focus_get's, its suggestions were the oracle's own judgment wearing a June-era sub-brain, its assign folded into save_to_effort. update_run added 9 Aug, renamed update_workout 30 Aug with the one-logbook restructure — their account of any workout lands on its activity; pattern_response added 9 Aug with the Watcher — the user's verdicts on patterns must persist. Both flagged, both the user's call. complete_task folded into update_task status='done' 12 Aug — the user's call, the shrink direction working). A restructure ADDS ZERO tools — it redistributes. If a change tempts a new tool, flag it and default to NOT adding it. Less is more.
 
 ---
 
@@ -353,7 +353,7 @@ Three tiers. Every piece of data belongs in exactly one.
 - Is it detail Claude might need but often won't? → Tier 3
 
 **Tier 1a — The core (big brain, always loaded, every turn):**
-- **Profile** — who Cat is, physiology, background
+- **Profile** — who the user is, physiology, background
 - **Life context** — a short dated log (migration 026): one line per entry, their words, Python-dated, each lapsing on its own. Decisions and facts no store holds — never interpretation, never anything a store can compute. `update_current_context` add/remove.
 - The core is deliberately minimal. The test for core membership: *needed on EVERY call?* If not → it's a house.
 
@@ -400,7 +400,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - **max_tokens too low truncates JSON silently.** Always set 16000+ for structured responses (on Sonnet 5, thinking shares the max_tokens cap).
 - **Preferences are rows.** One rule, one row, one id (migration 021) — add/list/update/remove individually; a new rule can never touch an old one. They project to Atlas/Brain/Preferences.md, where the user reviews them.
 - **Python shapes what the model writes into always-loaded slots.** Context lines and preference rules: 10 words, refused if longer, never trimmed; a near-repeat is saved and named (`LineGuard`). Narrative memory never states what is currently true — stores and computed lines do; summaries are dated and past-tense.
-- **Exactness ≠ permanence.** One exact prescription per session (her preference row, not prompt text — given options she'll overreach or always take the easy one), but every prescription is re-chosen in the weekly review — never carried forward by default. When the review happens is hers too (the check-in reminder), not the coach's.
+- **Exactness ≠ permanence.** One exact prescription per session (their preference row, not prompt text — given options they'll overreach or always take the easy one), but every prescription is re-chosen in the weekly review — never carried forward by default. When the review happens is theirs too (the check-in reminder), not the coach's.
 - **Don't revert a commit by amending.** Create a new commit.
 - **Goals table must be in the reset script.** Causes duplicate goals on re-onboarding.
 - **Never gate tools by routing.** Routing shapes context only.

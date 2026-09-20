@@ -1147,7 +1147,7 @@ def focus_snapshot(
             _log.warning("focus_snapshot: reminders failed", exc_info=True)
 
         # Dated goals become COMPUTED countdowns — facts from data, never typed,
-        # never stale (her design: the wedding can't quietly expire again).
+        # never stale (a dated goal can't quietly expire).
         if goal_service is not None:
             try:
                 today = now.date()

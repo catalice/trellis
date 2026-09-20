@@ -170,9 +170,9 @@ class TestObsidianVault:
         vault = self._vault(tmp_path, efforts=[effort])
         vault.effort_created(effort)
         page = tmp_path / "Efforts" / "X.md"
-        page.write_text(page.read_text() + "\nCat's own notes here\n")
+        page.write_text(page.read_text() + "\nTheir own notes here\n")
         vault.effort_created(effort)  # must not clobber
-        assert "Cat's own notes here" in page.read_text()
+        assert "Their own notes here" in page.read_text()
 
     def test_write_failure_never_raises(self, tmp_path):
         vault = ObsidianVault(tmp_path / "missing", TZ, None, None, None)
@@ -313,7 +313,7 @@ class TestOracleDeliversEveryStep:
 class TestAnswerCheckRetired:
     """Item 29's gate was RETIRED 2 Sep 2026: near-silent for weeks, then it
     degraded replies (leaked its ACTIONS/DRAFT scaffold to the user, invented
-    a duplicate message). The 29b prevention - her message re-attached behind
+    a duplicate message). The 29b prevention - their message re-attached behind
     every tool round - is the surviving fix. This locks the retirement."""
 
     def test_oracle_has_no_answer_check(self):

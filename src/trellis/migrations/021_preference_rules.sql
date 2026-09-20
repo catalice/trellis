@@ -1,4 +1,4 @@
--- Preferences become ROWS (her call, 2 Sep): one rule, one row, one id —
+-- Preferences become ROWS (the user's call, 2 Sep): one rule, one row, one id —
 -- reviewable, updatable, removable individually. The July blob (one text
 -- field per domain) couldn't be surgically edited; append-by-default was a
 -- patch on its data-loss bug, not a shape fix. Blob lines migrate 1:1

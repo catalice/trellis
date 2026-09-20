@@ -464,7 +464,7 @@ class ObsidianVault:
             for st in day_states:
                 t = st.felt_at.astimezone(self._tz).strftime("%H:%M")
                 retro = ""
-                # Compare LOCAL dates — UTC dates flip at midnight UTC, not hers.
+                # Compare LOCAL dates — UTC dates flip at midnight UTC, not theirs.
                 if (st.felt_at.astimezone(self._tz).date()
                         != st.logged_at.astimezone(self._tz).date()):
                     retro = f" _(logged {st.logged_at.astimezone(self._tz).strftime('%d %b')})_"
@@ -752,7 +752,7 @@ class ObsidianVault:
 
     def brain_changed(self, user_id, profile=None, context=None,
                       pref_rules=None, kinds=None) -> None:
-        """The window into what's saved about THEM (her ask, 2 Sep: 'I should
+        """The window into what's saved about THEM (the user's ask, 2 Sep: 'I should
         be able to see everything rather than it going into a black hole').
         Atlas/Brain/: Profile, Context, Preferences (with rule ids), Tracked
         kinds. Caller supplies the data; write-only, never raises."""
