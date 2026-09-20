@@ -68,7 +68,12 @@ class ReminderRepository(Protocol):
     def list_scheduled(self, user_id: UUID) -> list[Reminder]: ...
     def list_recent(self, user_id: UUID, *, limit: int) -> list[Reminder]: ...
     def cancel(self, reminder_id: UUID) -> bool: ...
-    def mark_sent(self, reminder_id: UUID) -> bool: ...
+    def claim(self, reminder_id: UUID, *, now: datetime) -> bool: ...
+    def ready(self, reminder_id: UUID, message: str) -> None: ...
+    def awaiting_delivery(self, user_id: UUID) -> list[Reminder]: ...
+    def delivery_failed(self, reminder_id: UUID) -> int: ...
+    def accepted(self, reminder_id: UUID, *, now: datetime) -> None: ...
+    def undelivered(self, reminder_id: UUID) -> None: ...
 
 
 class GoalRepository(Protocol):
@@ -628,11 +633,28 @@ class ReminderService:
         the model can't SEE is one it can't cancel or update — audit item 25.)"""
         return self._repo.list_scheduled(user_id)
 
-    def mark_sent(self, reminder_id: UUID) -> None:
+    # -- delivery: claimed -> executed (message ready) -> accepted | undelivered --
+
+    def claim(self, reminder_id: UUID, *, now: datetime) -> bool:
+        return self._repo.claim(reminder_id, now=now)
+
+    def ready(self, reminder_id: UUID, message: str) -> None:
+        self._repo.ready(reminder_id, message)
+
+    def awaiting_delivery(self, user_id: UUID) -> list[Reminder]:
+        return self._repo.awaiting_delivery(user_id)
+
+    def delivery_failed(self, reminder_id: UUID) -> int:
+        return self._repo.delivery_failed(reminder_id)
+
+    def accepted(self, reminder_id: UUID, *, now: datetime) -> None:
         reminder = self._repo.get(reminder_id)
-        self._repo.mark_sent(reminder_id)
+        self._repo.accepted(reminder_id, now=now)
         if reminder:
             self._vault_refresh(reminder.user_id)
+
+    def undelivered(self, reminder_id: UUID) -> None:
+        self._repo.undelivered(reminder_id)
 
     def recent(self, user_id: UUID, *, limit: int = 10) -> list[Reminder]:
         return self._repo.list_recent(user_id, limit=limit)

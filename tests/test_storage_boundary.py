@@ -189,3 +189,41 @@ class TestWatchPushRecord:
         repo.record_watch_push(pg_user, wednesday, "Easy Run", "w3")       # a correction
         assert repo.get_watch_push(pg_user, monday, "Easy Run") == "w1"
         assert repo.get_watch_push(pg_user, wednesday, "Easy Run") == "w3"
+
+
+class TestReminderDeliveryStates:
+    def _reminder(self, database, user):
+        from datetime import datetime, timedelta, timezone
+        from uuid import uuid4
+        from trellis.domain_focus_models import Reminder
+        from trellis.domain_focus_repo import PostgresReminderRepository
+        repo = PostgresReminderRepository(database)
+        now = datetime.now(timezone.utc)
+        saved = repo.save(Reminder(id=uuid4(), user_id=user, label="check the oven",
+                                   remind_at=now - timedelta(minutes=1), status="scheduled"))
+        return repo, saved, now
+
+    def test_only_one_claim_wins_and_a_claimed_reminder_is_no_longer_due(self, pg_database, pg_user):
+        from datetime import timedelta
+        repo, reminder, now = self._reminder(pg_database, pg_user)
+        assert repo.claim(reminder.id, now=now) is True
+        assert repo.claim(reminder.id, now=now) is False
+        assert repo.list_upcoming(pg_user, before=now + timedelta(hours=1)) == []
+
+    def test_the_message_is_stored_before_sending_and_acceptance_is_recorded(self, pg_database, pg_user):
+        repo, reminder, now = self._reminder(pg_database, pg_user)
+        repo.claim(reminder.id, now=now)
+        repo.ready(reminder.id, "Reminder: check the oven")
+        (waiting,) = repo.awaiting_delivery(pg_user)
+        assert (waiting.status, waiting.message, waiting.attempts) == ("executed", "Reminder: check the oven", 0)
+        assert repo.delivery_failed(reminder.id) == 1
+        repo.accepted(reminder.id, now=now)
+        assert repo.awaiting_delivery(pg_user) == []
+        assert repo.get(reminder.id).status == "accepted"
+
+    def test_a_cancelled_or_already_claimed_reminder_cannot_be_made_ready_again(self, pg_database, pg_user):
+        repo, reminder, now = self._reminder(pg_database, pg_user)
+        repo.claim(reminder.id, now=now)
+        repo.ready(reminder.id, "first")
+        repo.ready(reminder.id, "second")                   # a second 'ready' must not replace the stored reply
+        assert repo.get(reminder.id).message == "first"

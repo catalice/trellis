@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from telegram import Update
@@ -93,6 +93,7 @@ class TelegramTrellis:
         # rapid second message always sees the first exchange in history (and
         # replies can't interleave or land in scrambled order).
         self._turn_locks: dict = {}
+        self._check_ins_running: set = set()   # check-in reminders whose turn is in flight in THIS process
         self.logger = logging.getLogger(__name__)
 
     def build(self) -> Application:
@@ -250,74 +251,100 @@ class TelegramTrellis:
             await asyncio.sleep(15)
 
     async def _deliver_due_reminders_once(self, application: Application) -> int:
-        if self.reminders is None:
-            return 0
-        delivered = 0
+        """One tick. Returns how many messages Telegram ACCEPTED.
+
+        A reminder is CLAIMED (it can't fire twice), made READY (its message is
+        settled and stored — for a check-in, its turn has run, once), and only
+        then sent. Sending is retried on later ticks, a bounded number of
+        times; what produced the message is never run again. A duplicate
+        notification is preferred to a missed one; a check-in's actions are
+        never repeated."""
+        accepted = 0
         now = datetime.now(timezone.utc)
         users = await asyncio.to_thread(self.database.list_users)
         for user_id, telegram_user_id in users:
             if not self._is_allowed(telegram_user_id):
                 continue
-            due = await asyncio.to_thread(
-                self.reminders.upcoming, user_id, hours=0, now=now
-            )
+            due = await asyncio.to_thread(self.reminders.upcoming, user_id, hours=0, now=now)
             for reminder in due:
-                # Marked sent BEFORE delivery for both kinds: a check-in that
-                # fails mid-turn must not re-fire every 15s, one oracle call
-                # a time, until it succeeds.
-                await asyncio.to_thread(self.reminders.mark_sent, reminder.id)
+                if not await asyncio.to_thread(self.reminders.claim, reminder.id, now=now):
+                    continue                                   # another worker has it
                 if reminder.recurrence:
-                    await asyncio.to_thread(
-                        self.reminders.reschedule, user_id, reminder, now=now
-                    )
+                    await asyncio.to_thread(self.reminders.reschedule, user_id, reminder, now=now)
                 if reminder.kind == "check_in":
-                    await self._run_check_in(application, user_id, telegram_user_id, reminder.label)
+                    message = await self._run_check_in(application, user_id, telegram_user_id, reminder)
                 else:
-                    sent = await application.bot.send_message(
-                        chat_id=telegram_user_id,
-                        text=f"Reminder: {reminder.label}",
-                    )
-                    self._record_msg(sent)
-                delivered += 1
-        return delivered
+                    message = f"Reminder: {reminder.label}"
+                await asyncio.to_thread(self.reminders.ready, reminder.id, message)
 
-    async def _run_check_in(self, application: Application, user_id, telegram_user_id, label: str) -> None:
-        """A reminder that wakes Trellis instead of the user: one ordinary
-        oracle turn, the label as its instruction, the reply sent as-is. Takes
-        the user's turn lock so it can't interleave with a message they're
-        mid-sending. Lands in history like any turn — the user side is marked
-        as the scheduled instruction, so the next turn knows who spoke first."""
-        lock = self._turn_locks.setdefault(user_id, asyncio.Lock())
-        async with lock:
-            typing = asyncio.create_task(self._typing_keepalive(
-                _ChatShim(application.bot, telegram_user_id)
-            ))
+            for reminder in await asyncio.to_thread(self.reminders.awaiting_delivery, user_id):
+                message = reminder.message
+                if reminder.status == "claimed":
+                    # Claimed but never made ready. Running right now in this
+                    # process? Leave it. Otherwise the process died in between.
+                    if reminder.id in self._check_ins_running or not _is_stale_claim(reminder, now):
+                        continue
+                    message = (_INTERRUPTED.format(label=reminder.label) if reminder.kind == "check_in"
+                               else f"Reminder: {reminder.label}")
+                    await asyncio.to_thread(self.reminders.ready, reminder.id, message)
+                if await self._send_text(application, telegram_user_id, message or f"Reminder: {reminder.label}"):
+                    await asyncio.to_thread(self.reminders.accepted, reminder.id, now=now)
+                    accepted += 1
+                else:
+                    attempts = await asyncio.to_thread(self.reminders.delivery_failed, reminder.id)
+                    if attempts >= _MAX_DELIVERY_ATTEMPTS:
+                        self.logger.error("reminder %s undelivered after %d attempts", reminder.id, attempts)
+                        await asyncio.to_thread(self.reminders.undelivered, reminder.id)
+        return accepted
+
+    async def _send_text(self, application: Application, telegram_user_id, text: str) -> bool:
+        """True only if Telegram accepted EVERY chunk. (Accepted — that it was
+        read is something nobody can know.)"""
+        for chunk in _chunk_message(text or ""):
+            if not chunk.strip():
+                continue
             try:
-                reply = await asyncio.to_thread(
-                    self.assembler.handle_turn, user_id, _check_in_message(label)
-                )
+                self._record_msg(await application.bot.send_message(
+                    chat_id=telegram_user_id, text=chunk, parse_mode="Markdown"))
             except Exception:
-                self.logger.exception("Check-in turn failed for user %s", user_id)
-                reply = (f"I was going to check in ({label}) but something went wrong "
-                         "on my side — say the word and I'll do it now.")
-            finally:
-                typing.cancel()
-                try:
-                    await typing
-                except (asyncio.CancelledError, Exception):
-                    pass
-            for chunk in _chunk_message(reply or ""):
-                if not chunk.strip():
-                    continue
                 try:
                     self._record_msg(await application.bot.send_message(
-                        chat_id=telegram_user_id, text=chunk, parse_mode="Markdown"))
+                        chat_id=telegram_user_id, text=chunk))
                 except Exception:
+                    self.logger.warning("Telegram did not accept a reminder message", exc_info=True)
+                    return False
+        return True
+
+    async def _run_check_in(self, application: Application, user_id, telegram_user_id, reminder) -> str:
+        """A reminder that wakes Trellis instead of the user: one ordinary
+        oracle turn, the label as its instruction. Returns the reply to deliver;
+        sending is the caller's, so a failed send never re-runs this. Takes the
+        user's turn lock so it can't interleave with a message they're
+        mid-sending. Lands in history like any turn — the user side is marked
+        as the scheduled instruction, so the next turn knows who spoke first."""
+        self._check_ins_running.add(reminder.id)
+        try:
+            lock = self._turn_locks.setdefault(user_id, asyncio.Lock())
+            async with lock:
+                typing = asyncio.create_task(self._typing_keepalive(
+                    _ChatShim(application.bot, telegram_user_id)
+                ))
+                try:
+                    return await asyncio.to_thread(
+                        self.assembler.handle_turn, user_id, _check_in_message(reminder.label)
+                    ) or ""
+                except Exception:
+                    # The turn may have acted before it failed. It is not run again.
+                    self.logger.exception("Check-in turn failed for user %s", user_id)
+                    return _FAILED_CHECK_IN.format(label=reminder.label)
+                finally:
+                    typing.cancel()
                     try:
-                        self._record_msg(await application.bot.send_message(
-                            chat_id=telegram_user_id, text=chunk))
-                    except Exception:
-                        self.logger.warning("Failed to deliver check-in", exc_info=True)
+                        await typing
+                    except (asyncio.CancelledError, Exception):
+                        pass
+        finally:
+            self._check_ins_running.discard(reminder.id)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if self._user(update) is None:
@@ -476,6 +503,16 @@ class TelegramTrellis:
 
 
 _TELEGRAM_LIMIT = 3900  # headroom under Telegram's hard 4096
+_MAX_DELIVERY_ATTEMPTS = 40          # one per 15s tick: about ten minutes of trying, then 'undelivered'
+_STALE_CLAIM = timedelta(minutes=10)  # claimed this long with no message = the process died mid-way
+_INTERRUPTED = ("A check-in was due ({label}) but it was interrupted before it finished. "
+                "Some of it may have happened — I haven't run it again. Say the word and I'll do it now.")
+_FAILED_CHECK_IN = ("I was going to check in ({label}) but something went wrong on my side part-way. "
+                    "I haven't run it again — say the word and I'll do it now.")
+
+
+def _is_stale_claim(reminder, now: datetime) -> bool:
+    return reminder.claimed_at is None or now - reminder.claimed_at > _STALE_CLAIM
 _TELEGRAM_TIMEOUT = 30.0  # seconds; library default is 5
 
 

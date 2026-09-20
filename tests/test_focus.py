@@ -156,11 +156,11 @@ class FakeReminderRepo:
         self.reminders[rid] = replace(r, status="cancelled")
         return True
 
-    def mark_sent(self, rid) -> bool:
+    def claim(self, rid, *, now) -> bool:
         from dataclasses import replace
-        if rid not in self.reminders:
+        if rid not in self.reminders or self.reminders[rid].status != "scheduled":
             return False
-        self.reminders[rid] = replace(self.reminders[rid], status="sent")
+        self.reminders[rid] = replace(self.reminders[rid], status="claimed", claimed_at=now)
         return True
 
     def list_recent(self, user_id, *, limit):
@@ -452,10 +452,11 @@ class TestReminderService:
         svc.cancel(r.id)
         assert svc.upcoming(UID, hours=24, now=NOW) == []
 
-    def test_mark_sent_removes_from_upcoming(self):
+    def test_a_claimed_reminder_is_no_longer_due_and_cannot_be_claimed_twice(self):
         svc = ReminderService(FakeReminderRepo(), TZ)
         r = svc.set(UID, "Fitting", NOW, now=NOW)
-        svc.mark_sent(r.id)
+        assert svc.claim(r.id, now=NOW) is True
+        assert svc.claim(r.id, now=NOW) is False
         assert svc.upcoming(UID, hours=24, now=NOW) == []
 
     def test_reschedule_daily_advances_one_day(self):

@@ -449,14 +449,60 @@ class PostgresReminderRepository:
                 )
                 return cur.rowcount > 0
 
-    def mark_sent(self, reminder_id: UUID) -> bool:
+    def claim(self, reminder_id: UUID, *, now: datetime) -> bool:
+        """Take a due reminder. True only for the one caller that moved it out
+        of 'scheduled' — it cannot fire twice."""
         with self._db.connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE reminders SET status = 'sent' WHERE id = %s",
-                    (reminder_id,),
+                    "UPDATE reminders SET status = 'claimed', claimed_at = %s"
+                    " WHERE id = %s AND status = 'scheduled'",
+                    (now, reminder_id),
                 )
                 return cur.rowcount > 0
+
+    def ready(self, reminder_id: UUID, message: str) -> None:
+        """Its message is settled and stored — for a check-in, its turn has run."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE reminders SET status = 'executed', message = %s"
+                    " WHERE id = %s AND status = 'claimed'",
+                    (message, reminder_id),
+                )
+
+    def awaiting_delivery(self, user_id: UUID) -> list[Reminder]:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM reminders WHERE user_id = %s AND status IN ('claimed', 'executed')"
+                    " ORDER BY remind_at",
+                    (user_id,),
+                )
+                return [_reminder(r) for r in cur.fetchall()]
+
+    def delivery_failed(self, reminder_id: UUID) -> int:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE reminders SET attempts = attempts + 1 WHERE id = %s RETURNING attempts",
+                    (reminder_id,),
+                )
+                row = cur.fetchone()
+                return row[0] if row else 0
+
+    def accepted(self, reminder_id: UUID, *, now: datetime) -> None:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE reminders SET status = 'accepted', accepted_at = %s WHERE id = %s",
+                    (now, reminder_id),
+                )
+
+    def undelivered(self, reminder_id: UUID) -> None:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE reminders SET status = 'undelivered' WHERE id = %s", (reminder_id,))
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +638,9 @@ def _reminder(row: dict) -> Reminder:
         recurrence=row.get("recurrence"),
         kind=row.get("kind") or "remind",
         created_at=row["created_at"],
+        message=row.get("message"),
+        attempts=row.get("attempts") or 0,
+        claimed_at=row.get("claimed_at"),
     )
 
 

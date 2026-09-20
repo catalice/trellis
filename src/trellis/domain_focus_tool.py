@@ -410,6 +410,18 @@ def _view_effort(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusRead
     return "\n".join(lines)
 
 
+# Each state named for what it actually shows. 'accepted' is Telegram taking the
+# message — nobody can know it was read.
+_REMINDER_STATE = {
+    "claimed": "due, being prepared",
+    "executed": "ready, not yet accepted by Telegram — still trying",
+    "accepted": "accepted by Telegram",
+    "undelivered": "NOT delivered — retries ran out",
+    "cancelled": "cancelled",
+    "sent": "marked sent (older record — delivery was never confirmed)",
+}
+
+
 def _view_reminders(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusReads) -> str:
     upcoming = ctx.reminder_service.all_scheduled(user_id)
     recent = [r for r in ctx.reminder_service.recent(user_id, limit=10) if r.status != "scheduled"]
@@ -422,9 +434,11 @@ def _view_reminders(user_id: UUID, input_dict: dict, now: datetime, ctx: _FocusR
             for r in upcoming
         )
     if recent:
-        lines.append("Recent (delivery status):")
+        lines.append("Recent:")
         lines.extend(
-            f"  {'check-in: ' if r.kind == 'check_in' else ''}{r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)} — {r.status}"
+            f"  {'check-in: ' if r.kind == 'check_in' else ''}{r.label} @ {_fmt_datetime(r.remind_at, ctx.tz)}"
+            f" — {_REMINDER_STATE.get(r.status, r.status)}"
+            + (f" ({r.attempts} failed tries)" if r.attempts and r.status != "accepted" else "")
             for r in recent
         )
     return "\n".join(lines) if lines else "No reminders scheduled and none recently fired."
