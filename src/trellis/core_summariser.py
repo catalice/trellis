@@ -46,6 +46,17 @@ def _trimmed_window(conversation_messages: list[dict]) -> list[dict]:
     return list(reversed(trimmed))
 
 
+def _transcript(conversation_messages: list[dict]) -> str:
+    """The conversation as ONE document to record — handed over as chat turns,
+    a model continues the chat instead (20 Sep 2026: a 'summary' came back as
+    an imitation of the last assistant turn)."""
+    lines = [
+        f"{'They' if m.get('role') == 'user' else 'Trellis'}: {str(m.get('content') or '').strip()}"
+        for m in conversation_messages
+    ]
+    return "Transcript:\n\n" + "\n\n".join(lines) + "\n\nWrite the record now."
+
+
 def make_summariser(
     groq_client,
     model: str = "openai/gpt-oss-20b",
@@ -60,9 +71,9 @@ def make_summariser(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    *conversation_messages,
+                    {"role": "user", "content": _transcript(conversation_messages)},
                 ],
-                max_tokens=300,
+                max_tokens=1000,   # a reasoning model spends tokens before it writes
                 temperature=0,
             )
             return response.choices[0].message.content.strip() or None
@@ -74,14 +85,11 @@ def make_summariser(
         if fallback_client is None:
             return None
         try:
-            messages = list(conversation_messages)
-            if messages and messages[0].get("role") != "user":
-                messages.insert(0, {"role": "user", "content": "[conversation continues]"})
             response = fallback_client.messages.create(
                 model=fallback_model,
                 max_tokens=1024,
                 system=system_prompt,
-                messages=messages,
+                messages=[{"role": "user", "content": _transcript(conversation_messages)}],
             )
             texts = [
                 b.text for b in response.content
