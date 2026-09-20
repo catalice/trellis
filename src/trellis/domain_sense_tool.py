@@ -164,8 +164,10 @@ def handle_sense_get(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
             row = rows[d]
             bits = []
             for k in sorted(row):
-                v = row[k]
-                bits.append(f"{k} {round(v, 1) if isinstance(v, float) else v}")
+                if k in ("logged", "watch") or (k == "meds" and row.get("meds_names")):
+                    continue        # bookkeeping for the verifier; names say more than True
+                v = ", ".join(row[k]) if k == "meds_names" else row[k]
+                bits.append(f"{'meds' if k == 'meds_names' else k} {round(v, 1) if isinstance(v, float) else v}")
             lines.append(f"  {d.isoformat()}: " + ", ".join(bits))
         return "\n".join(lines)
 

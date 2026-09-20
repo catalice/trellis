@@ -35,7 +35,7 @@ class TestConditionCompare(unittest.TestCase):
         frame = _frame(20, lambda i: {"mood": 2.0 if i < 10 else 4.0,
                                       "phase": "luteal" if i < 10 else "follicular"})
         verified, evidence, stats = verify(frame, {
-            "type": "condition_compare", "metric": "mood", "condition": "phase:luteal",
+            "type": "condition_compare", "metric": "mood", "condition": "phase:luteal", "expect": "lower",
         })
         self.assertTrue(verified)
         self.assertEqual(stats["n_with"], 10)
@@ -62,9 +62,9 @@ class TestConditionCompare(unittest.TestCase):
     def test_ran_yesterday_condition(self):
         # Energy 4 the day after every run, 2 otherwise.
         frame = _frame(24, lambda i: {"energy": 4.0 if i % 2 else 2.0,
-                                      "ran": i % 2 == 0})
+                                      "ran": i % 2 == 0, "watch": True})
         verified, _, stats = verify(frame, {
-            "type": "condition_compare", "metric": "energy", "condition": "ran_yesterday",
+            "type": "condition_compare", "metric": "energy", "condition": "ran_yesterday", "expect": "higher",
         })
         self.assertTrue(verified)
         self.assertGreater(stats["mean_with"], stats["mean_without"])
@@ -76,12 +76,130 @@ class TestConditionCompare(unittest.TestCase):
         self.assertEqual(stats.get("error"), "unknown_test")
 
 
+class TestAHypothesisCanBeWrong(unittest.TestCase):
+    """A difference in EITHER direction used to verify: 'mood is better on meds
+    days' was confirmed by mood being worse on them."""
+
+    def _meds_days_are_worse(self):
+        return _frame(20, lambda i: {"mood": 2.0 if i < 10 else 4.0, "logged": True,
+                                     "meds": i < 10})
+
+    def test_the_opposite_result_refutes_it(self):
+        verified, evidence, stats = verify(self._meds_days_are_worse(), {
+            "type": "condition_compare", "metric": "mood", "condition": "meds_logged", "expect": "higher",
+        })
+        self.assertFalse(verified)
+        self.assertIn("OPPOSITE", evidence)
+        self.assertIn("mood averages 2.0", evidence)          # the numbers are still shown
+        self.assertIn("not_confirmed", stats)
+
+    def test_the_same_data_confirms_the_hypothesis_it_actually_supports(self):
+        verified, _, _ = verify(self._meds_days_are_worse(), {
+            "type": "condition_compare", "metric": "mood", "condition": "meds_logged", "expect": "lower",
+        })
+        self.assertTrue(verified)
+
+    def test_no_stated_direction_confirms_nothing(self):
+        verified, evidence, _ = verify(self._meds_days_are_worse(), {
+            "type": "condition_compare", "metric": "mood", "condition": "meds_logged",
+        })
+        self.assertFalse(verified)
+        self.assertIn("names no direction", evidence)
+
+    def test_a_correlation_the_wrong_way_round_refutes_it(self):
+        frame = _frame(15, lambda i: {"sleep_hours": 5 + (i % 4), "energy": 5 - (i % 4)})
+        verified, evidence, _ = verify(frame, {
+            "type": "correlation", "series_a": "sleep_hours", "series_b": "energy", "expect": "positive",
+        })
+        self.assertFalse(verified)
+        self.assertIn("OPPOSITE", evidence)
+
+    def test_not_confirmed_is_a_result_not_an_error(self):
+        """It must be STORED: `error` in stats means the test couldn't run and
+        the old evidence is kept — a refutation has to replace it."""
+        _, _, stats = verify(self._meds_days_are_worse(), {
+            "type": "condition_compare", "metric": "mood", "condition": "meds_logged", "expect": "higher",
+        })
+        self.assertNotIn("error", stats)
+
+
+class TestMissingIsUnknown(unittest.TestCase):
+    """A day with nothing recorded is not a day without a run or a medication."""
+
+    def test_days_with_no_logging_are_left_out_of_a_meds_comparison(self):
+        # 6 meds days at mood 4; 6 logged days without at mood 2; 8 days where
+        # mood came from elsewhere and NOTHING was logged — unknown, not 'no meds'.
+        def fill(i):
+            if i < 6:
+                return {"mood": 4.0, "logged": True, "meds": True}
+            if i < 12:
+                return {"mood": 2.0, "logged": True}
+            return {"mood": 4.0}
+        verified, evidence, stats = verify(_frame(20, fill), {
+            "type": "condition_compare", "metric": "mood", "condition": "meds_logged", "expect": "higher",
+        })
+        self.assertTrue(verified)
+        self.assertEqual((stats["n_with"], stats["n_without"]), (6, 6))
+        self.assertIn("on other logged days", evidence)       # says what the other side really is
+
+    def test_a_day_the_watch_recorded_nothing_is_not_a_rest_day(self):
+        frame = _frame(20, lambda i: {"energy": 3.0, "ran": True, "watch": True} if i < 6 else {"energy": 3.0})
+        verified, evidence, stats = verify(frame, {
+            "type": "condition_compare", "metric": "energy", "condition": "ran_today", "expect": "higher",
+        })
+        self.assertFalse(verified)
+        self.assertEqual(stats["n_without"], 0)
+        self.assertIn("keep gathering", evidence)
+
+
+class TestMedicationIdentity(unittest.TestCase):
+    """One boolean made every medication the same medication."""
+
+    def _events(self):
+        at = lambda i: datetime(2026, 6, 1 + i, 9, 0, tzinfo=TZ)
+        meds = lambda i, name: SimpleNamespace(event_type="meds", detail=name, value=None, occurred_at=at(i))
+        return [meds(0, "Ibuprofen 400mg"), meds(0, "antihistamine"), meds(1, "antihistamine"), meds(2, "meds")]
+
+    def test_the_frame_keeps_which_medication(self):
+        frame = build_daily_frame(uuid4(), states=[], events=self._events(), health_rows=[], runs=[],
+                                  tz=TZ, today=date(2026, 6, 10))
+        self.assertEqual(frame[date(2026, 6, 1)]["meds_names"], ("antihistamine", "ibuprofen 400mg"))
+        self.assertEqual(frame[date(2026, 6, 2)]["meds_names"], ("antihistamine",))
+        self.assertNotIn("meds_names", frame[date(2026, 6, 3)])      # logged, unnamed: still a meds day
+        self.assertTrue(frame[date(2026, 6, 3)]["meds"])
+
+    def test_a_named_condition_means_that_medication_only(self):
+        from trellis.core_watcher import _condition_holds
+        day = {"logged": True, "meds": True, "meds_names": ("ibuprofen 400mg",)}
+        self.assertTrue(_condition_holds(day, None, "meds:ibuprofen"))           # any dose of it
+        self.assertTrue(_condition_holds(day, None, "meds:ibuprofen 400mg"))
+        self.assertFalse(_condition_holds(day, None, "meds:antihistamine"))      # logged, but not this one
+        self.assertIsNone(_condition_holds({}, None, "meds:antihistamine"))      # nothing logged: unknown
+
+
+class TestAnAdoptedPatternNeverRidesAlone(unittest.TestCase):
+    def test_context_carries_what_the_data_says_now(self):
+        """Adopted, the sentence alone went into every turn — even after the
+        data stopped agreeing with it."""
+        from trellis.core_watcher import Watcher
+        repo = SimpleNamespace(all_for=lambda uid: [{
+            "id": uuid4(), "status": "adopted", "hypothesis": "Mood is higher on days meds were logged.",
+            "evidence": "mood averages 2.0 on days meds were logged vs 4.0 on other logged days "
+                        "(10 vs 10 days) — the OPPOSITE of the proposed 'higher'",
+        }])
+        watcher = Watcher(repo, None, state_repo=None, health_repo=None, run_repo=None, tz=TZ)
+        context = watcher.intelligence_context(uuid4(), datetime(2026, 6, 20, tzinfo=TZ))
+        self.assertIn("latest data: mood averages 2.0", context)
+        self.assertIn("OPPOSITE", context)
+        self.assertIn("not causes", context)
+
+
 class TestCorrelation(unittest.TestCase):
     def test_verifies_strong_correlation(self):
         frame = _frame(15, lambda i: {"sleep_hours": 5 + (i % 4),
                                       "energy": 1 + (i % 4)})
         verified, evidence, stats = verify(frame, {
-            "type": "correlation", "series_a": "sleep_hours", "series_b": "energy",
+            "type": "correlation", "series_a": "sleep_hours", "series_b": "energy", "expect": "positive",
         })
         self.assertTrue(verified)
         self.assertGreaterEqual(stats["r"], 0.99)
@@ -96,7 +214,7 @@ class TestCorrelation(unittest.TestCase):
             }
         verified, _, stats = verify(frame, {
             "type": "correlation", "series_a": "sleep_hours", "series_b": "energy",
-            "lag_days": 1,
+            "lag_days": 1, "expect": "positive",
         })
         self.assertTrue(verified)
         self.assertGreaterEqual(stats["r"], 0.99)
