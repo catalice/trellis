@@ -2,7 +2,8 @@
 
 **Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
 Stages 2–3 (model boundary, scenario harness, truthful outcomes) reviewed together, merged and
-deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness) is built on `reliability/03-retrieval-memory` and awaits review.
+deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness): reviewed, three bounded corrections, merged and
+deployed 20 September 2026; the index repair (bot stopped) filed 2 missing rows and removed 1 orphan. Next: stage 5.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
