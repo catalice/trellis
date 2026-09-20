@@ -13,10 +13,15 @@ response that is interrupted, wrong or silent cannot erase it.
 """
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Protocol
+from uuid import UUID, uuid4
+
+_log = logging.getLogger(__name__)
 
 
 class Status(StrEnum):
@@ -64,6 +69,7 @@ class ActionRecord:
     summary: str = ""                         # first line of what the handler said
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
+    id: UUID = field(default_factory=uuid4)
 
 
 class ActionLog(Protocol):
@@ -103,3 +109,46 @@ def receipt(actions: list[ActionRecord] | tuple[ActionRecord, ...]) -> str:
                 "have gone through — I haven't retried it."
             )
     return "\n".join(lines)
+
+
+class PostgresActionLog:
+    """The durable record, bound to one person for one turn. Writes never raise:
+    a record that can't be written is logged and the action still runs. The
+    turn's entries are also kept in memory, so a turn that dies can say what it
+    had done without another read."""
+
+    def __init__(self, database, user_id) -> None:
+        self._database = database
+        self._user_id = user_id
+        self.entries: list[ActionRecord] = []
+
+    def begin(self, tool: str, input: dict) -> ActionRecord:
+        record = ActionRecord(tool=tool, input=dict(input))
+        self.entries.append(record)
+        try:
+            with self._database.connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO action_log (id, user_id, tool, input) VALUES (%s, %s, %s, %s::jsonb)",
+                    (record.id, self._user_id, tool, json.dumps(input, default=str)),
+                )
+        except Exception:
+            _log.warning("action log: begin not written", exc_info=True)
+        return record
+
+    def finish(self, handle: ActionRecord, status: Status, summary: str) -> None:
+        handle.status, handle.summary = status, summary
+        handle.finished_at = datetime.now(timezone.utc)
+        try:
+            with self._database.connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE action_log SET status = %s, summary = %s, finished_at = %s WHERE id = %s",
+                    (str(status), summary, handle.finished_at, handle.id),
+                )
+        except Exception:
+            _log.warning("action log: finish not written", exc_info=True)
+
+
+def describe(actions: list[ActionRecord]) -> str:
+    """The record in one line, for conversation history."""
+    return "; ".join(
+        f"{a.tool} → {a.status.upper()}" + (f": {a.summary}" if a.summary else "") for a in actions)

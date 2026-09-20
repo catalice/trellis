@@ -112,3 +112,41 @@ class TestTheActionRecordOutlivesTheModel:
         log = InMemoryActionLog()
         log.begin("save_note", {"text": "x"})                  # ...and the process dies here
         assert log.entries[0].status is Status.UNKNOWN
+
+
+class TestATurnThatDiesSaysWhatItHadDone:
+    """History used to get a generic 'actions may have completed' line. It now
+    gets the record."""
+
+    def _assembler(self, model, history, tools):
+        from trellis.core_actions import InMemoryActionLog
+        from trellis.core_assembler import Assembler
+        from trellis.core_oracle import Oracle
+        from trellis.core_registry import TrellisRegistry
+        self.log = InMemoryActionLog()
+        return Assembler(
+            oracle=Oracle(model), registry=TrellisRegistry(), history=history, permanent=[],
+            always_tools=[(schema, lambda uid, inp, now, h=handler: h(inp))
+                          for schema, handler in zip(tools.schemas, tools.handlers.values())],
+            action_log=lambda uid: self.log,
+        )
+
+    class _History:
+        def __init__(self): self.rows = []
+        def append(self, user_id, role, content, metadata=None): self.rows.append((role, content))
+        def recent_window(self, user_id, *, since, cap): return []
+        def to_messages(self, turns): return []
+        def domain_summary(self, user_id, domain): return None
+        def turn_count(self, user_id): return 0
+        def max_turns_covered(self, user_id): return 0
+
+    def test_history_records_the_action_that_completed_before_the_model_died(self):
+        from uuid import uuid4
+        from harness import ScriptedModel, SimulatedTools
+        history = self._History()
+        tools = SimulatedTools({"save_note": (SAVE_NOTE, "Saved.")})
+        assembler = self._assembler(ScriptedModel([Step(tools=SAVE)]), history, tools)   # then no more steps: it dies
+        with pytest.raises(AssertionError):
+            assembler.handle_turn(uuid4(), "Save a note that the boiler needs servicing.")
+        role, line = history.rows[-1]
+        assert role == "assistant" and "save_note → SUCCEEDED: Saved." in line

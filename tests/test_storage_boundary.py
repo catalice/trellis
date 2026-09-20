@@ -149,3 +149,29 @@ class TestEveryWorkerFailureIsKept:
         assert raw["activity"] == first["activity"] and raw["details"] == first["details"]
         assert set(raw["unavailable"]) == {"activity", "details"}
         assert set(repo.get_activity_detail(pg_user, "e1")["unavailable"]) == {"activity", "details"}
+
+
+class TestDurableActionRecord:
+    def test_an_attempt_is_on_record_before_it_is_closed_and_reads_unknown(self, pg_database, pg_user):
+        from trellis.core_actions import PostgresActionLog, Status
+        log = PostgresActionLog(pg_database, pg_user)
+        handle = log.begin("save_note", {"text": "boiler"})
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT tool, status, finished_at, input->>'text' FROM action_log WHERE user_id = %s", (pg_user,))
+            assert cur.fetchall() == [("save_note", "unknown", None, "boiler")]     # the process could die here
+        log.finish(handle, Status.FAILED, "Save failed; nothing changed.")
+        with pg_database.connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT status, summary, finished_at IS NOT NULL FROM action_log WHERE user_id = %s", (pg_user,))
+            assert cur.fetchall() == [("failed", "Save failed; nothing changed.", True)]
+
+    def test_a_record_that_cannot_be_written_never_blocks_the_action(self, pg_user):
+        from trellis.core_actions import PostgresActionLog, Status
+
+        class Down:
+            def connect(self):
+                raise ConnectionError("database is down")
+
+        log = PostgresActionLog(Down(), pg_user)
+        handle = log.begin("save_note", {"text": "x"})           # must not raise
+        log.finish(handle, Status.SUCCEEDED, "Saved.")           # must not raise
+        assert [(e.tool, e.status) for e in log.entries] == [("save_note", Status.SUCCEEDED)]

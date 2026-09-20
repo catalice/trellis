@@ -7,6 +7,7 @@ from uuid import UUID
 
 from telegram import Update
 
+from trellis.core_actions import PostgresActionLog
 from trellis.core_assembler import Assembler, constitution_lines
 from trellis.core_config import Settings
 from trellis.core_history import PostgresConversationHistory
@@ -432,6 +433,7 @@ def main() -> None:
         default_domain="focus",
         embedder=embedder,
         preferences=preferences_repository,
+        action_log=lambda uid: PostgresActionLog(database, uid),
         onboarding_check=lambda uid: needs_onboarding(profile_service, uid),
         onboarding_system=ONBOARDING_SYSTEM,
         onboarding_tools=[

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Protocol
 from uuid import UUID
 
+from trellis.core_actions import describe
 from trellis.core_model import SystemPrompt
 from trellis.core_oracle import Oracle
 from trellis.core_registry import ContextLoader, TrellisRegistry
@@ -109,6 +110,7 @@ class Assembler:
         default_domain: str | None = None,
         embedder: Embedder | None = None,
         preferences=None,   # repo with .get(user_id, domain) -> str | None
+        action_log: Callable[[UUID], object] | None = None,   # user_id -> a core_actions.ActionLog for one turn
     ) -> None:
         self._oracle = oracle
         self._registry = registry
@@ -122,6 +124,7 @@ class Assembler:
         self._onboarding_system = onboarding_system
         self._onboarding_tools = onboarding_tools or []
         self._preferences = preferences
+        self._action_log = action_log
         self._timezone = timezone
         self._default_domain = default_domain
         # Routing shapes CONTEXT only (tools are always available). Semantic when
@@ -175,13 +178,18 @@ class Assembler:
             "handled_by": "claude",
             "domains": sorted(domains),
         })
+        actions = self._action_log(user_id) if self._action_log is not None else None
         try:
-            result = self._oracle.run(system, messages, tool_schemas, bound_handlers)
+            result = self._oracle.run(system, messages, tool_schemas, bound_handlers, actions=actions)
         except Exception:
+            # The record outlives the model: say what the turn HAD done, from
+            # the record, not a guess that something might have.
+            on_record = list(getattr(actions, "entries", None) or [])
             self._history.append(
                 user_id, "assistant",
-                "[turn failed mid-run — tool actions from before the error may "
-                "have completed; retrieve before assuming nothing changed]",
+                ("[turn failed mid-run — on record before the error: " + describe(on_record) + "]")
+                if on_record else
+                "[turn failed mid-run — no action was on record before the error]",
             )
             raise
         self._save_assistant_turn(user_id, result)
