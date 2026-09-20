@@ -84,6 +84,15 @@ class LearnService:
 
     # -- vault map page (write-only, never raises) ----------------------------
 
+    def project_all(self, user_id: UUID) -> int:
+        """Re-project every map page. Returns how many threads were projected.
+        Run after an upgrade (scripts/backfill_vault.py) so pages written before
+        a format change convert while they still match what Trellis wrote."""
+        threads = self._repo.list_threads(user_id)
+        for thread in threads:
+            self._project(user_id, thread)
+        return len(threads)
+
     def _project(self, user_id: UUID, thread: LearnThread) -> None:
         if self._projection is None:
             return

@@ -244,3 +244,85 @@ class TestInterruptedWrites:
 
         assert page.read_text() == before
         assert [p.name for p in page.parent.iterdir()] == ["Rome.md"]   # no debris left behind
+
+
+class TestMapPagesCanBeReprojected:
+    """After an upgrade, every map is re-projected in one go — while an untouched
+    page from before markers still matches what Trellis wrote, so it converts
+    cleanly instead of being kept as a duplicate at the next conversation."""
+
+    def test_project_all_converts_an_untouched_old_page_cleanly(self, tmp_path):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from trellis.domain_learn_models import LearnThread
+        from trellis.domain_learn_service import LearnService, _map_body
+
+        uid = uuid4()
+        thread = LearnThread(id=uuid4(), user_id=uid, title="Rome", position="the Republic",
+                             created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+
+        class Repo:
+            def list_threads(self, user_id):
+                return [thread]
+            def get_thread_by_title(self, user_id, title):
+                return thread
+            def list_entries(self, user_id, thread_id):
+                return []
+
+        tz = ZoneInfo("UTC")
+        page = tmp_path / "Atlas/Maps/Rome.md"
+        page.parent.mkdir(parents=True)
+        page.write_text(f"# Rome\n\n{_map_body(thread, [], tz)}")        # exactly what the old code wrote
+
+        svc = LearnService(Repo(), tz, projection=_vault(tmp_path))
+        assert svc.project_all(uid) == 1
+        text = page.read_text()
+        assert "trellis:map:" in text and "The page as it was before" not in text
+        assert text.count("**You are here:**") == 1
+
+    def test_running_the_backfill_script_converts_the_old_map_pages(self, tmp_path, monkeypatch):
+        """The upgrade instruction names this script; running it must do what is promised."""
+        import importlib.util
+        from datetime import datetime
+        from pathlib import Path
+        from types import SimpleNamespace
+        from zoneinfo import ZoneInfo
+        from trellis.domain_learn_models import LearnThread
+        from trellis.domain_learn_service import _map_body
+
+        uid, tz = uuid4(), ZoneInfo("UTC")
+        thread = LearnThread(id=uuid4(), user_id=uid, title="Rome", position="the Republic",
+                             created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc))
+        page = tmp_path / "Atlas/Maps/Rome.md"
+        page.parent.mkdir(parents=True)
+        page.write_text(f"# Rome\n\n{_map_body(thread, [], tz)}")
+
+        spec = importlib.util.spec_from_file_location(
+            "backfill_vault_script", Path(__file__).parent.parent / "scripts" / "backfill_vault.py")
+        script = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(script)
+
+        class LearnRepo:
+            def __init__(self, database): pass
+            def list_threads(self, user_id): return [thread]
+            def get_thread_by_title(self, user_id, title): return thread
+            def list_entries(self, user_id, thread_id): return []
+
+        class States:
+            def __init__(self, database): pass
+            def list_states_since(self, user_id, *, since): return []
+            def list_events_since(self, user_id, *, since): return []
+
+        real_vault = _vault(tmp_path)
+        real_vault.tracking_changed = lambda user_id: None
+        real_vault.plan_changed = lambda user_id: None
+        monkeypatch.setattr(script, "Settings", SimpleNamespace(
+            from_env=lambda: SimpleNamespace(database_url="dsn", timezone=tz)))
+        monkeypatch.setattr(script, "PostgresDatabase", lambda url: SimpleNamespace(list_users=lambda: [(uid, 1)]))
+        monkeypatch.setattr(script, "PostgresStateRepository", States)
+        monkeypatch.setattr(script, "PostgresLearnRepository", LearnRepo)
+        monkeypatch.setattr(script, "build_vault", lambda database, settings: real_vault)
+
+        assert script.main() == 0
+        text = page.read_text()
+        assert "trellis:map:" in text and "The page as it was before" not in text
