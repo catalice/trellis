@@ -56,12 +56,15 @@ class Oracle:
         tools: list[dict],
         handlers: dict[str, Callable[[dict], str]],
         actions: ActionLog | None = None,       # where attempts are recorded; in memory if none given
+        read_only: frozenset[str] | set[str] = frozenset(),   # tools that change nothing
     ) -> OracleResult:
         log = actions or InMemoryActionLog()
+        self._read_only = frozenset(read_only)
+        self._session = session = None
         done: list[ActionRecord] = []
         last = messages[-1]["content"] if messages else ""
         user_message = last if isinstance(last, str) else ""
-        session = self._model.open(system, messages, tools)
+        self._session = session = self._model.open(system, messages, tools)
 
         calls: list[ToolCall] = []
         spoken: list[str] = []   # text from every step, in order — all of it ships
@@ -75,10 +78,7 @@ class Oracle:
                 # decided the results speak for themselves — they don't (tool
                 # results never reach the user). ONE follow-up asks it to
                 # speak; the deterministic fallback in _finish stays as backstop.
-                # Also when something did NOT cleanly succeed and the model ended
-                # without a word about it — whatever it said earlier in the turn.
-                unsaid = not spoken or any(a.status is not Status.SUCCEEDED for a in done)
-                if calls and not nudged and unsaid and not reply.text:
+                if calls and not nudged and not spoken and not reply.text:
                     nudged = True
                     _log.warning("oracle: silent end_turn after tools — nudging")
                     session.say(
@@ -150,13 +150,37 @@ class Oracle:
                 len(calls),
             )
         # The reply is assembled against the RECORD, not the model's account of
-        # it. Whatever the model wrote — before a tool failed, after it, or
-        # nothing at all — anything that did not cleanly succeed is stated here,
-        # last, in the record's words. A clean turn adds nothing.
+        # it. When anything did not cleanly succeed, the draft is NOT shipped —
+        # a warning appended beside "Done — saved." leaves the person to resolve
+        # the contradiction. The draft goes back to the model ONCE, with the
+        # record, to be rewritten; what ships is that rewrite (nothing, if it
+        # won't) and then the record's own statement, last. A clean turn adds
+        # nothing and costs no extra call.
         correction = receipt(done or [])
         if correction:
+            text = self._rewritten(text, correction)
             text = f"{text}\n\n{correction}" if text else correction
         return OracleResult(text, tuple(calls), tuple(done or ()))
+
+    def _rewritten(self, draft: str, correction: str) -> str:
+        """The second bounded guard (after the silent-turn nudge): one call, only
+        when an action did not cleanly succeed."""
+        session = getattr(self, "_session", None)
+        if session is None:
+            return ""
+        try:
+            session.say(
+                "[Trellis internal — your reply has NOT been sent. The record of this turn's "
+                f"actions says:\n{correction}\n\nYour draft was:\n\"\"\"\n{draft}\n\"\"\"\n\n"
+                "Rewrite it. Keep every real answer to what they asked. Remove anything that "
+                "says or implies those actions happened. Do not list the outcomes yourself — "
+                "Trellis adds the lines above after your reply, word for word. If your draft "
+                "already fits, send it back unchanged. Reply with the message only.]"
+            )
+            return session.next().text.strip()
+        except Exception:
+            _log.warning("oracle: the outcome rewrite failed — shipping the record alone", exc_info=True)
+            return ""
 
     def _attempt(
         self, name: str, input_dict: dict, handlers: dict[str, Callable[[dict], str]],
@@ -168,16 +192,23 @@ class Oracle:
         if any(a.tool == name and a.input == input_dict and a.status is Status.UNKNOWN for a in done):
             _log.warning("oracle: refused a blind retry of %s after an unknown outcome", name)
             return None
+        changes_things = name not in getattr(self, "_read_only", frozenset())
         handle = None
         try:
             handle = log.begin(name, input_dict)             # BEFORE it runs
         except Exception:
             _log.warning("action log begin failed", exc_info=True)
-        result = self._call(name, input_dict, handlers)
-        status = status_of(result)
+        if handle is None and changes_things:
+            # No durable attempt, no action: a crash after an unrecorded change
+            # would leave something done that nobody can account for.
+            result = failed(_NOT_RECORDED)
+        else:
+            result = self._call(name, input_dict, handlers)
+        status = status_of(result, changes_things=changes_things)
         summary = result.splitlines()[0][:_TRACE_RESULT_CHARS] if result else ""
         record = handle if isinstance(handle, ActionRecord) else ActionRecord(tool=name, input=dict(input_dict))
         record.status, record.summary = status, summary
+        record.correctable = bool(getattr(result, "correctable", False))
         done.append(record)
         if handle is not None:
             try:
@@ -205,6 +236,10 @@ _OUTCOME_UNKNOWN = (
     "OUTCOME UNKNOWN — this action hit an error part-way. It may or may not have "
     "taken effect. Do NOT run it again. If a read tool can show whether it "
     "happened, check; then tell them plainly what you know and what you don't."
+)
+_NOT_RECORDED = (
+    "Not run: Trellis could not put this attempt on record, so it did not start. "
+    "Nothing changed. Tell them it wasn't done."
 )
 _NOT_RETRIED = (
     "Not retried: this same action's earlier attempt this turn has an unknown "

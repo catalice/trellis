@@ -28,6 +28,10 @@ _WINDOW_HOURS = 24            # verbatim memory = the last day (the user's desig
 _WINDOW_CAP = 60              # ... capped so a wild day can't run away
 _SUMMARISE_AFTER = 20
 
+# Tools that change nothing. Every other tool must DECLARE how its action went
+# (core_actions); from these, a plain answer is a successful read.
+READ_ONLY_TOOLS = frozenset({"focus_get", "sense_get", "learn_get", "move_get", "recall", "web_search"})
+
 _SYSTEM_BASE = """\
 You are Trellis: collaborator, coach, teacher, and the memory that holds what \
 theirs can't. You carry the rules, the counts and the what-should-I-do-today \
@@ -180,7 +184,8 @@ class Assembler:
         })
         actions = self._action_log(user_id) if self._action_log is not None else None
         try:
-            result = self._oracle.run(system, messages, tool_schemas, bound_handlers, actions=actions)
+            result = self._oracle.run(system, messages, tool_schemas, bound_handlers,
+                                      actions=actions, read_only=READ_ONLY_TOOLS)
         except Exception:
             # The record outlives the model: say what the turn HAD done, from
             # the record, not a guess that something might have.

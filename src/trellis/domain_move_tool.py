@@ -18,7 +18,7 @@ from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
 
-from trellis.core_actions import failed, partial, unknown
+from trellis.core_actions import done, failed, partial, refused, unknown
 from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
 from trellis.domain_move_service import AmbiguousWorkout, NoSuchWorkout
 
@@ -250,12 +250,12 @@ def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_s
         return _update_plan(user_id, input_dict, move_service=move_service)
     if what == "baseline":
         if not str(input_dict.get("baseline", "")).strip():
-            return "baseline is required — the fitness baseline text."
+            return refused("baseline is required — the fitness baseline text.")
         return _update_plan(user_id, {"plan": {}, "baseline": input_dict["baseline"]},
                             move_service=move_service)
     if what == "workout":
         return _update_workout(user_id, input_dict, move_service=move_service)
-    return "Unknown request. Use what: plan, baseline, or workout."
+    return refused("Unknown request. Use what: plan, baseline, or workout.")
 
 
 def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
@@ -264,9 +264,9 @@ def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
         try:
             plan = json.loads(plan)
         except json.JSONDecodeError:
-            return "The plan needs to be a JSON object with 'arc' and 'week'."
+            return refused("The plan needs to be a JSON object with 'arc' and 'week'.")
     if not isinstance(plan, dict):
-        return "The plan needs to be a JSON object with 'arc' and 'week'."
+        return refused("The plan needs to be a JSON object with 'arc' and 'week'.")
     baseline = input_dict.get("baseline")
     baseline = str(baseline) if baseline is not None else None
     replace_week = bool(input_dict.get("replace_week", False))
@@ -297,7 +297,7 @@ def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
         result = f"{mode}. Stored week now holds {len(week)} session(s){span}."
     if baseline is not None and old_baseline and old_baseline != baseline:
         result += f'\nBaseline replaced — the old one said: "{old_baseline}"'
-    return result
+    return done(result)
 
 
 def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
@@ -306,20 +306,20 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
         try:
             workout = json.loads(workout)
         except json.JSONDecodeError:
-            return "The workout needs to be an object with a name and steps."
+            return refused("The workout needs to be an object with a name and steps.")
     if not isinstance(workout, dict):
-        return "The workout needs to be an object with a name and steps."
+        return refused("The workout needs to be an object with a name and steps.")
     raw_date = str(input_dict.get("date", "")).strip()
     try:
         on_date = date.fromisoformat(raw_date)
     except ValueError:
-        return "I need a real date (YYYY-MM-DD) to schedule it — use one of this week's dates."
+        return refused("I need a real date (YYYY-MM-DD) to schedule it — use one of this week's dates.")
     try:
         pushed = move_service.push_workout_to_watch(user_id, workout, on_date)
     except ValueError as exc:  # WorkoutSpecError
-        return f"That workout spec didn't work: {exc}. Check the steps and try again."
+        return refused(f"That workout spec didn't work: {exc}. Check the steps and send it again.")
     except RuntimeError as exc:
-        return str(exc)
+        return failed(str(exc))
     except Exception:
         _log.warning("push_to_watch failed", exc_info=True)
         return unknown("The push to Garmin hit an error part-way — the workout may or may not be on the watch. Read the watch library before saying which; do not push again blind.")
@@ -328,7 +328,7 @@ def handle_push_to_watch(user_id: UUID, input_dict: dict, now: datetime, *, move
         return partial(f"Pushed '{pushed.name}' to the watch for {day} — but the earlier copy for that "
                        "day couldn't be removed, so that day shows two. Delete the older one in Garmin.")
     verb = "Replaced" if pushed.replaced else "Pushed"
-    return f"{verb} '{pushed.name}' on your watch for {day}. Open Garmin and press start."
+    return done(f"{verb} '{pushed.name}' on your watch for {day}. Open Garmin and press start.")
 
 
 def _update_workout(user_id: UUID, input_dict: dict, *, move_service) -> str:
@@ -337,15 +337,15 @@ def _update_workout(user_id: UUID, input_dict: dict, *, move_service) -> str:
     sport = str(input_dict.get("sport", "")).strip() or None
     remove = str(input_dict.get("remove", "")).strip() or None
     if not note and not remove:
-        return failed("note is required — their account of the workout.")
+        return refused("note is required — their account of the workout.")
     try:
         on_date = date.fromisoformat(raw_date)
     except ValueError:
-        return f"Invalid date {raw_date!r} — use YYYY-MM-DD (check move_get history)."
+        return refused(f"Invalid date {raw_date!r} — use YYYY-MM-DD (check move_get history).")
     try:
         workout = move_service.annotate_workout(user_id, on_date, note, sport=sport, remove=remove)
     except AmbiguousWorkout as exc:
-        return failed(f"Not saved — {raw_date} has several activities: "
+        return refused(f"Not saved — {raw_date} has several activities: "
                       + "; ".join(_describe_activity(w) for w in exc.candidates)
                       + ". Send it again with sport set to the one they mean.")
     except NoSuchWorkout as exc:
@@ -359,7 +359,7 @@ def _update_workout(user_id: UUID, input_dict: dict, *, move_service) -> str:
     if workout is None:
         return failed(f"Not saved — nothing is recorded on {raw_date}. It may not have synced yet "
                       "(sync_garmin), or the date is off (move_get history). Their words are NOT stored yet.")
-    return f"Workout on {raw_date} ({workout.activity_type or 'activity'}) now reads: {workout.note}"
+    return done(f"Workout on {raw_date} ({workout.activity_type or 'activity'}) now reads: {workout.note}")
 
 
 def _describe_activity(workout) -> str:
@@ -372,7 +372,7 @@ def handle_sync_garmin(
     try:
         result = move_service.sync_garmin(user_id, now=now)
     except RuntimeError as exc:
-        return str(exc)
+        return failed(str(exc))
     except Exception:
         _log.warning("sync_garmin failed", exc_info=True)
         return failed("Couldn't reach Garmin just now — nothing was synced; stored readings are unchanged.")
@@ -401,7 +401,7 @@ def handle_sync_garmin(
                 out += f"\nReadiness now: {line}"
         except Exception:
             _log.warning("sync_garmin: readiness readout failed", exc_info=True)
-    return partial(out) if missed else out
+    return partial(out) if missed else done(out)
 
 
 

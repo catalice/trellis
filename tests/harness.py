@@ -155,7 +155,7 @@ class Scenario:
     context: str = "Today: Monday 2 March 2026, 09:00."
 
 
-def run(scenario: Scenario, model=None, system_base: str | None = None) -> Outcome:
+def run(scenario: Scenario, model=None, system_base: str | None = None, read_only=frozenset()) -> Outcome:
     """Run one scenario through the real conversation engine. No model given =
     the scenario's script."""
     from trellis.core_assembler import _SYSTEM_BASE
@@ -166,5 +166,6 @@ def run(scenario: Scenario, model=None, system_base: str | None = None) -> Outco
         [{"role": "user", "content": scenario.message}],
         tools.schemas,
         tools.handlers,
+        read_only=read_only,
     )
     return Outcome(reply=result.text, calls=tools.calls, result=result, model=connector)

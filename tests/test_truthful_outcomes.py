@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from harness import Scenario, Step, run, tool
-from trellis.core_actions import Status, failed, partial
+from trellis.core_actions import Status, done, failed, partial, refused
 
 SAVE_NOTE = tool("save_note", "Save a note.", text="The note.")
 SAVE = (("save_note", {"text": "the boiler needs servicing"}),)
@@ -25,32 +25,102 @@ def _statuses(outcome):
 
 
 class TestAFailedActionIsNeverDeliveredAsSuccess:
+    """When something did not cleanly succeed, the model's draft is not shipped:
+    it is handed back with the record and rewritten once. What ships is that
+    rewrite and then the record's own statement — never the draft's claims."""
+
     def test_success_claimed_before_the_tool_failed_then_silence(self):
         """The reviewed reproduction: 'Done — saved.', the save fails, the model says nothing more."""
-        o = _scenario([Step(text="Done — saved.", tools=SAVE), Step(text=""), Step(text="")],
+        o = _scenario([Step(text="Done — saved.", tools=SAVE), Step(text=""),
+                       Step(text="I tried to save that note, but it didn't go through.")],
                       failed("Save failed; nothing changed."))
         assert _statuses(o) == [Status.FAILED]
-        assert "Not done" in o.reply and "Save failed; nothing changed." in o.reply
-        assert o.reply.index("Done — saved.") < o.reply.index("Not done")     # the correction has the last word
+        assert "Done — saved." not in o.reply                           # the false claim never ships
+        assert o.reply.startswith("I tried to save that note")
+        assert o.reply.rstrip().endswith("Not done: Save failed; nothing changed.")
 
     def test_success_claimed_after_the_tool_failed(self):
-        o = _scenario([Step(tools=SAVE), Step(text="Saved your note. There were no failures.")],
+        o = _scenario([Step(tools=SAVE), Step(text="Saved your note. There were no failures."),
+                       Step(text="That note didn't save.")],
                       failed("Save failed; nothing changed."))
-        assert _statuses(o) == [Status.FAILED]
-        assert o.reply.rstrip().endswith("Save failed; nothing changed.")
+        assert "Saved your note" not in o.reply and "no failures" not in o.reply
+        assert o.reply.rstrip().endswith("Not done: Save failed; nothing changed.")
 
-    def test_a_model_silent_after_a_failure_is_asked_to_speak_even_if_it_spoke_earlier(self):
-        o = _scenario([Step(text="On it.", tools=SAVE), Step(text=""), Step(text="That didn't save.")],
+    def test_the_rewrite_is_given_the_draft_and_the_record(self):
+        o = _scenario([Step(text="12 times 12 is 144. Done — saved.", tools=SAVE), Step(text="All saved."),
+                       Step(text="12 times 12 is 144. The note didn't save.")],
                       failed("Save failed; nothing changed."))
-        assert len(o.model.said) == 1 and "That didn't save." in o.reply
+        asked = o.model.said[-1]
+        assert "12 times 12 is 144" in asked and "Save failed; nothing changed." in asked
+        assert o.reply.startswith("12 times 12 is 144.")                # the substantive answer survives
 
-    def test_a_clean_success_adds_nothing(self):
-        o = _scenario([Step(tools=SAVE), Step(text="Saved your note.")], "Saved.")
+    def test_a_model_that_will_not_rewrite_gets_only_the_record(self):
+        """If the rewrite comes back empty, nothing the draft claimed is shipped at all."""
+        o = _scenario([Step(text="Done — saved.", tools=SAVE), Step(text="Saved."), Step(text="")],
+                      failed("Save failed; nothing changed."))
+        assert "saved" not in o.reply.lower().replace("save failed", "")
+        assert "Not done: Save failed; nothing changed." in o.reply
+
+    def test_a_clean_success_adds_nothing_and_costs_no_extra_call(self):
+        o = _scenario([Step(tools=SAVE), Step(text="Saved your note.")], done("Saved."))
         assert _statuses(o) == [Status.SUCCEEDED] and o.reply == "Saved your note."
+        assert o.model.said == [] and o.model.steps_left == 0
 
     def test_partial_success_is_said_as_partial(self):
-        o = _scenario([Step(tools=SAVE), Step(text="All done.")], partial("Saved the note; the vault page didn't update."))
-        assert _statuses(o) == [Status.PARTIAL] and "Partly done" in o.reply
+        o = _scenario([Step(tools=SAVE), Step(text="All done."), Step(text="Saved the note; its page didn't update.")],
+                      partial("Saved the note; the vault page didn't update."))
+        assert _statuses(o) == [Status.PARTIAL] and "Partly done" in o.reply and "All done." not in o.reply
+
+
+class TestWhatATellsUsNothingIsNotASuccess:
+    """A tool that changes things must SAY it succeeded. A plain string from one
+    is a refusal or a validation message until proven otherwise — it used to be
+    recorded as 'succeeded', and 'Removed that preference.' shipped after
+    'That rule_id isn't a valid id.'"""
+
+    def test_an_undeclared_result_from_a_changing_tool_is_not_done(self):
+        o = _scenario([Step(tools=SAVE), Step(text="Removed that preference."), Step(text="That id wasn't valid.")],
+                      "That rule_id isn't a valid id.")
+        assert _statuses(o) == [Status.FAILED]
+        assert "Removed that preference." not in o.reply
+        assert "Not done: That rule_id isn't a valid id." in o.reply
+
+    def test_a_read_only_tool_may_answer_in_plain_text(self):
+        from harness import Scenario, run as run_scenario
+        look = tool("look_up", "Read something.", what="What.")
+        o = run_scenario(Scenario(name="x", message="what's stored?", tools={"look_up": (look, "Nothing stored yet.")},
+                                  script=[Step(tools=(("look_up", {"what": "notes"}),)), Step(text="Nothing yet.")],
+                                  checks=[]), read_only={"look_up"})
+        assert _statuses(o) == [Status.SUCCEEDED] and o.reply == "Nothing yet."
+
+
+class TestOneSuccessNeverHidesAnotherFailure:
+    def test_two_different_notes_one_failed_one_saved(self):
+        """The reviewed reproduction: the delivered reply was 'Both notes saved.'"""
+        attempts = iter([failed("Save failed; nothing changed."), done("Saved.")])
+        o = _scenario([Step(tools=SAVE), Step(tools=(("save_note", {"text": "the quince needs planting"}),)),
+                       Step(text="Both notes saved."), Step(text="The quince note saved; the boiler one didn't.")],
+                      lambda args: next(attempts))
+        assert _statuses(o) == [Status.FAILED, Status.SUCCEEDED]
+        assert "Both notes saved." not in o.reply
+        assert "Not done: Save failed; nothing changed." in o.reply
+
+    def test_a_refusal_resolved_by_the_same_request_reworded_is_not_warned_about(self):
+        long_rule = "please always make sure you never ever offer me menus of options"
+        attempts = iter([refused("Not saved — 13 words, the limit is 10."), done("Rule saved (global).")])
+        o = _scenario([Step(tools=(("save_note", {"text": long_rule}),)),
+                       Step(tools=(("save_note", {"text": "never offer me menus of options"}),)),
+                       Step(text="Saved it.")], lambda args: next(attempts))
+        assert _statuses(o) == [Status.FAILED, Status.SUCCEEDED]      # both on the record
+        assert o.reply == "Saved it."                                 # the person got what they asked for
+
+    def test_a_refusal_followed_by_a_different_request_is_still_warned_about(self):
+        attempts = iter([refused("Not saved — 13 words, the limit is 10."), done("Rule saved (global).")])
+        o = _scenario([Step(tools=(("save_note", {"text": "please always make sure you never ever offer me menus"}),)),
+                       Step(tools=(("save_note", {"text": "order my task list by priority"}),)),
+                       Step(text="Saved both."), Step(text="Saved the task-order rule; the menus rule was too long.")],
+                      lambda args: next(attempts))
+        assert "Not done: Not saved — 13 words" in o.reply
 
 
 class TestAnUnknownOutcomeStaysUnknown:
@@ -101,7 +171,7 @@ class TestTheActionRecordOutlivesTheModel:
         from trellis.core_oracle import Oracle
         from harness import ScriptedModel, SimulatedTools
         log = InMemoryActionLog()
-        tools = SimulatedTools({"save_note": (SAVE_NOTE, "Saved.")})
+        tools = SimulatedTools({"save_note": (SAVE_NOTE, done("Saved."))})
         model = ScriptedModel([Step(tools=SAVE)])             # asks for the tool, then has no more steps: dies
         with pytest.raises(AssertionError):
             Oracle(model).run("sys", [{"role": "user", "content": "q"}], tools.schemas, tools.handlers, actions=log)
@@ -144,7 +214,7 @@ class TestATurnThatDiesSaysWhatItHadDone:
         from uuid import uuid4
         from harness import ScriptedModel, SimulatedTools
         history = self._History()
-        tools = SimulatedTools({"save_note": (SAVE_NOTE, "Saved.")})
+        tools = SimulatedTools({"save_note": (SAVE_NOTE, done("Saved."))})
         assembler = self._assembler(ScriptedModel([Step(tools=SAVE)]), history, tools)   # then no more steps: it dies
         with pytest.raises(AssertionError):
             assembler.handle_turn(uuid4(), "Save a note that the boiler needs servicing.")
@@ -152,23 +222,45 @@ class TestATurnThatDiesSaysWhatItHadDone:
         assert role == "assistant" and "save_note → SUCCEEDED: Saved." in line
 
 
-class TestARefusalTheModelCorrectsIsNotReportedAsAFailure:
-    def test_a_failed_attempt_followed_by_the_same_tool_succeeding_leaves_no_warning(self):
-        """A rule refused for being too long, rewritten shorter, saved: the person
-        got what they asked for. Warning them about the first attempt is noise."""
-        attempts = iter([failed("Not saved — 13 words, the limit is 10."), "Rule saved (global)."])
-        o = _scenario([Step(tools=SAVE), Step(tools=(("save_note", {"text": "shorter"}),)), Step(text="Saved it.")],
-                      lambda args: next(attempts))
-        assert _statuses(o) == [Status.FAILED, Status.SUCCEEDED]      # both are on the record
-        assert o.reply == "Saved it."                                 # and the person isn't warned
-
-    def test_an_unknown_outcome_is_never_cleared_by_a_later_success(self):
+class TestAnUnknownOutcomeIsNeverCleared:
+    def test_a_later_success_does_not_clear_it(self):
         def behaviour(args):
             if args["text"] == "the boiler needs servicing":
                 raise TimeoutError()
-            return "Saved."
-        o = _scenario([Step(tools=SAVE), Step(tools=(("save_note", {"text": "other"}),)), Step(text="Done.")], behaviour)
+            return done("Saved.")
+        o = _scenario([Step(tools=SAVE), Step(tools=(("save_note", {"text": "other"}),)), Step(text="Done."),
+                       Step(text="One saved; I can't confirm the other.")], behaviour)
         assert "Not confirmed" in o.reply
+
+
+class TestNoRecordNoAction:
+    """A changing action starts only once its attempt is durably on record. If
+    the record can't be written, the action does not run — a crash afterwards
+    would otherwise leave a change nobody can account for."""
+
+    class _LogDown:
+        def begin(self, tool, input): return None            # could not be written
+        def finish(self, handle, status, summary): raise AssertionError("nothing to finish")
+
+    def _run(self, read_only=frozenset()):
+        from harness import ScriptedModel, SimulatedTools
+        from trellis.core_oracle import Oracle
+        changed = []
+        tools = SimulatedTools({"save_note": (SAVE_NOTE, lambda args: changed.append(args) or done("Saved."))})
+        model = ScriptedModel([Step(tools=SAVE), Step(text="Saved."), Step(text="I couldn't do that just now.")])
+        result = Oracle(model).run("sys", [{"role": "user", "content": "q"}], tools.schemas, tools.handlers,
+                                   actions=self._LogDown(), read_only=read_only)
+        return changed, result
+
+    def test_a_changing_action_does_not_run_without_its_record(self):
+        changed, result = self._run()
+        assert changed == []
+        assert [a.status for a in result.actions] == [Status.FAILED]
+        assert "Saved." not in result.text and "Not done" in result.text
+
+    def test_a_read_only_tool_still_runs(self):
+        changed, _ = self._run(read_only=frozenset({"save_note"}))
+        assert len(changed) == 1
 
 
 class TestHandlersSayHowItWent:
@@ -211,3 +303,58 @@ class TestHandlersSayHowItWent:
                         "unavailable": {"2026-03-10": ("sleep",)}}
 
         assert status_of(handle_sync_garmin(uuid4(), {}, datetime.now(timezone.utc), move_service=Move())) is Status.PARTIAL
+
+
+class TestEveryWriteHandlerDeclaresItsOutcome:
+    """A new `return "…"` in a handler that changes things would read as 'not
+    done' at runtime (safe, but wrong). This catches it at the desk instead: in
+    these functions every return is a call — done/refused/failed/partial/unknown,
+    or a hand-off to another handler."""
+
+    WRITE_HANDLERS = {
+        "core_meta_tool.py": {"handle_update_current_context", "handle_save_preferences"},
+        "core_onboarding.py": {"handle_save_identity"},
+        "core_watcher.py": {"handle_pattern_response"},
+        "domain_sense_tool.py": {"handle_log_state"},
+        "domain_learn_tool.py": {"handle_learn_add"},
+        "domain_move_tool.py": {"handle_move_update", "_update_plan", "_update_workout",
+                                "handle_push_to_watch", "handle_sync_garmin"},
+        "domain_focus_tool.py": {"handle_brain_dump", "handle_create_task", "handle_update_task",
+                                 "handle_set_reminder", "handle_cancel_reminder", "handle_add_goal",
+                                 "handle_update_goal", "handle_delete_entry", "handle_focus_add",
+                                 "handle_focus_update", "handle_save_to_effort"},
+    }
+
+    @staticmethod
+    def _declared(node) -> bool:
+        import ast
+        if isinstance(node, ast.Call):
+            return True
+        if isinstance(node, ast.IfExp):
+            return all(TestEveryWriteHandlerDeclaresItsOutcome._declared(n) for n in (node.body, node.orelse))
+        return False
+
+    def test_no_write_handler_returns_a_bare_string(self):
+        import ast
+        from pathlib import Path
+        src = Path(__file__).parent.parent / "src" / "trellis"
+        bare, seen = [], set()
+        for filename, names in self.WRITE_HANDLERS.items():
+            tree = ast.parse((src / filename).read_text())
+            for fn in ast.walk(tree):
+                if isinstance(fn, ast.FunctionDef) and fn.name in names:
+                    seen.add(fn.name)
+                    nested = {id(n) for inner in ast.walk(fn) if inner is not fn and isinstance(inner, (ast.FunctionDef, ast.Lambda))
+                              for n in ast.walk(inner)}
+                    for node in ast.walk(fn):
+                        if isinstance(node, ast.Return) and id(node) not in nested and node.value is not None \
+                                and not self._declared(node.value):
+                            bare.append(f"{filename}:{node.lineno} in {fn.name}")
+        assert not bare, "undeclared outcomes:\n  " + "\n  ".join(bare)
+        missing = set().union(*self.WRITE_HANDLERS.values()) - seen
+        assert not missing, f"handlers not found (renamed?): {missing}"
+
+    def test_every_tool_is_either_read_only_or_a_listed_write_handler(self):
+        """A new tool must be placed on one side or the other."""
+        from trellis.core_assembler import READ_ONLY_TOOLS
+        assert READ_ONLY_TOOLS == {"focus_get", "sense_get", "learn_get", "move_get", "recall", "web_search"}

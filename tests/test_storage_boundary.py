@@ -164,18 +164,18 @@ class TestDurableActionRecord:
             cur.execute("SELECT status, summary, finished_at IS NOT NULL FROM action_log WHERE user_id = %s", (pg_user,))
             assert cur.fetchall() == [("failed", "Save failed; nothing changed.", True)]
 
-    def test_a_record_that_cannot_be_written_never_blocks_the_action(self, pg_user):
-        from trellis.core_actions import PostgresActionLog, Status
+    def test_an_attempt_that_cannot_be_recorded_is_reported_as_such_and_never_raises(self, pg_user):
+        """`begin` returns None: the engine then does not start a changing action
+        (tests/test_truthful_outcomes.py::TestNoRecordNoAction)."""
+        from trellis.core_actions import PostgresActionLog
 
         class Down:
             def connect(self):
                 raise ConnectionError("database is down")
 
         log = PostgresActionLog(Down(), pg_user)
-        handle = log.begin("save_note", {"text": "x"})           # must not raise
-        log.finish(handle, Status.SUCCEEDED, "Saved.")           # must not raise
-        assert [(e.tool, e.status) for e in log.entries] == [("save_note", Status.SUCCEEDED)]
-
+        assert log.begin("save_note", {"text": "x"}) is None        # must not raise
+        assert log.entries == []
 
 class TestWatchPushRecord:
     def test_a_dated_session_is_remembered_and_a_correction_replaces_its_id(self, pg_database, pg_user):

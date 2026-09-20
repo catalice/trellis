@@ -323,6 +323,8 @@ Two patterns, chosen by risk profile:
 | **Dispatch write** `{house}_add` / `{house}_update` | Create/change verbs repeated across a house's entities | One door per verb (the user's call, 30 Aug — "we can always regress"). Detail lives in PER-FIELD descriptions tagged by entity, never one prose wall. The proven per-entity handlers stay behind the dispatch. log_state was the precedent: a union write that works. |
 | **Specific named write** `push_to_watch`, `delete_entry` | Distinct acts and destructive acts | An act with its own risk profile keeps its own name — deletion must never be reachable by enum typo. |
 
+**A tool that changes something declares how it went** (`core_actions`: `done` / `refused` / `failed` / `partial` / `unknown`). A plain string from one is recorded as NOT done — silence is not success. An exception is `unknown`, never `failed`, and never says "try again". Read-only tools (`READ_ONLY_TOOLS` in `core_assembler`) may answer in plain text. `tests/test_truthful_outcomes.py` fails if a write handler returns a bare string.
+
 **All tools are always available** — routing never gates them. The current 18:
 
 - **Always-on / big brain:** `brain_dump`, `recall`, `update_current_context`, `save_preferences`, `pattern_response`
@@ -381,7 +383,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 ## Lean constraints (non-negotiable)
 
-- **One ORACLE call per turn** (the agentic loop). One bounded single-shot guard is the only exception, born from a live failure: the silent-turn NUDGE (empty reply after tools). (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
+- **One conversational turn per message** (the agentic loop). Two bounded single-shot guards are the only exceptions, each born from a live failure: the silent-turn NUDGE (empty reply after tools), and the OUTCOME REWRITE (only when an action did not cleanly succeed: the draft goes back once with the record, because a warning appended beside "Done — saved." leaves the person to resolve the contradiction). (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
 - **Minimal pre-loaded context.** The failure mode is loading too much, not too little.
 - **Bounded context.** Insights and history enter as summaries. Never pass raw records.
 - **Tools as the API surface.** A future UI calls the same tools Telegram does.

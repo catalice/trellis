@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from trellis.core_actions import done
 from trellis.core_oracle import OracleResult, ToolCall
 from trellis.core_router import Router
 from trellis.domain_focus_models import (
@@ -221,7 +222,7 @@ class TestOracleSilentFinish:
         ])
         result = oracle.run("sys", [{"role": "user", "content": "hi"}],
                             tools=[{"name": "save_to_effort"}],
-                            handlers={"save_to_effort": lambda inp: "Saved to effort 'Dining Area Upgrade'."})
+                            handlers={"save_to_effort": lambda inp: done("Saved to effort 'Dining Area Upgrade'.")})
         assert result.text == "Kept that on your Dining Area page."
         assert result.tool_calls[0].name == "save_to_effort"
 
@@ -237,7 +238,7 @@ class TestOracleSilentFinish:
         ])
         result = oracle.run("sys", [{"role": "user", "content": "hi"}],
                             tools=[{"name": "save_to_effort"}],
-                            handlers={"save_to_effort": lambda inp: "Saved to effort 'Dining Area Upgrade'."})
+                            handlers={"save_to_effort": lambda inp: done("Saved to effort 'Dining Area Upgrade'.")})
         assert result.text == "Saved to effort 'Dining Area Upgrade'."
 
     def test_text_reply_unchanged(self):
@@ -267,7 +268,7 @@ class TestOracleDeliversEveryStep:
             self._Resp("end_turn", [self._Block(type="text", text="Logged the mood too.")]),
         ])
         result = oracle.run("sys", [{"role": "user", "content": "I ran! mood anxious"}],
-                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("State logged.")})
         assert result.text == "Well done for running.\n\nLogged the mood too."
 
     def test_exact_restatement_after_tool_is_not_doubled(self):
@@ -276,7 +277,7 @@ class TestOracleDeliversEveryStep:
             self._Resp("end_turn", [self._Block(type="text", text="Well done.")]),
         ])
         result = oracle.run("sys", [{"role": "user", "content": "I ran!"}],
-                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("State logged.")})
         assert result.text == "Well done."
 
     def test_pre_tool_text_then_silence_needs_no_nudge(self):
@@ -287,7 +288,7 @@ class TestOracleDeliversEveryStep:
             self._Resp("end_turn", []),
         ])
         result = oracle.run("sys", [{"role": "user", "content": "I ran!"}],
-                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "State logged."})
+                            tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("State logged.")})
         assert result.text == "Logged, and well done."
 
     def test_rider_tells_the_model_its_earlier_text_ships(self):
@@ -309,7 +310,7 @@ class TestOracleDeliversEveryStep:
             self._Resp("end_turn", [self._Block(type="text", text="More.")]),
         ]), "test"))
         oracle.run("sys", [{"role": "user", "content": "q"}],
-                   tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: "ok"})
+                   tools=[{"name": "log_state"}], handlers={"log_state": lambda inp: done("ok")})
         rider = seen[1]["messages"][-1]["content"][-1]["text"]
         assert "WILL reach them" in rider and "don't point them at it" in rider
 

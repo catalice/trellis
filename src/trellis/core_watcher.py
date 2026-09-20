@@ -35,6 +35,8 @@ from uuid import UUID, uuid4
 
 from psycopg2.extras import Json, RealDictCursor
 
+from trellis.core_actions import done, refused
+
 _log = logging.getLogger(__name__)
 
 # --- Evidence thresholds (facts are Python's) ------------------------------
@@ -879,25 +881,25 @@ def handle_pattern_response(user_id: UUID, input_dict: dict, now: datetime, *,
     ref = str(input_dict.get("pattern") or input_dict.get("pattern_id") or "").strip()
     verdict = str(input_dict.get("verdict", "")).strip()
     if verdict not in ("adopted", "dismissed", "watching"):
-        return "verdict must be adopted, dismissed, or watching."
+        return refused("verdict must be adopted, dismissed, or watching.")
     if not ref:
-        return "pattern is required — an id or a phrase from the hypothesis."
+        return refused("pattern is required — an id or a phrase from the hypothesis.")
     note = str(input_dict.get("note", "")).strip() or None
     try:
         pid = UUID(ref)
     except ValueError:
         matches = watcher._repo.find_by_words(user_id, ref)
         if not matches:
-            return f"No pattern matches {ref!r} — check the Watcher page wording."
+            return refused(f"No pattern matches {ref!r} — check the Watcher page wording.")
         if len(matches) > 1:
             options = "; ".join(m["hypothesis"][:60] for m in matches[:4])
-            return f"{len(matches)} patterns match {ref!r} — which one? ({options})"
+            return refused(f"{len(matches)} patterns match {ref!r} — which one? ({options})")
         pid = matches[0]["id"]
     row = watcher.respond(user_id, pid, verdict, note)
     if row is None:
-        return "No pattern with that id."
+        return refused("No pattern with that id.")
     if verdict == "dismissed":
-        return f"Dismissed — it will never come up again: {row['hypothesis']}"
+        return done(f"Dismissed — it will never come up again: {row['hypothesis']}")
     if verdict == "watching":
-        return f"Kept under watch — it will keep testing quietly: {row['hypothesis']}"
-    return f"Adopted — this now quietly shapes suggestions: {row['hypothesis']}"
+        return done(f"Kept under watch — it will keep testing quietly: {row['hypothesis']}")
+    return done(f"Adopted — this now quietly shapes suggestions: {row['hypothesis']}")

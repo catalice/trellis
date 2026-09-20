@@ -1,11 +1,14 @@
 """
 Action outcomes — what happened when a tool ran, independent of any model.
 
-A tool handler returns text for the model to read. That text now carries HOW the
-action went: `failed("…")`, `partial("…")`, or a plain string, which means it
-succeeded (every handler written before this returns plain strings, and keeps
-working). An exception is never "failed": the action may have taken effect
-before it raised, so its outcome is UNKNOWN.
+A tool handler returns text for the model to read. That text carries HOW the
+action went: `done("…")`, `failed("…")`, `refused("…")`, `partial("…")`,
+`unknown("…")`. A tool that CHANGES something must say it succeeded: a plain
+string from one is a refusal or a validation message until proven otherwise, and
+is recorded as not done. (It used to read as success — and "Removed that
+preference." shipped after "That rule_id isn't a valid id.") A read-only tool may
+answer in plain text. An exception is never "failed": the action may have taken
+effect before it raised, so its outcome is UNKNOWN.
 
 The record of what was attempted is written before the handler runs and closed
 after. It belongs to the turn, not to the model's account of the turn: a model
@@ -35,16 +38,29 @@ class ActionResult(str):
     """The text a handler returns, carrying its status. A str, so everything
     that treats tool results as text keeps working."""
     status: Status
+    correctable: bool
 
-    def __new__(cls, text: str, status: Status = Status.SUCCEEDED) -> "ActionResult":
+    def __new__(cls, text: str, status: Status = Status.SUCCEEDED, correctable: bool = False) -> "ActionResult":
         result = super().__new__(cls, text)
         result.status = status
+        result.correctable = correctable
         return result
+
+
+def done(text: str) -> ActionResult:
+    """It happened. A tool that changes something must say so explicitly."""
+    return ActionResult(text, Status.SUCCEEDED)
 
 
 def failed(text: str) -> ActionResult:
     """Nothing changed."""
     return ActionResult(text, Status.FAILED)
+
+
+def refused(text: str) -> ActionResult:
+    """Nothing changed because the REQUEST wasn't acceptable as sent (too long,
+    a missing field). The same request, corrected, may follow and resolve it."""
+    return ActionResult(text, Status.FAILED, correctable=True)
 
 
 def partial(text: str) -> ActionResult:
@@ -57,8 +73,13 @@ def unknown(text: str) -> ActionResult:
     return ActionResult(text, Status.UNKNOWN)
 
 
-def status_of(result: object) -> Status:
-    return getattr(result, "status", Status.SUCCEEDED)
+def status_of(result: object, *, changes_things: bool = True) -> Status:
+    """A declared status wins. Undeclared: a read-only tool succeeded (it
+    answered); a tool that changes things did NOT — silence is not success."""
+    declared = getattr(result, "status", None)
+    if declared is not None:
+        return declared
+    return Status.FAILED if changes_things else Status.SUCCEEDED
 
 
 @dataclass
@@ -66,6 +87,7 @@ class ActionRecord:
     tool: str
     input: dict
     status: Status = Status.UNKNOWN          # until closed: an attempt nobody finished is unknown
+    correctable: bool = False                 # a refusal of the request as sent (see refused())
     summary: str = ""                         # first line of what the handler said
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
@@ -74,9 +96,10 @@ class ActionRecord:
 
 class ActionLog(Protocol):
     """Where a turn's attempts are recorded. `begin` is called BEFORE the
-    handler runs; `finish` after. Implementations must not raise — a failed
-    record must never block or break the action itself."""
-    def begin(self, tool: str, input: dict) -> object: ...
+    handler runs and returns a handle — or None when the attempt could NOT be
+    put on record, in which case a changing action does not run. `finish`
+    closes it. Neither raises."""
+    def begin(self, tool: str, input: dict) -> object | None: ...
     def finish(self, handle: object, status: Status, summary: str) -> None: ...
 
 
@@ -94,17 +117,37 @@ class InMemoryActionLog:
         handle.finished_at = datetime.now(timezone.utc)
 
 
+def _resolves(refusal: ActionRecord, later: ActionRecord) -> bool:
+    """Is `later` the refused request, corrected? Same tool, succeeded, and the
+    two inputs differ in exactly ONE field whose wording still overlaps — a rule
+    reworded shorter, not a different rule. When in doubt: not resolved, and the
+    person is told."""
+    if later.tool != refusal.tool or later.status is not Status.SUCCEEDED:
+        return False
+    keys = set(refusal.input) | set(later.input)
+    differing = [k for k in keys if refusal.input.get(k) != later.input.get(k)]
+    if len(differing) != 1:
+        return False
+    if refusal.input.get(differing[0]) in (None, "", [], {}):
+        return True                       # the refusal was for a missing field; the retry supplied it
+    before, after = (str(x.input.get(differing[0], "")) for x in (refusal, later))
+    words = lambda s: {w.strip(".,;:!?—-'\"()").lower() for w in s.split()} - {""}   # noqa: E731
+    a, b = words(before), words(after)
+    return bool(a and b) and len(a & b) / len(a | b) >= 0.25
+
+
 def receipt(actions: list[ActionRecord] | tuple[ActionRecord, ...]) -> str:
     """What the person must be told whatever the model wrote: every action that
     did not cleanly succeed, from the record. Empty when all went well."""
     lines = []
     for position, action in enumerate(actions):
         if action.status is Status.FAILED:
-            # A refusal the model then corrected (same tool, succeeded later
-            # this turn) got the person what they asked for — not worth a
-            # warning. It stays on the record. UNKNOWN is never cleared this way.
-            if any(later.tool == action.tool and later.status is Status.SUCCEEDED
-                   for later in actions[position + 1:]):
+            # A refusal of the request AS SENT, resolved by that same request
+            # corrected, got the person what they asked for — not worth a
+            # warning. It stays on the record. Matching the tool is not enough:
+            # a different note saving does not make this one saved. A plain
+            # failure, and UNKNOWN, are never cleared.
+            if action.correctable and any(_resolves(action, later) for later in actions[position + 1:]):
                 continue
             lines.append(f"⚠️ Not done: {action.summary or action.tool}")
         elif action.status is Status.PARTIAL:
@@ -118,10 +161,11 @@ def receipt(actions: list[ActionRecord] | tuple[ActionRecord, ...]) -> str:
 
 
 class PostgresActionLog:
-    """The durable record, bound to one person for one turn. Writes never raise:
-    a record that can't be written is logged and the action still runs. The
-    turn's entries are also kept in memory, so a turn that dies can say what it
-    had done without another read."""
+    """The durable record, bound to one person for one turn. `begin` returns
+    None when the attempt could not be written — a changing action then does not
+    start, because a crash afterwards would leave a change nobody can account
+    for. The turn's entries are also kept in memory, so a turn that dies can say
+    what it had done without another read."""
 
     def __init__(self, database, user_id) -> None:
         self._database = database
@@ -130,7 +174,6 @@ class PostgresActionLog:
 
     def begin(self, tool: str, input: dict) -> ActionRecord:
         record = ActionRecord(tool=tool, input=dict(input))
-        self.entries.append(record)
         try:
             with self._database.connect() as conn, conn.cursor() as cur:
                 cur.execute(
@@ -138,7 +181,10 @@ class PostgresActionLog:
                     (record.id, self._user_id, tool, json.dumps(input, default=str)),
                 )
         except Exception:
-            _log.warning("action log: begin not written", exc_info=True)
+            # Not on record: the caller must not start a changing action.
+            _log.warning("action log: the attempt could not be recorded", exc_info=True)
+            return None
+        self.entries.append(record)
         return record
 
     def finish(self, handle: ActionRecord, status: Status, summary: str) -> None:

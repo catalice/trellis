@@ -17,6 +17,7 @@ import re
 import pytest
 
 from harness import Outcome, Scenario, ScriptedModel, Step, run, tool
+from trellis.core_actions import done, failed
 
 SAVE_NOTE = tool("save_note", "Save a note for them. Call when they ask you to note or remember something.",
                  text="The note, in their words.")
@@ -51,7 +52,7 @@ SCENARIOS = [
     Scenario(
         name="a question and an action in one message are both handled",
         message="Save a note that the boiler needs servicing. Also, what is 12 times 12?",
-        tools={"save_note": (SAVE_NOTE, "Saved.")},
+        tools={"save_note": (SAVE_NOTE, done("Saved."))},
         script=[Step(text="12 times 12 is 144.", tools=(("save_note", {"text": "the boiler needs servicing"}),)),
                 Step(text="And I've saved the boiler note.")],
         checks=[_called("save_note", text="boiler"), _said(r"\b144\b")],
@@ -65,7 +66,7 @@ SCENARIOS = [
     Scenario(
         name="two requests in one message are both carried out",
         message="Note that the quince needs planting, and remind me on Friday morning to call the electrician.",
-        tools={"save_note": (SAVE_NOTE, "Saved."), "set_reminder": (SET_REMINDER, "Reminder set.")},
+        tools={"save_note": (SAVE_NOTE, done("Saved.")), "set_reminder": (SET_REMINDER, done("Reminder set."))},
         script=[Step(tools=(("save_note", {"text": "the quince needs planting"}),
                             ("set_reminder", {"label": "call the electrician", "when": "Friday morning"}))),
                 Step(text="Noted the quince, and I'll remind you Friday morning about the electrician.")],
@@ -74,15 +75,16 @@ SCENARIOS = [
     Scenario(
         name="a tool that reports failure is reported as failure",
         message="Save a note that the boiler needs servicing.",
-        tools={"save_note": (SAVE_NOTE, "Save failed; nothing changed.")},
+        tools={"save_note": (SAVE_NOTE, failed("Save failed; nothing changed."))},
         script=[Step(tools=(("save_note", {"text": "the boiler needs servicing"}),)),
-                Step(text="That didn't save — the note wasn't stored. Want me to try again?")],
+                Step(text="That didn't save — the note wasn't stored. Want me to try again?"),
+                Step(text="That didn't save — the note wasn't stored. Want me to try again?")],   # the rewrite: unchanged
         checks=[_called("save_note"), _said(r"didn't|did not|couldn't|could not|fail|wasn't|was not|unable")],
     ),
     Scenario(
         name="a model that goes silent after acting is asked to speak",
         message="Save a note that the boiler needs servicing.",
-        tools={"save_note": (SAVE_NOTE, "Saved.")},
+        tools={"save_note": (SAVE_NOTE, done("Saved."))},
         script=[Step(tools=(("save_note", {"text": "the boiler needs servicing"}),)),
                 Step(text=""),                                   # ends its turn having said nothing
                 Step(text="Saved your note about the boiler.")],
@@ -96,7 +98,8 @@ SCENARIOS = [
         message="Save a note that the boiler needs servicing.",
         tools={"save_note": (SAVE_NOTE, RuntimeError("database is down"))},
         script=[Step(tools=(("save_note", {"text": "the boiler needs servicing"}),)),
-                Step(text="That hit an error — I can't tell whether it saved.")],
+                Step(text="That hit an error — I can't tell whether it saved."),
+                Step(text="That hit an error — I can't tell whether it saved.")],              # the rewrite: unchanged
         # At least once: the first real-model run (20 Sep 2026) called it TWICE — the
         # engine's failure text says "try again in a moment", and the model did, blind,
         # with no way to know whether the first attempt had taken effect. Stage 3's

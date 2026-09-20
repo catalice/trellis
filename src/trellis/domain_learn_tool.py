@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Callable
 from uuid import UUID
 
+from trellis.core_actions import done, refused
 from trellis.domain_learn_claude import LEARN_GUIDANCE
 from trellis.domain_learn_models import EntryKind
 from trellis.domain_learn_service import SourceRequiredError
@@ -121,23 +122,23 @@ def handle_learn_add(user_id: UUID, input_dict: dict, now: datetime, *, learn_se
     what = str(input_dict.get("what", "")).strip()
     title = str(input_dict.get("thread", "")).strip()
     if not title:
-        return "thread is required."
+        return refused("thread is required.")
 
     if what == "thread":
         thread = learn_service.find_or_create_thread(user_id, title, now)
-        return f"Thread '{thread.title}' is open. Its map lives in the vault (Atlas/Maps)."
+        return done(f"Thread '{thread.title}' is open. Its map lives in the vault (Atlas/Maps).")
 
     thread = next(
         (t for t in learn_service.list_threads(user_id)
          if t.title.lower() == title.lower()), None,
     )
     if thread is None:
-        return f"No thread called '{title}' — start it with what='thread' first."
+        return refused(f"No thread called '{title}' — start it with what='thread' first.")
 
     if what == "entry":
         content = str(input_dict.get("content", "")).strip()
         if not content:
-            return "content is required for an entry."
+            return refused("content is required for an entry.")
         try:
             kind = EntryKind(str(input_dict.get("kind", "material")))
         except ValueError:
@@ -151,19 +152,19 @@ def handle_learn_add(user_id: UUID, input_dict: dict, now: datetime, *, learn_se
                 now=now,
             )
         except SourceRequiredError:
-            return ("Refused: a kept reference needs its fetched source_url. "
+            return refused("Refused: a kept reference needs its fetched source_url. "
                     "Their own words can go as material; a recalled fact can't.")
         placed = f" in '{entry.region}'" if entry.region else " (unplaced — ask them where it fits)"
-        return f"Placed on '{thread.title}'{placed}."
+        return done(f"Placed on '{thread.title}'{placed}.")
 
     if what == "position":
         position = str(input_dict.get("position", "")).strip()
         if not position:
-            return "position is required."
+            return refused("position is required.")
         learn_service.set_position(user_id, thread, position)
-        return f"'{thread.title}' — you are here: {position}"
+        return done(f"'{thread.title}' — you are here: {position}")
 
-    return "Unknown what. Use: thread, entry, position."
+    return refused("Unknown what. Use: thread, entry, position.")
 
 
 # ---------------------------------------------------------------------------
