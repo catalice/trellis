@@ -50,7 +50,10 @@ class ScriptedModel:
         if not self._steps:
             raise AssertionError("the engine asked the scripted model for more steps than the script has")
         step = self._steps.pop(0)
-        requests = tuple(ToolRequest(id=f"call-{len(self.results_given)}-{i}", name=name, input=dict(args))
+        # Arguments may depend on what came back earlier (an id the model was
+        # handed): a callable is given this model and returns the arguments.
+        requests = tuple(ToolRequest(id=f"call-{len(self.results_given)}-{i}", name=name,
+                                     input=dict(args(self) if callable(args) else args))
                          for i, (name, args) in enumerate(step.tools))
         return ModelReply(text=step.text, tool_requests=requests, finished=not requests)
 
