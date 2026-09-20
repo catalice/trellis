@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from anthropic import Anthropic
+from trellis.core_model import ModelConnector
 
 from trellis.domain_focus_models import (
     BrainDumpResult,
@@ -78,8 +78,7 @@ substance; empty is fine.\
 """
 
 class BrainDumpClaude:
-    def __init__(self, client: Anthropic, model: str) -> None:
-        self._client = client
+    def __init__(self, model: ModelConnector) -> None:
         self._model = model
 
     def synthesise(
@@ -93,22 +92,12 @@ class BrainDumpClaude:
                     "\nWhen a dump clearly belongs to one of these, name it in "
                     "effort_hints instead of inventing a new home."
                 )
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=16000,
-                system=system,
-                messages=[{"role": "user", "content": raw_text}],
-            )
-            # ALL text blocks — adaptive thinking can put a ThinkingBlock
-            # first, and content[0].text then crashes (silently killing
+            # The connector returns ALL the text the model wrote (a thinking
+            # block first once crashed a first-block read and silently killed
             # synthesis: capture saved raw-only, no tasks extracted).
-            texts = [
-                block.text for block in response.content
-                if getattr(block, "type", None) == "text" and getattr(block, "text", "")
-            ]
-            raw = "\n".join(t.strip() for t in texts).strip()
+            raw = self._model.complete(system, raw_text, max_tokens=16000).strip()
             if not raw:
-                _log.warning("BrainDumpClaude: response carried no text blocks")
+                _log.warning("BrainDumpClaude: the model returned no text")
                 return None
             return _parse_synthesis(raw)
         except Exception:

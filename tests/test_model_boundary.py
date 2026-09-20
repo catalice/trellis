@@ -92,3 +92,42 @@ def test_complete_picks_the_small_model_for_background_work():
     assert connector.complete("s", "u", max_tokens=100) == "a\n\nb"
     connector.complete("s", "u", max_tokens=100, tier="small")
     assert [k["model"] for k in client.seen] == ["big", "small"]
+
+
+def test_only_the_connector_and_the_factory_know_the_provider():
+    """Conversation, synthesis, discovery and summaries all receive a connector;
+    the provider's name appears in its own module and the one factory."""
+    allowed = {"infra_anthropic.py"}
+    for path in SRC.glob("*.py"):
+        if path.name in allowed:
+            continue
+        assert "anthropic" not in _imports(path), path.name
+
+
+def test_credentials_are_required_only_for_the_selected_provider(tmp_path):
+    import dataclasses
+    import pytest
+    from trellis.core_config import Settings
+    base = dataclasses.replace(
+        Settings.from_env(), telegram_bot_token="t", database_url="dsn", obsidian_vault=tmp_path,
+        telegram_allowed_users=frozenset({1}), anthropic_api_key="")
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        dataclasses.replace(base, model_provider="anthropic").validate()
+    with pytest.raises(ValueError, match="not supported"):
+        dataclasses.replace(base, model_provider="somewhere-else").validate()
+
+
+def test_brain_dump_and_discovery_run_on_any_connector():
+    from trellis.core_watcher import WatcherDiscovery
+    from trellis.domain_focus_claude import BrainDumpClaude
+
+    class Scripted:
+        def __init__(self, reply): self.reply, self.asked = reply, []
+        def complete(self, system, user, *, max_tokens, tier="main"):
+            self.asked.append(user)
+            return self.reply
+
+    dump = Scripted('{"type": "idea", "cleaned_text": "plant quince", "action_items": [], "effort_hints": []}')
+    result = BrainDumpClaude(dump).synthesise("plant quince maybe", "Mon 1 Jan 2026 09:00")
+    assert result is not None and result.cleaned_text == "plant quince"
+    assert WatcherDiscovery(Scripted('{"hypotheses": []}')).propose("garden", []) is not None

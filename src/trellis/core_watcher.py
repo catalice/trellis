@@ -499,8 +499,7 @@ vocabulary grows.\
 
 
 class WatcherDiscovery:
-    def __init__(self, client: Any, model: str) -> None:
-        self._client = client
+    def __init__(self, model: Any) -> None:     # a core_model.ModelConnector
         self._model = model
 
     def propose(self, garden_summary: str, existing: list[str],
@@ -508,19 +507,13 @@ class WatcherDiscovery:
         existing_text = "\n".join(f"- {h}" for h in existing) or "(none yet)"
         dismissed_text = "\n".join(f"- {h}" for h in (dismissed or [])) or "(none)"
         try:
-            response = self._client.messages.create(
-                model=self._model,
+            raw = self._model.complete(
+                _DISCOVERY_SYSTEM.format(max_new=_MAX_NEW_HYPOTHESES),
+                f"THE GARDEN:\n{garden_summary}\n\n"
+                f"HYPOTHESES ALREADY TRACKED:\n{existing_text}\n\n"
+                f"DISMISSED BY THEM (never re-propose, even reworded):\n{dismissed_text}",
                 max_tokens=16000,
-                system=_DISCOVERY_SYSTEM.format(max_new=_MAX_NEW_HYPOTHESES),
-                messages=[{
-                    "role": "user",
-                    "content": f"THE GARDEN:\n{garden_summary}\n\n"
-                               f"HYPOTHESES ALREADY TRACKED:\n{existing_text}\n\n"
-                               f"DISMISSED BY THEM (never re-propose, even reworded):\n{dismissed_text}",
-                }],
-            )
-            raw = "".join(b.text for b in response.content
-                          if getattr(b, "type", None) == "text").strip()
+            ).strip()
             return _parse_hypotheses(raw)
         except Exception:
             # None = the call FAILED (API down) — distinct from []: a real

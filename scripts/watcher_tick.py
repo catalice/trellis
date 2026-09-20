@@ -12,17 +12,16 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, "src")
 
-from anthropic import Anthropic
 
 from trellis.core_config import Settings
-from trellis.core_main import build_watcher
+from trellis.core_main import build_model, build_watcher
 from trellis.infra_postgres import PostgresDatabase
 
 
 def main() -> int:
     s = Settings.from_env()
     db = PostgresDatabase(s.database_url)
-    watcher = build_watcher(db, s, Anthropic(api_key=s.anthropic_api_key))
+    watcher = build_watcher(db, s, build_model(s))
     now = datetime.now(timezone.utc)
     for uid, _tg in db.list_users():
         watcher.tick(uid, now)

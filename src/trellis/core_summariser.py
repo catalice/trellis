@@ -60,8 +60,7 @@ def _transcript(conversation_messages: list[dict]) -> str:
 def make_summariser(
     groq_client,
     model: str = "openai/gpt-oss-20b",
-    fallback_client=None,             # Anthropic client — Haiku fallback
-    fallback_model: str = "claude-haiku-4-5-20251001",
+    fallback=None,                    # a core_model.ModelConnector — its small model
 ) -> Callable:
     def _via_groq(system_prompt: str, conversation_messages: list[dict]) -> str | None:
         if groq_client is None:
@@ -82,20 +81,12 @@ def make_summariser(
             return None
 
     def _via_fallback(system_prompt: str, conversation_messages: list[dict]) -> str | None:
-        if fallback_client is None:
+        if fallback is None:
             return None
         try:
-            response = fallback_client.messages.create(
-                model=fallback_model,
-                max_tokens=1024,
-                system=system_prompt,
-                messages=[{"role": "user", "content": _transcript(conversation_messages)}],
-            )
-            texts = [
-                b.text for b in response.content
-                if getattr(b, "type", None) == "text" and getattr(b, "text", "")
-            ]
-            return "\n".join(t.strip() for t in texts if t.strip()).strip() or None
+            return fallback.complete(
+                system_prompt, _transcript(conversation_messages), max_tokens=1024, tier="small",
+            ).strip() or None
         except Exception:
             _log.warning("fallback summarisation failed", exc_info=True)
             return None

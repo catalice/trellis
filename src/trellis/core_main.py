@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
-from anthropic import Anthropic
 from telegram import Update
 
 from trellis.core_assembler import Assembler, constitution_lines
@@ -13,6 +12,7 @@ from trellis.core_config import Settings
 from trellis.core_history import PostgresConversationHistory
 from trellis.core_meta_tool import meta_tools
 from trellis.core_onboarding import ONBOARDING_SYSTEM, needs_onboarding, onboarding_tools
+from trellis.core_model import ModelConnector
 from trellis.core_oracle import Oracle
 from trellis.infra_anthropic import AnthropicConnector
 from trellis.core_registry import TrellisRegistry
@@ -149,10 +149,20 @@ def build_vault(database: PostgresDatabase, settings: Settings) -> ObsidianVault
     )
 
 
+def build_model(settings: Settings) -> ModelConnector:
+    """The ONE place a model provider is chosen — conversation, brain-dump
+    synthesis, Watcher discovery and the summary fallback all receive this.
+    Everything above it speaks core_model and cannot tell providers apart."""
+    if settings.model_provider == "anthropic":
+        return AnthropicConnector.from_key(
+            settings.anthropic_api_key, settings.anthropic_model, settings.small_model)
+    raise ValueError(f"no connector for model provider {settings.model_provider!r}")
+
+
 def build_watcher(
     database: PostgresDatabase,
     settings: Settings,
-    anthropic_client: Anthropic,
+    model: ModelConnector,
     *,
     vault: ObsidianVault | None = None,
     memory: MemoryIndex | None = None,
@@ -164,7 +174,7 @@ def build_watcher(
     are built fresh (repos are stateless wrappers, duplicates are harmless)."""
     return Watcher(
         PostgresWatcherRepository(database),
-        WatcherDiscovery(anthropic_client, settings.anthropic_model),
+        WatcherDiscovery(model),
         state_repo=PostgresStateRepository(database),
         health_repo=PostgresHealthRepository(database),
         run_repo=PostgresMoveRepository(database, settings.timezone),
@@ -197,8 +207,8 @@ def main() -> None:
     database = PostgresDatabase(settings.database_url)
     database.migrate(Path(__file__).with_name("migrations"))
 
-    anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
-    brain_dump_claude = BrainDumpClaude(anthropic_client, settings.anthropic_model)
+    model = build_model(settings)
+    brain_dump_claude = BrainDumpClaude(model)
 
     # Web search — read-only window on the outside world. None if no key configured.
     # Always constructed: pubmed/scholar/trials need no key, so even a bare
@@ -223,7 +233,7 @@ def main() -> None:
         from groq import Groq as GroqClient
         groq_client = GroqClient(api_key=settings.groq_api_key)
         transcriber = make_transcriber(groq_client)
-    summariser = make_summariser(groq_client, fallback_client=anthropic_client)
+    summariser = make_summariser(groq_client, fallback=model)
 
     history = PostgresConversationHistory(database, settings.timezone)
     preferences_repository = PostgresPreferencesRepository(database)
@@ -362,12 +372,12 @@ def main() -> None:
         rooms=MOVE_ROOMS,
     )
 
-    oracle = Oracle(AnthropicConnector(anthropic_client, settings.anthropic_model))
+    oracle = Oracle(model)
 
     # --- The Watcher (the big brain's slow mind) ---
     # Discovery is the ONLY source of hypotheses — nothing is planted here.
     watcher = build_watcher(
-        database, settings, anthropic_client,
+        database, settings, model,
         vault=vault, memory=memory, history=history,
     )
 
