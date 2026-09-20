@@ -41,6 +41,7 @@ class CaptureRepository(Protocol):
     def list_for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]: ...
     def delete(self, user_id: UUID, capture_id: UUID) -> bool: ...
     def get(self, user_id: UUID, capture_id: UUID) -> Capture | None: ...
+    def count_unassigned_before(self, user_id: UUID, *, before: date) -> int: ...
 
 
 class EffortRepository(Protocol):
@@ -262,6 +263,13 @@ class CaptureService:
     def list_unassigned(self, user_id: UUID, *, days: int = 30) -> list[Capture]:
         since = (datetime.now(timezone.utc) - timedelta(days=days)).date()
         return self._repo.list_unassigned(user_id, since=since)
+
+    def count_unassigned_older_than(self, user_id: UUID, *, days: int = 30) -> int:
+        before = (datetime.now(timezone.utc) - timedelta(days=days)).date()
+        return self._repo.count_unassigned_before(user_id, before=before)
+
+    def get(self, user_id: UUID, capture_id: UUID) -> Capture | None:
+        return self._repo.get(user_id, capture_id)
 
     def for_effort(self, user_id: UUID, effort_id: UUID) -> list[Capture]:
         return self._repo.list_for_effort(user_id, effort_id)

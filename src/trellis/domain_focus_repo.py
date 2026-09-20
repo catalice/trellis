@@ -72,6 +72,18 @@ class PostgresCaptureRepository:
                 )
                 return [_capture(r) for r in cur.fetchall()]
 
+    def count_unassigned_before(self, user_id: UUID, *, before: date) -> int:
+        """Unhomed captures OLDER than the inbox window — so 'nothing here' is
+        never said about captures that simply weren't looked at."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM captures WHERE user_id = %s AND effort_id IS NULL"
+                    " AND archived = false AND created_at::date < %s",
+                    (user_id, before),
+                )
+                return int(cur.fetchone()[0])
+
     def list_unassigned(self, user_id: UUID, *, since: date) -> list[Capture]:
         with self._db.connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
