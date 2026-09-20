@@ -538,8 +538,8 @@ class GarminSyncClient(Protocol):
     def activity_detail(self, session_dump: str, activity_id: str) -> GarminActivityDetail: ...
 
 
-# The groups the worker fetches separately for one day (its 'unavailable' names).
-DAILY_HEALTH_GROUPS = ("stats", "heart_rate", "sleep", "body_battery", "stress", "hrv")
+# Keys of a worker day-row that are bookkeeping, not readings.
+_NOT_READINGS = frozenset({"date", "unavailable", "refreshed_at"})
 
 
 @dataclass(frozen=True)
@@ -645,9 +645,12 @@ class GarminSyncService:
                             sync_run_id=run.id, fetched_at=now, worker_endpoint="/sync",
                         ),
                     )
-                    # Each group that DID arrive is stamped; a kept reading keeps
-                    # its older stamp through the storage merge.
-                    arrived = {g: now.isoformat() for g in DAILY_HEALTH_GROUPS if g not in missed}
+                    # Only a reading this sync actually SUPPLIED is stamped. A
+                    # request that failed, or answered with nothing, supplies
+                    # none — the stored reading keeps its older stamp through
+                    # the storage merge, and so keeps being said to be old.
+                    arrived = {key: now.isoformat() for key, value in metric.raw.items()
+                               if value is not None and key not in _NOT_READINGS}
                     record = replace(record, raw={**record.raw, "refreshed_at": arrived})
                     self.health_repository.upsert_daily_health(record)
             except Exception as error:

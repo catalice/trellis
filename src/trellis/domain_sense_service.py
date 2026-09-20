@@ -268,22 +268,41 @@ class SenseService:
                 out["synced_at"] = synced.astimezone(self._tz).strftime("%H:%M")
             except (ValueError, OSError):
                 pass
-        # Groups the latest sync failed to refresh: their numbers above are
-        # older than synced_at says. Named with when each was last really fetched.
-        raw = getattr(h, "raw", None) or {}
-        missed = [str(g) for g in (raw.get("unavailable") or [])]
-        if out and missed:
-            stamps = raw.get("refreshed_at") or {}
+        # A reading the latest sync did NOT supply — its request failed, or it
+        # answered with nothing — is older than synced_at says. Every reading
+        # carries the time it was last really fetched; one that trails the
+        # latest sync is named, with that time. Rows from before stamps existed
+        # make no claim either way.
+        stamps = (getattr(h, "raw", None) or {}).get("refreshed_at") or {}
+        if out and stamps and synced is not None:
             kept: dict[str, str | None] = {}
-            for group in missed:
+            for shown, source, label in _SHOWN_READINGS:
+                if shown not in out or label in kept:
+                    continue
                 try:
-                    good = datetime.fromisoformat(str(stamps[group])).astimezone(self._tz)
-                    today = now.astimezone(self._tz).date() if now is not None else good.date()
-                    kept[group] = good.strftime("%H:%M") if good.date() == today else good.strftime("%-d %b %H:%M")
+                    good = datetime.fromisoformat(str(stamps[source]))
                 except (KeyError, ValueError, TypeError):
-                    kept[group] = None
-            out["not_refreshed"] = kept
+                    kept[label] = None
+                    continue
+                if (synced - good).total_seconds() > _SAME_SYNC_SECONDS:
+                    local = good.astimezone(self._tz)
+                    same_day = local.date() == synced.astimezone(self._tz).date()
+                    kept[label] = local.strftime("%H:%M" if same_day else "%-d %b %H:%M")
+            if kept:
+                out["not_refreshed"] = kept
         return out or None
+
+
+# (key in recent_health's dict, the worker field it came from, how it's named).
+_SHOWN_READINGS = (
+    ("sleep_score", "sleep_score", "sleep"), ("sleep_hours", "sleep_duration_minutes", "sleep"),
+    ("hrv_last_night", "hrv_last_night", "HRV"),
+    ("body_battery_end", "body_battery_end", "body battery"),
+    ("body_battery_high", "body_battery_max", "body battery"),
+    ("resting_hr", "resting_hr", "RHR"), ("avg_stress", "stress_avg", "stress"),
+)
+# A row's updated_at and its readings' stamps come from the same sync a moment apart.
+_SAME_SYNC_SECONDS = 120
 
 
 def _clamp_score(value: int | None) -> int | None:

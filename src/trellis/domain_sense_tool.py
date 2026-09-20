@@ -364,15 +364,11 @@ def _fmt_health(health: "dict | None") -> "str | None":
         bits.append(f"stress {health['avg_stress']}")
     kept = health.get("not_refreshed") or {}
     if kept and bits:
-        # "synced HH:MM" is when a sync last RAN. These groups failed in it, so
-        # their numbers are older — said every time, not only in the sync receipt.
+        # "synced HH:MM" is when a sync last RAN. That sync didn't bring these
+        # readings, so they are older — said every time, not only in its receipt.
         bits.append("NOT refreshed at the last sync, kept from earlier: " + ", ".join(
-            f"{_GROUP_LABELS.get(g, g)} (last good {when or 'unknown'})" for g, when in kept.items()))
+            f"{name} (last good {when or 'unknown'})" for name, when in kept.items()))
     return ", ".join(bits) if bits else None
-
-
-_GROUP_LABELS = {"stats": "steps", "heart_rate": "RHR", "sleep": "sleep",
-                 "body_battery": "body battery", "stress": "stress", "hrv": "HRV"}
 
 
 # ---------------------------------------------------------------------------
