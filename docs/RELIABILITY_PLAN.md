@@ -216,6 +216,11 @@ they ask. Nine runs establish no rates. The acceptance criterion — ordinary
 updates, no procedural coaching — is not demonstrated; the trial week tests it,
 without any added independence.
 
+**What counts as supervision in the trial** (the reviewer's addition): not only
+corrections to a proposed week. Not sending prose beside a proposal also holds
+back explanations and answers — so every extra "why?", and every question they
+have to repeat because the answer wasn't sent, is counted too.
+
 **The trial.** One training week after deployment, bounded: fixed start and
 end, the agreed terms, nothing added mid-week. It answers one question — does
 the user supervise less? — using the measure above, tagged from that week's
