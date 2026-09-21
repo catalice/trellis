@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -54,12 +53,12 @@ class ActionResult(str):
 @dataclass(frozen=True)
 class OnlyVersion:
     """The person is about to DECIDE on something that reaches them separately,
-    rendered from its record. The model's reply must not carry a second version
-    of it: `competing` matches the statements that would be one, and the engine
-    takes those sentences out of the reply. `if_nothing_left` is what is said
-    when that leaves nothing."""
-    competing: "re.Pattern[str]"
-    if_nothing_left: str
+    rendered from its record. Free prose beside it cannot be checked for a
+    competing version — "thirty minutes", "half an hour", "take Friday off" — so
+    in that turn the model's prose is not sent at all. They get `introduction`,
+    then what else was done this turn, from the record. Structure, not a list of
+    phrasings: a filter on wording was tried and ordinary variations walked past it."""
+    introduction: str
 
 
 def done(text: str, only_version: OnlyVersion | None = None) -> ActionResult:
@@ -67,20 +66,12 @@ def done(text: str, only_version: OnlyVersion | None = None) -> ActionResult:
     return ActionResult(text, Status.SUCCEEDED, only_version=only_version)
 
 
-def without_competing(reply: str, rule: OnlyVersion) -> str:
-    """The reply with every sentence that states a competing version removed —
-    whole sentences, so nothing is left half-said. Lines emptied by it go too."""
-    kept_lines = []
-    for line in reply.split("\n"):
-        if not line.strip():
-            kept_lines.append(line)
-            continue
-        sentences = re.split(r"(?<=[.!?])\s+", line)
-        kept = [s for s in sentences if not rule.competing.search(s)]
-        if kept:
-            kept_lines.append(" ".join(kept))
-    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
-    return cleaned or rule.if_nothing_left
+def in_place_of_the_reply(rule: OnlyVersion, actions: list["ActionRecord"]) -> str:
+    """What is sent when the model's prose is not: the fixed introduction, and
+    every OTHER change made this turn, in the record's own words."""
+    also = [a.summary for a in actions
+            if a.only_version is None and a.changes_things and a.status is Status.SUCCEEDED and a.summary]
+    return rule.introduction + ("\n\nAlso done:\n" + "\n".join(f"- {line}" for line in also) if also else "")
 
 
 def failed(text: str) -> ActionResult:
@@ -121,6 +112,7 @@ class ActionRecord:
     correctable: bool = False                 # a refusal of the request as sent (see refused())
     summary: str = ""                         # first line of what the handler said
     only_version: "OnlyVersion | None" = None   # this turn only; not stored
+    changes_things: bool = True                 # False for a read-only tool (this turn only; not stored)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
     id: UUID = field(default_factory=uuid4)
