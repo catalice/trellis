@@ -39,17 +39,24 @@ class ActionResult(str):
     that treats tool results as text keeps working."""
     status: Status
     correctable: bool
+    show: str | None        # text that must reach the person WORD FOR WORD (see done())
 
-    def __new__(cls, text: str, status: Status = Status.SUCCEEDED, correctable: bool = False) -> "ActionResult":
+    def __new__(cls, text: str, status: Status = Status.SUCCEEDED, correctable: bool = False,
+                show: str | None = None) -> "ActionResult":
         result = super().__new__(cls, text)
         result.status = status
         result.correctable = correctable
+        result.show = show
         return result
 
 
-def done(text: str) -> ActionResult:
-    """It happened. A tool that changes something must say so explicitly."""
-    return ActionResult(text, Status.SUCCEEDED)
+def done(text: str, show: str | None = None) -> ActionResult:
+    """It happened. A tool that changes something must say so explicitly.
+    `show`: when the person is about to DECIDE on something, what they decide on
+    can't be the model's retelling of it. The engine puts `show` in the reply
+    itself, after the model's words, unaltered — so what they agree to is what
+    is held."""
+    return ActionResult(text, Status.SUCCEEDED, show=show)
 
 
 def failed(text: str) -> ActionResult:
@@ -89,6 +96,7 @@ class ActionRecord:
     status: Status = Status.UNKNOWN          # until closed: an attempt nobody finished is unknown
     correctable: bool = False                 # a refusal of the request as sent (see refused())
     summary: str = ""                         # first line of what the handler said
+    show: str | None = None                   # delivered to the person verbatim (this turn only; not stored)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
     id: UUID = field(default_factory=uuid4)

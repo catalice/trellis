@@ -166,7 +166,16 @@ class Oracle:
         correction = receipt(done or [])
         if correction:
             text = self._rewritten(text, correction)
-            text = f"{text}\n\n{correction}" if text else correction
+        # What a tool says the person must see word for word (a proposal they
+        # are about to decide on) goes in after the model's text and is never
+        # passed through the rewrite: the LAST one per tool, so a proposal
+        # revised within the turn is shown once, current.
+        shown: dict[str, str] = {}
+        for action in done or []:
+            if action.show:
+                shown.pop(action.tool, None)
+                shown[action.tool] = action.show
+        text = "\n\n".join(part for part in (text, *shown.values(), correction) if part)
         return OracleResult(text, tuple(calls), tuple(done or ()))
 
     def _rewritten(self, draft: str, correction: str) -> str:
@@ -216,6 +225,7 @@ class Oracle:
         record = handle if isinstance(handle, ActionRecord) else ActionRecord(tool=name, input=dict(input_dict))
         record.status, record.summary = status, summary
         record.correctable = bool(getattr(result, "correctable", False))
+        record.show = getattr(result, "show", None) if status is Status.SUCCEEDED else None
         done.append(record)
         if handle is not None:
             try:
