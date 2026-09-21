@@ -7,6 +7,7 @@ outranks the stats, dismissed never resurrects.
 """
 from __future__ import annotations
 
+import re
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -167,6 +168,24 @@ class TestMedicationIdentity(unittest.TestCase):
         self.assertEqual(frame[date(2026, 6, 2)]["meds_names"], ("antihistamine",))
         self.assertNotIn("meds_names", frame[date(2026, 6, 3)])      # logged, unnamed: still a meds day
         self.assertTrue(frame[date(2026, 6, 3)]["meds"])
+
+    def test_a_name_survives_the_trip_through_discovery_and_back(self):
+        """Discovery was shown 'example_medicine_10mg' and told to use the name as
+        it appears; verification matched 'example medicine 10mg' — zero days."""
+        from trellis.core_watcher import Watcher
+        at = lambda i: datetime(2026, 6, 1 + i, 9, 0, tzinfo=TZ)
+        events = [SimpleNamespace(event_type="meds", detail="Example Medicine 10mg", value=None, occurred_at=at(i))
+                  for i in range(6)]
+        states = [SimpleNamespace(felt_at=at(i), energy=None, mood=4 if i < 6 else 2, note="", extra={}) for i in range(12)]
+        frame = build_daily_frame(uuid4(), states=states, events=events, health_rows=[], runs=[],
+                                  tz=TZ, today=date(2026, 6, 20))
+        watcher = Watcher(None, None, state_repo=None, health_repo=None, run_repo=None, tz=TZ)
+        shown = re.search(r"meds=\[([^\]]+)\]", watcher._daily_lines(frame)).group(1)      # what discovery reads
+        for spelling in (shown, "example_medicine_10mg", "Example Medicine 10mg"):
+            verified, _, stats = verify(frame, {"type": "condition_compare", "metric": "mood",
+                                                "condition": f"meds:{spelling}", "expect": "higher"})
+            self.assertEqual(stats["n_with"], 6, spelling)
+            self.assertTrue(verified, spelling)
 
     def test_a_named_condition_means_that_medication_only(self):
         from trellis.core_watcher import _condition_holds
@@ -430,7 +449,19 @@ class TestTrend(unittest.TestCase):
         verified, evidence, _ = verify(frame, {
             "type": "trend", "metric": "resting_hr", "direction": "down"})
         self.assertFalse(verified)
-        self.assertIn("opposite", evidence)
+        self.assertIn("OPPOSITE", evidence)
+
+    def test_a_trend_with_no_direction_or_a_bad_one_confirms_nothing(self):
+        """Correlations and comparisons had to state a direction; a trend still
+        verified on any large enough change."""
+        rising = _frame(30, lambda i: {"mood": 1.0 + i / 8})
+        for spec in ({"type": "trend", "metric": "mood"},
+                     {"type": "trend", "metric": "mood", "direction": "sideways"}):
+            verified, evidence, stats = verify(rising, spec)
+            self.assertFalse(verified)
+            self.assertIn("names no direction", evidence)
+            self.assertNotIn("error", stats)
+        self.assertTrue(verify(rising, {"type": "trend", "metric": "mood", "direction": "up"})[0])
 
     def test_flat_metric_stays_silent(self):
         frame = _frame(30, lambda i: {"resting_hr": 50 + (i % 2)})

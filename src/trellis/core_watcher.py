@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -264,7 +265,7 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
             row(d)["meds"] = True
             # WHICH medication, in their words — one boolean made every
             # medication the same medication.
-            name = " ".join(str(getattr(e, "detail", "") or "").lower().split())
+            name = _med_name(getattr(e, "detail", ""))
             if name and name != "meds":
                 row(d)["meds_names"] = tuple(sorted({*row(d).get("meds_names", ()), name}))
         elif etype == "period_start":
@@ -371,6 +372,12 @@ def _human_otherwise(condition: str) -> str:
     return "otherwise"
 
 
+def _med_name(raw) -> str:
+    """ONE spelling of a medication's name — for the frame, for what discovery
+    is shown, and for the condition a test spec names."""
+    return " ".join(re.sub(r"[_+;,\[\]]", " ", str(raw or "").lower()).split())
+
+
 def _ran(row: dict | None) -> bool | None:
     if row is None:
         return None
@@ -399,7 +406,7 @@ def _condition_holds(day_row: dict, prev_row: dict | None, condition: str) -> bo
             return True
         return False if day_row.get("logged") else None
     if condition.startswith("meds:"):
-        wanted = set(condition.split(":", 1)[1].lower().split())
+        wanted = set(_med_name(condition.split(":", 1)[1]).split())
         if not wanted:
             return None
         if any(wanted <= set(name.split()) for name in day_row.get("meds_names", ())):
@@ -466,12 +473,13 @@ def verify(frame: dict[date, dict], test_spec: dict,
                  "diff": round(diff, 2), "threshold": threshold, "direction": moving}
         evidence = (f"{_human_metric(metric)} {moving}: was averaging {m_early:.1f}, "
                     f"recently {m_late:.1f} ({n} days)")
-        ok = abs(diff) >= threshold
-        if ok and direction in ("up", "down"):
-            ok = (diff > 0) == (direction == "up")
-            if not ok:
-                evidence += f" — moving opposite to the hypothesised {direction}"
-        return ok, evidence, stats
+        if abs(diff) < threshold:
+            return False, evidence, stats
+        refuted = _against_expectation(direction, ("up", "down"), diff > 0)
+        if refuted:
+            stats["not_confirmed"] = refuted
+            return False, f"{evidence} — {refuted}", stats
+        return True, evidence, stats
 
     if ttype == "correlation":
         a_key = str(test_spec.get("series_a", ""))
@@ -806,8 +814,10 @@ class Watcher:
             if row.get("ran"):
                 bits.append("RAN")
             if row.get("meds"):
-                names = "+".join(n.replace(" ", "_") for n in row.get("meds_names", ()))
-                bits.append(f"meds={names}" if names else "meds")
+                # Shown exactly as verification will match it — a name reshaped
+                # for display came back in a test spec and matched no day at all.
+                names = "; ".join(row.get("meds_names", ()))
+                bits.append(f"meds=[{names}]" if names else "meds")
             if len(bits) > 1:
                 lines.append(" ".join(bits))
         return "\n".join(lines)
