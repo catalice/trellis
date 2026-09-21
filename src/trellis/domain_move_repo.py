@@ -34,7 +34,8 @@ class TrainingRepository(Protocol):
     def save_proposal(self, proposal: PlanProposal) -> PlanProposal: ...
     def open_proposal(self, user_id: UUID) -> PlanProposal | None: ...
     def get_proposal(self, user_id: UUID, proposal_id: UUID) -> PlanProposal | None: ...
-    def resolve_proposal(self, proposal_id: UUID, status: str, at: datetime) -> None: ...
+    def resolve_proposal(self, proposal_id: UUID, status: str, at: datetime) -> bool: ...
+    def mark_proposal_delivered(self, proposal_id: UUID, at: datetime) -> None: ...
 
 
 _ACTIVITY_COLS = (
@@ -135,11 +136,19 @@ class PostgresMoveRepository:
                 row = cur.fetchone()
                 return _proposal(row) if row else None
 
-    def resolve_proposal(self, proposal_id: UUID, status: str, at: datetime) -> None:
+    def resolve_proposal(self, proposal_id: UUID, status: str, at: datetime) -> bool:
+        """Only an OPEN proposal can be resolved, and only once: two presses of
+        the same button, or a press racing a replacement, leave one winner."""
         with self._db.connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE plan_proposals SET status = %s, resolved_at = %s WHERE id = %s",
+                cur.execute("UPDATE plan_proposals SET status = %s, resolved_at = %s WHERE id = %s AND status = 'open'",
                             (status, at, proposal_id))
+                return cur.rowcount == 1
+
+    def mark_proposal_delivered(self, proposal_id: UUID, at: datetime) -> None:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE plan_proposals SET delivered_at = %s WHERE id = %s", (at, proposal_id))
 
     def get_watch_push(self, user_id: UUID, on_date: date, name: str) -> str | None:
         """The Garmin workout id Trellis last pushed for this date and name."""
@@ -169,7 +178,8 @@ class PostgresMoveRepository:
 def _proposal(row: dict) -> PlanProposal:
     return PlanProposal(
         id=row["id"], user_id=row["user_id"], plan=row["plan"] or {}, replace_week=bool(row["replace_week"]),
-        status=row["status"], created_at=row["created_at"], resolved_at=row.get("resolved_at"),
+        status=row["status"], created_at=row["created_at"], delivered_at=row.get("delivered_at"),
+        resolved_at=row.get("resolved_at"),
     )
 
 

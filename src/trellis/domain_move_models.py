@@ -30,6 +30,7 @@ class PlanProposal:
     replace_week: bool
     status: str                   # open | agreed | superseded | withdrawn
     created_at: datetime
+    delivered_at: datetime | None = None   # reached them with its buttons
     resolved_at: datetime | None = None
 
 

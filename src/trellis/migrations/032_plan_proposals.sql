@@ -1,7 +1,8 @@
 -- A change to the training plan that Trellis itself proposes is HELD here until
 -- the person agrees to it. The plan used to be stored in the same turn it was
 -- first suggested — and stored again, differently, after they objected.
--- Agreement stores THIS record's week, not whatever is composed after the yes.
+-- They approve it with a button on the proposal itself — the record, rendered
+-- by Python, as its own message. What is stored is THIS record's week.
 --   open       -> shown, waiting for their answer (at most one per person)
 --   agreed     -> their yes; its week was merged into the stored plan
 --   superseded -> replaced by a newer proposal before it was answered
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS plan_proposals (
     status       TEXT NOT NULL DEFAULT 'open'
                  CHECK (status IN ('open', 'agreed', 'superseded', 'withdrawn')),
     created_at   TIMESTAMPTZ NOT NULL,
+    delivered_at TIMESTAMPTZ,            -- when it reached them with its buttons; NULL = still to send
     resolved_at  TIMESTAMPTZ
 );
 CREATE UNIQUE INDEX IF NOT EXISTS plan_proposals_one_open ON plan_proposals (user_id) WHERE status = 'open';

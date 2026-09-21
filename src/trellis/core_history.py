@@ -67,23 +67,6 @@ class PostgresConversationHistory:
             for row in reversed(rows)
         ]
 
-    def their_last_message(self, user_id: UUID) -> str | None:
-        """What THEY last said — the message a running turn is answering (it is
-        stored before the turn runs). A scheduled check-in arrives on the user
-        side but is not them speaking, so it is never returned: nothing in it
-        can count as their instruction."""
-        with self.database.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT content FROM conversation_turns WHERE user_id = %s AND role = 'user'"
-                    " ORDER BY created_at DESC LIMIT 1",
-                    (user_id,),
-                )
-                row = cur.fetchone()
-        if not row or str(row[0]).startswith(SCHEDULED_TURN):
-            return None
-        return row[0]
-
     def last_routed(self, user_id: UUID) -> tuple[list[str], datetime] | None:
         """Which houses the person's most recent message was routed to, and when
         — so a bare reply ("yes") can stay in the house it answers."""

@@ -776,19 +776,16 @@ class TestMoveUpdateFold(unittest.TestCase):
 
         self.repo = _Repo()
         self.user = w.user_id
-        return MoveService(self.repo, _Goals(), ZoneInfo("Europe/Madrid"),
-                           their_message=lambda uid: "Put an easy 5k on Tuesday, please.")
+        return MoveService(self.repo, _Goals(), ZoneInfo("Europe/Madrid"))
 
     def test_plan_then_baseline_keeps_week(self):
         from datetime import datetime, timezone
         from trellis.domain_move_tool import handle_move_update
         svc = self._service()
         now = datetime.now(timezone.utc)
-        out = handle_move_update(self.user, {"what": "plan", "plan": {
-            "arc": "base", "week": [{"date": "2026-09-15", "type": "easy", "detail": "5k"}]},
-            "instructed": "put an easy 5k on Tuesday"},          # their instruction: stored, no second asking
-            now, move_service=svc)
-        self.assertIn("Merged 1 day(s) in", out)
+        # The week gets stored by an approved proposal (tests/test_plan_agreement.py);
+        # here it is seeded, because this test is about what a baseline write keeps.
+        svc.save_plan(self.user, plan={"arc": "base", "week": [{"date": "2026-09-15", "type": "easy", "detail": "5k"}]})
         out = handle_move_update(self.user, {"what": "baseline", "baseline": "Z2 ~7:00/km"},
                                  now, move_service=svc)
         self.assertEqual(out, "Baseline stored.")

@@ -58,11 +58,6 @@ class AmbiguousWorkout(ValueError):
         self.candidates = candidates
 
 
-def _plain(text: str) -> str:
-    """Words only, lower case — so a quote matches however it was punctuated."""
-    return " ".join(re.sub(r"[^\w\s]", " ", str(text).lower()).split())
-
-
 class NoSuchProposal(LookupError):
     """No proposal with that id for this person."""
 
@@ -71,25 +66,8 @@ class ProposalNotOpen(ValueError):
     """Already answered, or replaced by a newer one — its status is the message."""
 
 
-class NotAYes(ValueError):
-    """The message being answered is not plain assent — so nothing is agreed."""
-
-
 class MalformedProposal(ValueError):
     """It could not be stored as shown."""
-
-
-# What counts as a yes: the WHOLE message, these words only, at least one of the core.
-_ASSENT_CORE = frozenset("yes yep yeah yup ok okay sure agreed agree approved perfect good great fine works go 👍".split())
-_ASSENT = _ASSENT_CORE | frozenset(
-    "please with that it do sounds lets let s store save lock in thanks thank you looks right the plan this week "
-    "for me all love use one lovely brilliant then ahead is its and i im happy a to".split())
-_NEGATION = re.compile(r"\b(not|no|never|don'?t|won'?t|can'?t|cannot|shouldn'?t|wouldn'?t|without|rather)\b|n't\b", re.I)
-
-
-class ProposalNotSeen(ValueError):
-    """Made in THIS turn: the person cannot have agreed to what they have not
-    been shown. Agreement is only ever to a proposal from an earlier turn."""
 
 
 class NoSuchWorkout(LookupError):
@@ -125,9 +103,7 @@ class MoveService:
         garmin_sync: GarminSyncPort | None = None,
         health_repo=None,  # stored activity details (fetch-through cache)
         projection=None,   # vault view with .plan_changed(user_id); best-effort
-        their_message=None,  # (user_id) -> the message this turn answers, or None
     ) -> None:
-        self._their_message = their_message
         self._repo = repo
         self._goals = goals
         self._tz = tz
@@ -158,83 +134,12 @@ class MoveService:
 
     # -- Whose decision a plan change is ---------------------------------------
     # The plan was stored in the turn it was first suggested, then stored again,
-    # differently, after they objected. Two doors replace that one:
-    #   their instruction — they asked for this change, in words Python can find
-    #                       in their message: stored now, no second asking.
-    #   Trellis's proposal — held as a record; stored only when a LATER message
-    #                       agrees to it, and what is stored is that record.
-
-    def _message(self, user_id: UUID) -> str:
-        """The message this turn answers — "" when there is none (a scheduled
-        turn, or no provider): everything below then fails closed."""
-        if self._their_message is None:
-            return ""
-        try:
-            return self._their_message(user_id) or ""
-        except Exception:
-            _log.warning("could not read the message being answered", exc_info=True)
-            return ""
-
-    def said_yes(self, user_id: UUID) -> bool:
-        """Whether THEY agreed is decided here, from their message — never by
-        the model saying they did. Deliberately narrow: the whole message must
-        be assent and nothing else. "Yes but…", a question, a refusal, a change,
-        a scheduled turn — none of those is a yes, and the cost of being narrow
-        is one more "yes", never a change they didn't agree to. (English only.)"""
-        words = _plain(self._message(user_id)).split()
-        return (0 < len(words) <= 10 and all(w in _ASSENT for w in words)
-                and any(w in _ASSENT_CORE for w in words))
-
-    def instruction_problem(self, user_id: UUID, their_words: str, plan: dict, *, replace_week: bool,
-                            now: datetime) -> str | None:
-        """Why this is NOT their instruction — or None when it can be carried
-        out. Python cannot read meaning, so it bounds what an instruction can
-        do: the words must be theirs, from a sentence that is neither a question
-        nor a negation, and ONLY the days those words name may change."""
-        message = self._message(user_id)
-        quoted = _plain(their_words)
-        if len(quoted.split()) < 3 or quoted not in _plain(message):
-            return "those words are not in the message being answered"
-        sentence = next((s for s in re.split(r"(?<=[.!?\n])", message) if quoted in _plain(s)), message)
-        if sentence.strip().endswith("?"):
-            return "those words are from a question, not an instruction"
-        if _NEGATION.search(sentence):
-            return "that sentence says what NOT to do; it can't be carried out as an instruction automatically"
-        if replace_week:
-            return "replacing the whole week drops days the instruction doesn't name"
-        days = [s for s in (plan.get("week") or []) if isinstance(s, dict)]
-        if not days:
-            return "no dated day was sent"
-        today = now.astimezone(self._tz).date()
-        named = set(quoted.split())
-        dates = [str(s.get("date")) for s in days]
-        if len(set(dates)) != len(dates):
-            return "two entries for one date — storing keeps one per day, so one would be lost"
-        for session in days:
-            try:
-                day = date.fromisoformat(str(session.get("date")))
-            except ValueError:
-                return f"{session.get('date')!r} is not a date"
-            names = {day.strftime("%A").lower(), day.strftime("%a").lower()}
-            if day == today:
-                names |= {"today", "tonight"}
-            if day == today + timedelta(days=1):
-                names.add("tomorrow")
-            if not (names & named):
-                return f"their words don't name {day.strftime('%A')} — an instruction changes only the days it names"
-        return None
-
-    def retire_overtaken_proposal(self, user_id: UUID, plan: dict, *, now: datetime) -> bool:
-        """Their instruction changed days an open proposal also covers: the
-        proposal now describes a week that no longer exists."""
-        waiting = self._repo.open_proposal(user_id)
-        if waiting is None:
-            return False
-        changed = {str(s.get("date")) for s in (plan.get("week") or []) if isinstance(s, dict)}
-        if changed & {str(s.get("date")) for s in waiting.plan.get("week", [])}:
-            self._repo.resolve_proposal(waiting.id, "superseded", now)
-            return True
-        return False
+    # differently, after they objected. Two attempts to have Python tell from
+    # their WORDS whether they had agreed, or instructed, were each broken by an
+    # independent review ("Is that plan okay?" approved; "I have pilates on
+    # Friday" rewrote Friday). So nothing is read from words: every change to
+    # the week is HELD as a proposal, they are shown the record itself, and the
+    # only thing that stores it is their press of the button under it.
 
     def propose_plan(self, user_id: UUID, *, plan: dict, replace_week: bool, now: datetime) -> PlanProposal:
         """Held exactly as it will be stored. Storing merges BY DATE, so two
@@ -261,25 +166,35 @@ class MoveService:
     def open_proposal(self, user_id: UUID) -> PlanProposal | None:
         return self._repo.open_proposal(user_id)
 
-    def agree_proposal(self, user_id: UUID, proposal_id: UUID, *, goal_id: UUID | None, now: datetime) -> tuple[PlanProposal, TrainingPlan]:
+    def undelivered_proposal(self, user_id: UUID) -> PlanProposal | None:
+        waiting = self._repo.open_proposal(user_id)
+        return waiting if waiting is not None and waiting.delivered_at is None else None
+
+    def proposal_delivered(self, proposal_id: UUID, *, now: datetime) -> None:
+        self._repo.mark_proposal_delivered(proposal_id, now)
+
+    def approve_proposal(self, user_id: UUID, proposal_id: UUID, *, goal_id: UUID | None, now: datetime) -> tuple[PlanProposal, TrainingPlan]:
+        """Their press of "Store this" under one specific proposal. Stores that
+        record and nothing else. A replaced, withdrawn or already-stored
+        proposal cannot apply again, nor one whose days have all gone by."""
         proposal = self._repo.get_proposal(user_id, proposal_id)
         if proposal is None:
             raise NoSuchProposal(str(proposal_id))
         if proposal.status != "open":
             raise ProposalNotOpen(proposal.status)
-        if proposal.created_at >= now:
-            raise ProposalNotSeen(str(proposal_id))
-        if not self.said_yes(user_id):
-            raise NotAYes(str(proposal_id))
+        today = now.astimezone(self._tz).date()
+        if all(date.fromisoformat(str(s["date"])) < today for s in proposal.plan["week"]):
+            self._repo.resolve_proposal(proposal.id, "withdrawn", now)
+            raise ProposalNotOpen("out of date — every day in it has passed")
+        if not self._repo.resolve_proposal(proposal.id, "agreed", now):     # claimed first: one press wins
+            raise ProposalNotOpen("no longer open")
         saved = self.save_plan(user_id, plan=proposal.plan, goal_id=goal_id, replace_week=proposal.replace_week)
-        self._repo.resolve_proposal(proposal.id, "agreed", now)
         return proposal, saved
 
-    def withdraw_proposal(self, user_id: UUID, *, now: datetime) -> PlanProposal | None:
-        proposal = self._repo.open_proposal(user_id)
-        if proposal is not None:
-            self._repo.resolve_proposal(proposal.id, "withdrawn", now)
-        return proposal
+    def decline_proposal(self, user_id: UUID, proposal_id: UUID, *, now: datetime) -> bool:
+        """"Change it": nothing is stored and this proposal can no longer be."""
+        proposal = self._repo.get_proposal(user_id, proposal_id)
+        return proposal is not None and self._repo.resolve_proposal(proposal.id, "withdrawn", now)
 
     def save_plan(
         self,

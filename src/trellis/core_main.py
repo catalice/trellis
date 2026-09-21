@@ -105,6 +105,7 @@ from trellis.domain_move_service import MoveService
 from trellis.domain_move_tool import (
     MOVE_ROOMS,
     MOVE_SIGNALS,
+    PlanDecisions,
     move_context_loader,
     move_snapshot,
     move_tools,
@@ -203,6 +204,7 @@ class Wiring:
     memory: Any
     transcriber: Any
     garmin_sync: Any
+    decisions: Any          # what is waiting for their press, and what a press does (PlanDecisions)
 
 
 def wire(settings: Settings, database: PostgresDatabase, model: ModelConnector, clock=None) -> Wiring:
@@ -326,7 +328,6 @@ def wire(settings: Settings, database: PostgresDatabase, model: ModelConnector, 
         garmin_sync=garmin_sync,
         health_repo=health_reader,
         projection=vault,
-        their_message=history.their_last_message,
     )
 
     # --- Registry ---
@@ -457,7 +458,9 @@ def wire(settings: Settings, database: PostgresDatabase, model: ModelConnector, 
 
     return Wiring(assembler=assembler, reminder_service=reminder_service, move_service=move_service,
                   watcher=watcher, history=history, memory=memory, transcriber=transcriber,
-                  garmin_sync=garmin_sync)
+                  garmin_sync=garmin_sync,
+                  decisions=PlanDecisions(move_service, action_log=lambda uid: PostgresActionLog(database, uid),
+                                          history=history))
 
 
 def main() -> None:
@@ -515,6 +518,7 @@ def main() -> None:
             for uid, _tg in database.list_users()
         ],
         message_log=w.history,
+        decisions=w.decisions,
     ).build()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

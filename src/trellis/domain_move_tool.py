@@ -14,16 +14,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
 
-from trellis.core_actions import done, failed, partial, refused, unknown
+from trellis.core_actions import OnlyVersion, done, failed, partial, refused, unknown
 from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
-from trellis.core_actions import Status
-from trellis.domain_move_service import (
-    AmbiguousWorkout, MalformedProposal, NoSuchProposal, NoSuchWorkout, NotAYes, ProposalNotOpen, ProposalNotSeen,
-)
+from trellis.domain_move_service import AmbiguousWorkout, MalformedProposal, NoSuchProposal, NoSuchWorkout, ProposalNotOpen
 
 _log = logging.getLogger(__name__)
 
@@ -66,13 +65,12 @@ MOVE_GET_TOOL: dict = {
 MOVE_UPDATE_TOOL: dict = {
     "name": "move_update",
     "description": (
-        "Write to the training record. what=plan: a plan change is THEIR decision. "
-        "Suggesting a week, or any change of your own? Send it here BEFORE you describe it: it is HELD "
-        "as a proposal, nothing is stored, and you show them exactly what comes back. "
-        "agree=<proposal id>: they said yes in a LATER message — stores that proposal as it was shown, "
-        "never a new one; Trellis checks their message is a plain yes. instructed=<their words>: they told "
-        "you what to change — stored now, no asking, and ONLY the days their words name. "
-        "Stored days MERGE by date (days not sent survive; nothing is removed unless "
+        "Write to the training record. what=plan: ANY change to the week — yours or one they asked for — "
+        "is HELD as a proposal; nothing is stored. Trellis sends them the week itself as its own message, "
+        "built from the record, with Store this / Change it buttons. Only their press stores it; you cannot. "
+        "The plan you SEND is the prescription — exact sessions, durations, distances, as ever. Your REPLY is "
+        "the reasoning only: sentences restating days, durations or distances are removed from it, so the "
+        "proposal is the one version they see. Once stored, days MERGE by date (days not sent survive; nothing is removed unless "
         "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
         "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
         "The activity is never guessed: a day with several needs sport, and one not synced yet is refused. "
@@ -94,14 +92,6 @@ MOVE_UPDATE_TOOL: dict = {
                     '"detail": "the session"}, ...]}. Real dates from move_get week. '
                     'Strength days are "strength", never "rest".'
                 ),
-            },
-            "instructed": {
-                "type": "string",
-                "description": "plan: their own words asking for this change, copied from the message you are answering. Checked against it.",
-            },
-            "agree": {
-                "type": "string",
-                "description": "plan: the id of the proposal they have just said a plain yes to — all of it. A question, a 'but', or a challenge to any part is not a yes: answer it, and propose again if it changes. Send no plan with it. 'withdraw' = they said no.",
             },
             "replace_week": {
                 "type": "boolean",
@@ -278,13 +268,20 @@ def _week_lines(plan: dict) -> str:
     return "\n".join("  " + _fmt_session(s) for s in plan.get("week", []) if isinstance(s, dict) and s.get("date"))
 
 
-def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
-    """Whose decision is it? Their instruction is stored; their yes stores the
-    proposal they were shown; anything else is held as a proposal."""
-    agree = str(input_dict.get("agree", "")).strip()
-    if agree:
-        return _answer_proposal(user_id, agree, now, move_service=move_service)
+# What would be a SECOND version of the plan in the model's own words: a training
+# quantity, or a line that opens with a day. The reasoning stays; the numbers and
+# the days live in the proposal they are sent.
+_COMPETING_PLAN = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s?(?:min|mins|minutes?|km|k|mi|miles?|hrs?|hours?)\b"
+    r"|\b\d+\s?[x×]\s?\d+"
+    r"|^[\s*•\-–—_#>]*(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)[a-z]*\b[^a-z]",
+    re.IGNORECASE,
+)
+_ONLY_THE_PROPOSAL = OnlyVersion(competing=_COMPETING_PLAN, if_nothing_left="I've put a week together — it's in the next message.")
 
+
+def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+    """Every change to the week is held as a proposal. Nothing here stores."""
     plan = input_dict.get("plan")
     if isinstance(plan, str):
         try:
@@ -293,88 +290,116 @@ def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service
             plan = None
     if not isinstance(plan, dict):
         return refused("A plan change needs a plan: {'arc': ..., 'week': [{'date', 'type', 'detail'}]}.")
-    replace_week = bool(input_dict.get("replace_week", False))
-
-    instructed = str(input_dict.get("instructed", "")).strip()
-    if instructed:
-        problem = move_service.instruction_problem(user_id, instructed, plan, replace_week=replace_week, now=now)
-        if problem:
-            return refused(f"Not carried out as their instruction: {problem}. Nothing was stored. "
-                           "Send it without `instructed` to hold it as a proposal they can say yes to.")
-        result = _update_plan(user_id, {**input_dict, "plan": plan}, move_service=move_service)
-        if result.status is not Status.SUCCEEDED:
-            return result
-        try:
-            retired = move_service.retire_overtaken_proposal(user_id, plan, now=now)
-        except Exception:
-            _log.warning("could not retire an overtaken proposal", exc_info=True)
-            return partial(f"{result}\nStored — but a proposal that was waiting may now be out of date and could not "
-                           "be retired. Don't agree it; propose again.")
-        if retired:
-            return done(f"{result}\nThe proposal that was waiting covered the same day(s) and is now out of date — "
-                        "it has been retired. Propose again if the rest of it still stands.")
-        return result
-
     try:
-        proposal = move_service.propose_plan(user_id, plan=plan, replace_week=replace_week, now=now)
+        proposal = move_service.propose_plan(
+            user_id, plan=plan, replace_week=bool(input_dict.get("replace_week", False)), now=now)
     except MalformedProposal as problem:
         return refused(f"Can't hold that as a proposal: {problem}. It has to be storable exactly as shown.")
     except Exception:
         _log.warning("move_update propose failed", exc_info=True)
         return unknown("Holding the proposal hit an error — it may or may not be held. Nothing was stored in the plan.")
     return done(
-        f"PROPOSED — NOT STORED. Held as proposal {proposal.id}. The stored plan is unchanged.\n"
-        "Trellis puts the week itself beneath your reply, word for word — do NOT list the days yourself; "
-        "a second version in your words is what they would be agreeing to by mistake. Give your reasoning, and ask.\n"
-        f"On their plain yes (a later message): move_update what=plan agree={proposal.id}. "
-        "If they want it different, propose again — this one is replaced.",
-        show=render_proposal(proposal),
+        "PROPOSED — NOT STORED. The stored plan is unchanged.\n"
+        "Trellis sends them the week itself as the next message, built from the record, with Store this / "
+        "Change it buttons — only their press stores it. In your reply give the reasoning and anything else "
+        "you owe them; don't restate days, durations or distances there (those sentences are removed — the "
+        "proposal carries them), and don't ask them to say yes. If they want it different, propose again "
+        "with the full prescription — this one is replaced.",
+        only_version=_ONLY_THE_PROPOSAL,
     )
 
 
 def render_proposal(proposal) -> str:
     """The proposal as the PERSON sees it — built from the record, so what they
-    say yes to is what is held, and what is held is what gets stored."""
-    lines = ["PROPOSED — not stored yet:"]
+    press Store under is what is held, and what is held is what gets stored."""
+    lines = ["Proposed — not stored yet:"]
     for session in proposal.plan.get("week", []):
         day = date.fromisoformat(str(session["date"]))
         detail = str(session.get("detail") or "").strip()
         lines.append(f"{day.strftime('%a %-d %b')} — {session.get('type', 'session')}" + (f": {detail}" if detail else ""))
     if proposal.replace_week:
         lines.append("(This replaces the whole stored week.)")
-    lines.append("Reply yes to store exactly this, or tell me what to change.")
     return "\n".join(lines)
 
 
-def _answer_proposal(user_id: UUID, agree: str, now: datetime, *, move_service) -> str:
-    if agree.lower() == "withdraw":
-        gone = move_service.withdraw_proposal(user_id, now=now)
-        return done("Proposal withdrawn. The stored plan is unchanged.") if gone else refused("There is no open proposal.")
-    try:
-        proposal_id = UUID(agree)
-    except ValueError:
-        return refused(f"{agree!r} is not a proposal id.")
-    try:
-        goals = move_service.training_goals(user_id)
-        proposal, saved = move_service.agree_proposal(
-            user_id, proposal_id, goal_id=goals[0].id if goals else None, now=now)
-    except NoSuchProposal:
-        return refused("No proposal with that id.")
-    except ProposalNotOpen as state:
-        return refused(f"That proposal is {state} — it can't be agreed. Read the open one in context, or propose again.")
-    except NotAYes:
-        return refused("Their message is not a plain yes — it asks, objects, changes something, or isn't from them. "
-                       "Nothing was stored. Answer what they said; if the week changes, propose again; "
-                       "if it stands, ask them to reply yes.")
-    except ProposalNotSeen:
-        return refused("That proposal was made in THIS turn — they haven't seen it, so they can't have agreed. "
-                       "Show it and ask. Nothing was stored.")
-    except Exception:
-        _log.warning("move_update agree failed", exc_info=True)
-        return unknown("Storing the agreed proposal hit an error part-way — it may or may not have saved. Read the stored plan before saying which.")
-    week = [s for s in saved.plan.get("week", []) if isinstance(s, dict) and s.get("date")]
-    return done(f"Stored exactly what was proposed:\n{_week_lines(proposal.plan)}\n"
-                f"Stored week now holds {len(week)} session(s).")
+@dataclass(frozen=True)
+class Decision:
+    """Something waiting for their press: the text they are shown and the
+    buttons under it — (label, data). `data` comes back to `decide`."""
+    ref: UUID
+    text: str
+    buttons: tuple[tuple[str, str], ...]
+
+
+class PlanDecisions:
+    """The seam a front end uses for plan approval — Telegram today. It sends
+    what is `waiting`, tells us it was `delivered`, and brings back a press to
+    `decide`. No model is involved in any of it."""
+    PREFIX = "plan"
+
+    def __init__(self, move_service, *, action_log=None, history=None) -> None:
+        self._move = move_service
+        self._action_log = action_log        # user_id -> a core_actions.ActionLog
+        self._history = history
+
+    def waiting(self, user_id: UUID) -> list[Decision]:
+        proposal = self._move.undelivered_proposal(user_id)
+        if proposal is None:
+            return []
+        return [Decision(ref=proposal.id, text=render_proposal(proposal), buttons=(
+            ("Store this", f"{self.PREFIX}:store:{proposal.id}"), ("Change it", f"{self.PREFIX}:change:{proposal.id}")))]
+
+    def delivered(self, user_id: UUID, decision: Decision, now: datetime) -> None:
+        self._move.proposal_delivered(decision.ref, now=now)
+        self._remember(user_id, f"[Sent to them as its own message, with Store this / Change it buttons]\n{decision.text}")
+
+    def decide(self, user_id: UUID, data: str, now: datetime) -> str:
+        """One press. On the record before it runs, like any action that changes
+        something; if it can't be recorded it doesn't run."""
+        try:
+            _, choice, ref = data.split(":", 2)
+            proposal_id = UUID(ref)
+        except ValueError:
+            return "That button isn't one I recognise. Nothing was changed."
+        if choice not in ("store", "change"):
+            return "That button isn't one I recognise. Nothing was changed."
+        log = self._action_log(user_id) if self._action_log is not None else None
+        handle = None
+        if log is not None:
+            handle = log.begin("plan_decision", {"choice": choice, "proposal": str(proposal_id)})
+            if handle is None:
+                return "I couldn't put that on record, so I haven't done it. Nothing was changed — press again in a moment."
+        try:
+            result = self._decide(user_id, choice, proposal_id, now)
+        except Exception:
+            _log.warning("plan decision failed", exc_info=True)
+            result = unknown("That hit an error part-way — the week may or may not have been stored. Ask me what's stored before pressing again.")
+        if log is not None:
+            log.finish(handle, result.status, result.splitlines()[0][:200])
+        self._remember(user_id, f"[They pressed {'Store this' if choice == 'store' else 'Change it'}]\n{result}")
+        return str(result)
+
+    def _decide(self, user_id: UUID, choice: str, proposal_id: UUID, now: datetime):
+        if choice == "change":
+            if self._move.decline_proposal(user_id, proposal_id, now=now):
+                return done("Nothing stored — that proposal is withdrawn. Tell me what you'd like different.")
+            return refused("That proposal was already answered or replaced. Nothing was changed.")
+        try:
+            goals = self._move.training_goals(user_id)
+            proposal, _ = self._move.approve_proposal(user_id, proposal_id, goal_id=goals[0].id if goals else None, now=now)
+        except NoSuchProposal:
+            return refused("I can't find that proposal. Nothing was stored.")
+        except ProposalNotOpen as state:
+            return refused(f"That proposal is {state}, so it wasn't stored again. Nothing was changed.")
+        return done("Stored, exactly as shown:\n" + "\n".join(render_proposal(proposal).splitlines()[1:]))
+
+    def _remember(self, user_id: UUID, content: str) -> None:
+        if self._history is None:
+            return
+        try:
+            self._history.append(user_id, "assistant", content)
+        except Exception:
+            _log.warning("could not note a plan decision in history", exc_info=True)
 
 
 def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
@@ -623,10 +648,10 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
             waiting = move_service.open_proposal(user_id)
             if waiting is not None:
                 parts.append(
-                    f"PROPOSED BY YOU, NOT AGREED, NOT STORED — proposal {waiting.id}, "
-                    f"made {waiting.created_at.astimezone(move_service.timezone).strftime('%a %-d %b %H:%M')}:\n"
+                    "PROPOSED BY YOU, NOT STORED — sent to them with Store this / Change it buttons, "
+                    f"{waiting.created_at.astimezone(move_service.timezone).strftime('%a %-d %b %H:%M')}; not answered yet:\n"
                     f"{_week_lines(waiting.plan)}\n"
-                    "Theirs to answer. Yes → agree=<id>. Changes → propose again. No → agree='withdraw'."
+                    "Only their press stores it. If they want it different, propose again."
                 )
         except Exception:
             _log.warning("training_context: open proposal failed", exc_info=True)
