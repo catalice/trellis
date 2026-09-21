@@ -268,17 +268,17 @@ never names that column, so a resync structurally cannot touch their words. Runs
 are a filtered view (`recent_runs`) for baseline math; reviews read every sport
 (`recent_workouts`).
 
-**A plan change is their decision (migration 032).** `move_update what=plan`
-goes one of three ways, decided in Python from THEIR message, never from the
-model's account of it. An INSTRUCTION — their words, from a sentence that is
-neither a question nor a negation — is stored at once and may change only the
-days it names. Anything else is HELD as a proposal; the stored plan is untouched
-and the person receives the proposal rendered from its record by the engine
-(`done(show=…)`), not the model's retelling. A YES — their whole message, assent
-and nothing else, in a later turn — stores that record. An unanswered proposal
-stays in Move context and the snapshot; an instruction that overtakes it retires
-it. Python does not read meaning: it bounds what can happen without it, and
-where it can't tell it costs one more "yes". English only.
+**A change to the week is their decision (migration 032).** Nothing is read
+from their words — two attempts at that were each broken in review. Every
+`move_update what=plan` is HELD as a proposal; the model has no way to store a
+week. The proposal goes to them as its own message, rendered from the record,
+with Store this / Change it buttons (`PlanDecisions` — the seam any front end
+uses: `waiting`, `delivered`, `decide`). Only their press stores it: that record,
+that revision, once, on the action log like any change. The model's reply beside
+it may not carry a second version of the plan (`core_actions.OnlyVersion` —
+competing sentences are removed by the engine). An unanswered proposal stays in
+Move context and the snapshot. Cost, accepted for the trial: a change they
+dictate also takes one press.
 
 **What it reads cross-cutting (never owns):**
 - Goals — from Focus's goals table, filtered by training label
@@ -404,7 +404,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 ## Lean constraints (non-negotiable)
 
-- **One conversational turn per message** (the agentic loop). Two bounded single-shot guards are the only exceptions, each born from a live failure: the silent-turn NUDGE (empty reply after tools), and the OUTCOME REWRITE (only when an action did not cleanly succeed: the draft goes back once with the record, because a warning appended beside "Done — saved." leaves the person to resolve the contradiction). The rewrite is the model's and is shipped as returned; what is GUARANTEED is the record's own statement, deterministic and last. (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
+- **One conversational turn per message** (the agentic loop; a button press is decided in Python — no turn at all). Two bounded single-shot guards are the only exceptions, each born from a live failure: the silent-turn NUDGE (empty reply after tools), and the OUTCOME REWRITE (only when an action did not cleanly succeed: the draft goes back once with the record, because a warning appended beside "Done — saved." leaves the person to resolve the contradiction). The rewrite is the model's and is shipped as returned; what is GUARANTEED is the record's own statement, deterministic and last. (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
 - **Minimal pre-loaded context.** The failure mode is loading too much, not too little.
 - **Bounded context.** Insights and history enter as summaries. Never pass raw records.
 - **Tools as the API surface.** A future UI calls the same tools Telegram does.

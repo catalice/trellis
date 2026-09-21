@@ -173,26 +173,38 @@ unresolved; the week is revisited when commitments change, at check-in and after
 a missed session — revisiting never rewrites it. Night-before watch uploads are a
 separate standing permission, NOT granted here: they wait for the readiness check.
 
-**The combined review (21 September) held deployment, rightly.** The first
-build called two things guarantees on the strength of four sampled runs. They
-were not: the agree path trusted the model to say the person had agreed (a plan
-was stored after "I do not want to change my week"), and "stored what was shown"
-was really "stored the record" — the model wrote what the person saw. Corrected:
-agreement and instruction scope are decided in Python from their message; the
-proposal they receive is rendered from the record; each reproduced case is a
-test. Also corrected: medication names between discovery and verification, and
-trends with no direction.
+**The combined review (21 September) held deployment twice, rightly.** The
+first build called two things guarantees on the strength of four sampled runs.
+They were not: approval trusted the model to say the person had agreed, and what
+they were shown was the model's retelling of the record. The first correction
+had Python read their words instead — and "Is that plan okay?" approved a
+proposal, "I have pilates on Friday." rewrote Friday, and a reply recommending
+30 minutes sat above a record of 90. Word lists are not a boundary.
 
-Evaluation after the correction — real model, the wired app, fixed clock, a
-fictional four-turn review (ask → life update with an item left open → challenge
-→ yes), judged in the database and in the delivered message. 3 runs: in all 3,
-nothing was stored without a plain yes, the held proposal was in the delivered
-message word for word, what was stored was that record, and two attempts to pass
-a paraphrase off as "their instruction" were refused. 0 of 3 passed every check:
-all 3 proposed (did not store) a week without the Friday run that conflicted
-with nothing; 2 never came back to the item left open; 1 never asked what the
-week held. Those are judgement, and they are what the trial week measures. Three
-runs establish nothing about rates; the tests, not the samples, carry the claims.
+**Decision (the user's, revising the earlier one): for the trial, every change
+to the training week is a proposal approved by a button.** No typed approval, no
+immediate saving of dictated changes — one press per proposed week. Tasks and
+logging are unchanged. The proposal is its own message, rendered from the
+record; approval is bound to that record and revision; replaced, withdrawn,
+stored or out-of-date proposals cannot apply; a press goes on the action log;
+the reply beside a proposal cannot state a second version of the plan. Each
+reviewed failure is a regression test. Also corrected: medication names between
+discovery and verification; trends with no direction.
+
+**What is NOT established: that the coaching is better.** Real model, the wired
+app, fixed clock, a fictional review (ask → life update with an item left open →
+challenge → press → "thanks"), two batches of three after the button flow. The
+mechanism held in all six: nothing stored without the press, the message sent
+was the record, what was stored was the record, no second plan in the reply. The
+coaching did not: a run that conflicted with nothing was cut from the proposal
+in 4 of 6, the item left open was returned to in 3 of 6, the question about
+their week was asked in 4 of 6. That is the original frustration, still there —
+now unable to store itself, not gone. One batch also showed the model dropping
+durations from the PLAN after being told to keep them out of the reply; the tool
+text was corrected and the evaluation now checks every proposed run carries a
+quantity. Six runs establish no rates. The acceptance criterion — ordinary
+updates, no procedural coaching — is not yet demonstrated; the trial week is
+where it is tested, without any added independence.
 
 **The trial.** One training week after deployment, bounded: fixed start and
 end, the agreed terms, nothing added mid-week. It answers one question — does
