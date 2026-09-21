@@ -274,9 +274,12 @@ from their words — two attempts at that were each broken in review. Every
 week. The proposal goes to them as its own message, rendered from the record,
 with Store this / Change it buttons (`PlanDecisions` — the seam any front end
 uses: `waiting`, `delivered`, `decide`). Only their press stores it: that record,
-that revision, once, on the action log like any change. The model's reply beside
-it may not carry a second version of the plan (`core_actions.OnlyVersion` —
-competing sentences are removed by the engine). An unanswered proposal stays in
+that revision, once — the plan write and the proposal's resolution are ONE
+transaction — on the action log like any change; when nothing ran, the buttons
+stay. In a turn that proposes, the model's prose is NOT sent
+(`core_actions.OnlyVersion`): prose beside a proposal can't be checked against
+it, so they get a fixed line, what else was done (from the record), and the
+proposal. A filter on wording was tried first and ordinary phrasing beat it. An unanswered proposal stays in
 Move context and the snapshot. Cost, accepted for the trial: a change they
 dictate also takes one press.
 

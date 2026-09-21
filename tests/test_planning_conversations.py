@@ -40,7 +40,7 @@ from trellis.core_main import wire
 from trellis.core_profile import PostgresUserProfileRepository, UserProfile
 from trellis.domain_focus_models import Goal, Task, TaskEnergy, TaskKind, TaskPriority, TaskStatus
 from trellis.domain_focus_repo import PostgresGoalRepository, PostgresTaskRepository
-from trellis.domain_move_tool import _COMPETING_PLAN, render_proposal
+from trellis.domain_move_tool import render_proposal
 from trellis.infra_tracking import GarminActivityRecord, GarminDailyHealthRecord, PostgresHealthRepository
 
 NOW = datetime(2026, 3, 8, 21, 30, tzinfo=timezone.utc)          # a Sunday evening, always
@@ -114,6 +114,16 @@ def _next_week(move, user) -> list[dict]:
     return [s for s in plan.plan.get("week", []) if str(DAY["mon"]) <= str(s.get("date")) <= str(DAY["sun"])]
 
 
+def _only_the_record_speaks(reply: str) -> bool:
+    """Written out here, not imported: a check that shares code with what it
+    checks can only agree with it. Beside a proposal the person gets one fixed
+    sentence and, at most, 'Also done:' lines taken from the action record."""
+    lines = [ln for ln in reply.split("\n") if ln.strip()]
+    fixed = "I've put a week together — it's in the next message, with its buttons. Ask me why for any of it."
+    return bool(lines) and lines[0] == fixed and all(
+        ln == "Also done:" or ln.startswith(("- Done: ", "- Updated: ", "- State logged", "- Logged", "⚠️")) for ln in lines[1:])
+
+
 def _is_run(session: dict | None) -> bool:
     return bool(session) and session.get("type") in ("easy", "long", "intervals", "tempo", "recovery")
 
@@ -150,7 +160,8 @@ def _converse(build, user, tasks, overdue, model) -> list[str]:
     expect(held is not None, f"turn 2: nothing was proposed as a record: {reply[:200]!r}")
     expect(held is None or [d.text for d in sent] == [render_proposal(held)],
            "turn 2: the held proposal did not go out as its own message, rendered from the record")
-    expect(not _COMPETING_PLAN.search(reply), f"turn 2: the reply carries a second version of the plan: {reply!r}")
+    expect(held is None or _only_the_record_speaks(reply),
+           f"turn 2: model-written prose went out beside the proposal: {reply!r}")
     friday = next((s for s in (held.plan["week"] if held else []) if s.get("date") == str(DAY["fri"])), None)
     expect(held is None or _is_run(friday), f"turn 2: Friday's run conflicts with nothing and was cut: {friday}")
     vague = [s for s in (held.plan["week"] if held else []) if _is_run(s) and not re.search(r"\d", str(s.get("detail", "")))]
@@ -158,8 +169,10 @@ def _converse(build, user, tasks, overdue, model) -> list[str]:
 
     reply = say(user, CHALLENGE)
     expect(_next_week(move, user) == [], "turn 3: a challenge is not approval, and the plan was stored")
-    expect(bool(re.search(r"party|neighbour|one night|single night|that night|last night", reply, re.I)),
-           f"turn 3: answered the challenge without engaging with what they said: {reply[:200]!r}")
+    reproposed = move.open_proposal(user) is not None and held is not None and move.open_proposal(user).id != held.id
+    expect(_only_the_record_speaks(reply) if reproposed else
+           bool(re.search(r"party|neighbour|one night|single night|that night|last night", reply, re.I)),
+           f"turn 3: neither a clean re-proposal nor an answer that engages with what they said: {reply[:300]!r}")
     expect(all(tasks.get(t).status == TaskStatus.DONE for t in overdue), "turn 3: the rest of the review was undone")
     held = move.open_proposal(user)
     delivered_to_them()
@@ -168,7 +181,7 @@ def _converse(build, user, tasks, overdue, model) -> list[str]:
     expect(held is None or _is_run(friday), f"turn 3: revising one thing dropped Friday's run: {friday}")
 
     if held is not None:
-        outcome = wiring.decisions.decide(user, f"plan:store:{held.id}", NOW + timedelta(minutes=30))
+        outcome = wiring.decisions.decide(user, f"plan:store:{held.id}", NOW + timedelta(minutes=30)).text
         expect(outcome.startswith("Stored, exactly as shown"), f"press: {outcome!r}")
         expect(_next_week(move, user) == [s for s in held.plan["week"] if str(DAY["mon"]) <= s["date"] <= str(DAY["sun"])],
                f"press: what was stored is not the record they pressed under.\n  record: {held.plan['week']}\n  stored: {_next_week(move, user)}")

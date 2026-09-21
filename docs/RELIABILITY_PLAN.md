@@ -191,20 +191,30 @@ the reply beside a proposal cannot state a second version of the plan. Each
 reviewed failure is a regression test. Also corrected: medication names between
 discovery and verification; trends with no direction.
 
+**Third check of the button flow (21 September): three targeted fixes.** A
+filter on the reply's WORDING let "thirty minutes", "half an hour" and "take
+Friday off" sit beside a button for 90 — and the evaluation checked the reply
+with the filter's own pattern, so it could only agree. Now structural: in a turn
+that proposes, the model's prose is not sent; the person gets one fixed line,
+what else was done that turn (from the action record), and the proposal. The
+evaluation's check is written independently of the code it checks. The plan write
+and its proposal's resolution are one transaction (a failed write used to leave
+a proposal "agreed" that was never stored, its button refusing to retry). A press
+returns a structured outcome: when nothing ran, the buttons stay.
+
 **What is NOT established: that the coaching is better.** Real model, the wired
 app, fixed clock, a fictional review (ask → life update with an item left open →
-challenge → press → "thanks"), two batches of three after the button flow. The
-mechanism held in all six: nothing stored without the press, the message sent
-was the record, what was stored was the record, no second plan in the reply. The
-coaching did not: a run that conflicted with nothing was cut from the proposal
-in 4 of 6, the item left open was returned to in 3 of 6, the question about
-their week was asked in 4 of 6. That is the original frustration, still there —
-now unable to store itself, not gone. One batch also showed the model dropping
-durations from the PLAN after being told to keep them out of the reply; the tool
-text was corrected and the evaluation now checks every proposed run carries a
-quantity. Six runs establish no rates. The acceptance criterion — ordinary
-updates, no procedural coaching — is not yet demonstrated; the trial week is
-where it is tested, without any added independence.
+challenge → press → "thanks"); three batches of three since the button flow. The
+mechanism held in all nine: nothing stored without the press, the message sent
+was the record, what was stored was the record. The coaching did not: a run that
+conflicted with nothing was cut from the proposal in 6 of 9; the item left open
+was returned to in 5 of 9; the question about their week was asked in 7 of 9;
+and in 1 of the last 3 the model described a week in prose and never proposed
+it — nothing could be stored from that, but it costs them a turn. The cost of
+the structural fix is real too: beside a proposal they get no reasoning until
+they ask. Nine runs establish no rates. The acceptance criterion — ordinary
+updates, no procedural coaching — is not demonstrated; the trial week tests it,
+without any added independence.
 
 **The trial.** One training week after deployment, bounded: fixed start and
 end, the agreed terms, nothing added mid-week. It answers one question — does
