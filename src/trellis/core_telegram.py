@@ -5,11 +5,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from trellis.core_assembler import Assembler
 from trellis.core_config import Settings
+from trellis.core_history import SCHEDULED_TURN
 from trellis.infra_memory import MemoryIndex
 from trellis.infra_postgres import PostgresDatabase
 from trellis.domain_focus_service import ReminderService
@@ -35,7 +36,7 @@ def _check_in_message(label: str) -> str:
     """What the oracle receives when a check-in fires. It arrives on the user
     side of the conversation, so it says plainly that it isn't them speaking."""
     return (
-        "[Scheduled check-in. This is the instruction they set for you to run "
+        f"{SCHEDULED_TURN} This is the instruction they set for you to run "
         f"at this time, not a message from them: \"{label}\". "
         "Read what you need, then speak to them first — as if you'd walked in.]"
     )
@@ -72,6 +73,7 @@ class TelegramTrellis:
         garmin_sync: Callable[[], None] | None = None,
         watcher_tick: Callable[[], None] | None = None,
         message_log=None,        # history repo: telegram message registry (chat sweep)
+        decisions=None,          # what is waiting for a button press, and what a press does
     ):
         self.settings = settings
         self.database = database
@@ -82,6 +84,7 @@ class TelegramTrellis:
         self._garmin_sync = garmin_sync
         self._watcher_tick = watcher_tick
         self._message_log = message_log
+        self._decisions = decisions
         self._chat_ttl_hours = getattr(settings, "chat_ttl_hours", 0)
         self._marker_hour = getattr(settings, "marker_hour", -1)
         self._watcher_task: asyncio.Task | None = None
@@ -115,6 +118,7 @@ class TelegramTrellis:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.message)
         )
         application.add_handler(MessageHandler(filters.VOICE, self.voice))
+        application.add_handler(CallbackQueryHandler(self.pressed))
         application.add_error_handler(self._on_error)
         return application
 
@@ -290,6 +294,8 @@ class TelegramTrellis:
                 if await self._send_text(application, telegram_user_id, message or f"Reminder: {reminder.label}"):
                     await asyncio.to_thread(self.reminders.accepted, reminder.id, now=now)
                     accepted += 1
+                    # A check-in may have proposed something: it goes out the same way.
+                    await self._send_waiting_decisions(application.bot, telegram_user_id, user_id)
                 else:
                     attempts = await asyncio.to_thread(self.reminders.delivery_failed, reminder.id)
                     if attempts >= _MAX_DELIVERY_ATTEMPTS:
@@ -437,7 +443,54 @@ class TelegramTrellis:
 
             final = reply or "Something went wrong — no response was generated. Please try again."
             await self._deliver(update, final)
+            await self._send_waiting_decisions(update.get_bot(), update.effective_chat.id, user_id)
             await self._maybe_alert_embed_failures(update)
+
+    async def _send_waiting_decisions(self, bot, chat_id, user_id) -> None:
+        """Anything waiting for their press goes out as ITS OWN message — the
+        record, rendered by Python, with its buttons. Marked delivered only once
+        Telegram has taken it, so a failed send is tried again after the next turn."""
+        decisions = getattr(self, "_decisions", None)
+        if decisions is None:
+            return
+        try:
+            for decision in await asyncio.to_thread(decisions.waiting, user_id):
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data)
+                                                  for label, data in decision.buttons]])
+                self._record_msg(await bot.send_message(chat_id=chat_id, text=decision.text, reply_markup=keyboard))
+                await asyncio.to_thread(decisions.delivered, user_id, decision, datetime.now(timezone.utc))
+        except Exception:
+            self.logger.warning("could not send a waiting decision; it stays waiting", exc_info=True)
+
+    async def pressed(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """A button under a proposal. Same door as a message: a private chat
+        with an allowed person, or nothing. The press is decided in Python —
+        no model turn — under their turn lock, so it can't interleave with one."""
+        query = update.callback_query
+        user_id = self._user(update)
+        if query is None or user_id is None or self._decisions is None:
+            if query is not None:
+                await query.answer()
+            return
+        await query.answer()
+        lock = self._turn_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            try:
+                outcome = await asyncio.to_thread(
+                    self._decisions.decide, user_id, query.data or "", datetime.now(timezone.utc))
+            except Exception:
+                self.logger.exception("a button press failed for user %s", user_id)
+                outcome = None
+            text = outcome.text if outcome is not None else (
+                "Something went wrong with that button. Ask me what's stored before pressing again.")
+            # The buttons go only when the matter is settled. When nothing ran and
+            # the proposal is still open, they ARE the way to try again.
+            if outcome is None or not outcome.buttons_stay:
+                try:
+                    await query.edit_message_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+            await self._send_text(context.application, update.effective_chat.id, text)
 
     async def _typing_keepalive(self, chat, interval: float = 4.0) -> None:
         """Keep the typing indicator alive until cancelled. Never raises."""

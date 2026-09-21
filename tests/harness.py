@@ -50,7 +50,10 @@ class ScriptedModel:
         if not self._steps:
             raise AssertionError("the engine asked the scripted model for more steps than the script has")
         step = self._steps.pop(0)
-        requests = tuple(ToolRequest(id=f"call-{len(self.results_given)}-{i}", name=name, input=dict(args))
+        # Arguments may depend on what came back earlier (an id the model was
+        # handed): a callable is given this model and returns the arguments.
+        requests = tuple(ToolRequest(id=f"call-{len(self.results_given)}-{i}", name=name,
+                                     input=dict(args(self) if callable(args) else args))
                          for i, (name, args) in enumerate(step.tools))
         return ModelReply(text=step.text, tool_requests=requests, finished=not requests)
 
@@ -153,6 +156,49 @@ class Scenario:
     scripted_checks: list[Check] = field(default_factory=list)   # engine guarantees; scripted mode only
     real_model: bool = True             # False: only meaningful against a script (e.g. a model that goes silent)
     context: str = "Today: Monday 2 March 2026, 09:00."
+    earlier: list[dict] = field(default_factory=list)   # the conversation so far, oldest first
+    read_only: frozenset = frozenset()  # tools that change nothing, so may answer in plain text
+
+
+@dataclass
+class Turn:
+    message: str
+    checks: list[Check] = field(default_factory=list)      # about THIS turn: what was done, what was said
+
+
+@dataclass
+class Conversation:
+    """Several turns through the real engine, each seeing the ones before it —
+    for behaviour that only shows across a conversation: asking before planning,
+    proposing before storing, acting on a yes."""
+    name: str
+    turns: list[Turn]
+    tools: dict[str, tuple[dict, object]]
+    script: list[Step]                  # the scripted model's steps, all turns, in order
+    context: str = "Today: Monday 2 March 2026, 09:00."
+    read_only: frozenset = frozenset()
+
+
+def run_conversation(conversation: Conversation, model=None) -> list[Outcome]:
+    from trellis.core_assembler import _SYSTEM_BASE
+    connector = model or ScriptedModel(conversation.script)
+    tools = SimulatedTools(conversation.tools)
+    messages: list[dict] = []
+    outcomes: list[Outcome] = []
+    for turn in conversation.turns:
+        before = len(tools.calls)
+        messages.append({"role": "user", "content": turn.message})
+        result = Oracle(connector).run(
+            SystemPrompt(stable=_SYSTEM_BASE, volatile=conversation.context),
+            list(messages), tools.schemas, tools.handlers, read_only=conversation.read_only,
+        )
+        calls = tools.calls[before:]
+        outcomes.append(Outcome(reply=result.text, calls=calls, result=result, model=connector))
+        # History carries what was done, the way the assembler records it.
+        done_line = "; ".join(f"{c.name} → {str(c.result)[:60]}" for c in calls)
+        messages.append({"role": "assistant",
+                         "content": result.text + (f"\n[actions taken: {done_line}]" if done_line else "")})
+    return outcomes
 
 
 def run(scenario: Scenario, model=None, system_base: str | None = None, read_only=frozenset()) -> Outcome:
@@ -163,9 +209,9 @@ def run(scenario: Scenario, model=None, system_base: str | None = None, read_onl
     tools = SimulatedTools(scenario.tools)
     result = Oracle(connector).run(
         SystemPrompt(stable=system_base or _SYSTEM_BASE, volatile=scenario.context),
-        [{"role": "user", "content": scenario.message}],
+        [*scenario.earlier, {"role": "user", "content": scenario.message}],
         tools.schemas,
         tools.handlers,
-        read_only=read_only,
+        read_only=read_only | scenario.read_only,
     )
     return Outcome(reply=result.text, calls=tools.calls, result=result, model=connector)

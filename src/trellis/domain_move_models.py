@@ -21,6 +21,20 @@ class TrainingPlan:
 
 
 @dataclass(frozen=True)
+class PlanProposal:
+    """A plan change Trellis proposed, held until the person answers it. What
+    gets stored on their yes is THIS week — never one re-composed afterwards."""
+    id: UUID
+    user_id: UUID
+    plan: dict[str, Any]          # same shape as TrainingPlan.plan
+    replace_week: bool
+    status: str                   # open | agreed | superseded | withdrawn
+    created_at: datetime
+    delivered_at: datetime | None = None   # reached them with its buttons
+    resolved_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class RunLog:
     """A logbook view over a recorded activity (since migration 017 these are
     garmin_activities rows — the watch's record IS the record). note composes

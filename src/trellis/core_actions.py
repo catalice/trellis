@@ -39,17 +39,39 @@ class ActionResult(str):
     that treats tool results as text keeps working."""
     status: Status
     correctable: bool
+    only_version: "OnlyVersion | None"      # see done()
 
-    def __new__(cls, text: str, status: Status = Status.SUCCEEDED, correctable: bool = False) -> "ActionResult":
+    def __new__(cls, text: str, status: Status = Status.SUCCEEDED, correctable: bool = False,
+                only_version: "OnlyVersion | None" = None) -> "ActionResult":
         result = super().__new__(cls, text)
         result.status = status
         result.correctable = correctable
+        result.only_version = only_version
         return result
 
 
-def done(text: str) -> ActionResult:
+@dataclass(frozen=True)
+class OnlyVersion:
+    """The person is about to DECIDE on something that reaches them separately,
+    rendered from its record. Free prose beside it cannot be checked for a
+    competing version — "thirty minutes", "half an hour", "take Friday off" — so
+    in that turn the model's prose is not sent at all. They get `introduction`,
+    then what else was done this turn, from the record. Structure, not a list of
+    phrasings: a filter on wording was tried and ordinary variations walked past it."""
+    introduction: str
+
+
+def done(text: str, only_version: OnlyVersion | None = None) -> ActionResult:
     """It happened. A tool that changes something must say so explicitly."""
-    return ActionResult(text, Status.SUCCEEDED)
+    return ActionResult(text, Status.SUCCEEDED, only_version=only_version)
+
+
+def in_place_of_the_reply(rule: OnlyVersion, actions: list["ActionRecord"]) -> str:
+    """What is sent when the model's prose is not: the fixed introduction, and
+    every OTHER change made this turn, in the record's own words."""
+    also = [a.summary for a in actions
+            if a.only_version is None and a.changes_things and a.status is Status.SUCCEEDED and a.summary]
+    return rule.introduction + ("\n\nAlso done:\n" + "\n".join(f"- {line}" for line in also) if also else "")
 
 
 def failed(text: str) -> ActionResult:
@@ -89,6 +111,8 @@ class ActionRecord:
     status: Status = Status.UNKNOWN          # until closed: an attempt nobody finished is unknown
     correctable: bool = False                 # a refusal of the request as sent (see refused())
     summary: str = ""                         # first line of what the handler said
+    only_version: "OnlyVersion | None" = None   # this turn only; not stored
+    changes_things: bool = True                 # False for a read-only tool (this turn only; not stored)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
     id: UUID = field(default_factory=uuid4)

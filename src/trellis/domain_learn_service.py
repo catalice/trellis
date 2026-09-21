@@ -19,6 +19,9 @@ class MapProjection(Protocol):
     def learn_map(self, title: str, body: str, thread_id=None) -> None: ...
 
 
+NOT_READ = "not read"
+
+
 class SourceRequiredError(ValueError):
     """kind='source' without a URL — a reference that can't be followed back
     to its source doesn't get kept (source-in-truth, CLAUDE.md)."""
@@ -30,10 +33,12 @@ class LearnService:
         repo: LearnRepository,
         tz: tzinfo,
         projection: MapProjection | None = None,
+        sources=None,       # anything with read(url) -> text-with-basis | None (infra_search)
     ) -> None:
         self._repo = repo
         self._tz = tz
         self._projection = projection
+        self._sources = sources
 
     def find_or_create_thread(self, user_id: UUID, title: str, now: datetime) -> LearnThread:
         existing = self._repo.get_thread_by_title(user_id, title)
@@ -66,15 +71,29 @@ class LearnService:
     ) -> LearnEntry:
         if kind == EntryKind.SOURCE and not (source_url or "").strip():
             raise SourceRequiredError("a kept reference must carry its source_url")
+        # A URL is not a reading. What could actually be reached is recorded with
+        # the reference — an unreadable one is still kept, and says so.
+        basis = self._basis(source_url) if kind == EntryKind.SOURCE else None
         entry = self._repo.save_entry(LearnEntry(
             id=uuid4(), user_id=user_id, thread_id=thread.id, kind=kind,
             content=content.strip(), region=(region or "").strip() or None,
             source_url=(source_url or "").strip() or None,
             source_title=(source_title or "").strip() or None,
+            source_basis=basis,
             created_at=now,
         ))
         self._project(user_id, thread)
         return entry
+
+    def _basis(self, source_url: str | None) -> str:
+        if self._sources is None:
+            return NOT_READ
+        try:
+            found = self._sources.read((source_url or "").strip())
+        except Exception:
+            _log.warning("could not check a kept source", exc_info=True)
+            found = None
+        return found.basis if found is not None else NOT_READ
 
     def set_position(self, user_id: UUID, thread: LearnThread, position: str) -> bool:
         ok = self._repo.set_position(user_id, thread.id, position.strip())
@@ -131,6 +150,8 @@ def _map_body(thread: LearnThread, entries: list[LearnEntry], tz: tzinfo) -> str
             if e.source_url:
                 label = e.source_title or "source"
                 src = f" — [{label}]({e.source_url})"
+                if e.source_basis:
+                    src += f" ({e.source_basis})"
             lines.append(f"- {e.content}{src}")
         lines.append("")
     if tests:

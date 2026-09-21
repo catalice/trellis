@@ -3,7 +3,8 @@
 **Status:** stage 1 built, reviewed three times, merged and deployed 20 September 2026.
 Stages 2–3 (model boundary, scenario harness, truthful outcomes) reviewed together, merged and
 deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness): reviewed, three bounded corrections, merged and
-deployed 20 September 2026; the index repair (bot stopped) filed 2 missing rows and removed 1 orphan. Next: stage 5.
+deployed 20 September 2026; the index repair (bot stopped) filed 2 missing rows and removed 1 orphan.
+Stages 5–6 are built on `reliability/04-evidence-ownership` and await the combined review.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
@@ -162,6 +163,63 @@ decisions, with no procedural coaching.
 model on request): evidence, corrections, and complete planning conversations —
 including an anonymised version of a real weekly review. Anonymised means it
 passes the hygiene check and the user has read it before it is committed.
+
+**Built 20–21 September 2026, awaiting the combined review.** Decisions taken
+(the user's, on the reviewer's recommendation): a direct instruction is its own
+authorisation; Trellis's proposals need agreement, and the agreement is to the
+proposal that was shown; Trellis retrieves, prepares, holds unfinished business,
+records what is reported or observed, leads the review and returns to what is
+unresolved; the week is revisited when commitments change, at check-in and after
+a missed session — revisiting never rewrites it. Night-before watch uploads are a
+separate standing permission, NOT granted here: they wait for the readiness check.
+
+**The combined review (21 September) held deployment twice, rightly.** The
+first build called two things guarantees on the strength of four sampled runs.
+They were not: approval trusted the model to say the person had agreed, and what
+they were shown was the model's retelling of the record. The first correction
+had Python read their words instead — and "Is that plan okay?" approved a
+proposal, "I have pilates on Friday." rewrote Friday, and a reply recommending
+30 minutes sat above a record of 90. Word lists are not a boundary.
+
+**Decision (the user's, revising the earlier one): for the trial, every change
+to the training week is a proposal approved by a button.** No typed approval, no
+immediate saving of dictated changes — one press per proposed week. Tasks and
+logging are unchanged. The proposal is its own message, rendered from the
+record; approval is bound to that record and revision; replaced, withdrawn,
+stored or out-of-date proposals cannot apply; a press goes on the action log;
+the reply beside a proposal cannot state a second version of the plan. Each
+reviewed failure is a regression test. Also corrected: medication names between
+discovery and verification; trends with no direction.
+
+**Third check of the button flow (21 September): three targeted fixes.** A
+filter on the reply's WORDING let "thirty minutes", "half an hour" and "take
+Friday off" sit beside a button for 90 — and the evaluation checked the reply
+with the filter's own pattern, so it could only agree. Now structural: in a turn
+that proposes, the model's prose is not sent; the person gets one fixed line,
+what else was done that turn (from the action record), and the proposal. The
+evaluation's check is written independently of the code it checks. The plan write
+and its proposal's resolution are one transaction (a failed write used to leave
+a proposal "agreed" that was never stored, its button refusing to retry). A press
+returns a structured outcome: when nothing ran, the buttons stay.
+
+**What is NOT established: that the coaching is better.** Real model, the wired
+app, fixed clock, a fictional review (ask → life update with an item left open →
+challenge → press → "thanks"); three batches of three since the button flow. The
+mechanism held in all nine: nothing stored without the press, the message sent
+was the record, what was stored was the record. The coaching did not: a run that
+conflicted with nothing was cut from the proposal in 6 of 9; the item left open
+was returned to in 5 of 9; the question about their week was asked in 7 of 9;
+and in 1 of the last 3 the model described a week in prose and never proposed
+it — nothing could be stored from that, but it costs them a turn. The cost of
+the structural fix is real too: beside a proposal they get no reasoning until
+they ask. Nine runs establish no rates. The acceptance criterion — ordinary
+updates, no procedural coaching — is not demonstrated; the trial week tests it,
+without any added independence.
+
+**What counts as supervision in the trial** (the reviewer's addition): not only
+corrections to a proposed week. Not sending prose beside a proposal also holds
+back explanations and answers — so every extra "why?", and every question they
+have to repeat because the answer wasn't sent, is counted too.
 
 **The trial.** One training week after deployment, bounded: fixed start and
 end, the agreed terms, nothing added mid-week. It answers one question — does

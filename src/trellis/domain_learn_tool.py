@@ -16,7 +16,7 @@ from uuid import UUID
 from trellis.core_actions import done, refused
 from trellis.domain_learn_claude import LEARN_GUIDANCE
 from trellis.domain_learn_models import EntryKind
-from trellis.domain_learn_service import SourceRequiredError
+from trellis.domain_learn_service import NOT_READ, SourceRequiredError
 
 _log = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ LEARN_ADD_TOOL: dict = {
         "so; the region is theirs to give.\n"
         "thread: open a topic they've chosen to build.\n"
         "entry: place a piece. material = learned, their words or your digest. "
-        "source = a kept reference; refused without a fetched source_url. "
+        "source = a kept reference; refused without a source_url, and kept with how much of it could be read. "
         "test = a retrieval outcome — the test itself is conversation, this is "
         "its one write.\n"
         "position: move 'you are here'."
@@ -119,7 +119,7 @@ def handle_learn_get(user_id: UUID, input_dict: dict, now: datetime, *, learn_se
             # A source ALWAYS shows its URL — a title alone can't be followed back.
             src = ""
             if e.source_url:
-                src = f" [source: {e.source_title} — {e.source_url}]" if e.source_title else f" [source: {e.source_url}]"
+                src = f" [source, {e.source_basis or 'never checked'}: " + (f"{e.source_title} — " if e.source_title else "") + f"{e.source_url}]"
             region = f"({e.region}) " if e.region else "(unplaced) "
             content = e.content.strip()
             if len(content) > _ENTRY_FRAGMENT:
@@ -147,7 +147,7 @@ def handle_learn_get(user_id: UUID, input_dict: dict, now: datetime, *, learn_se
             return f"That entry has {pages} page(s) — ask for page 1 to {pages}."
         head = f"{thread.title} — {entry.kind}" + (f" in '{entry.region}'" if entry.region else " (unplaced)")
         if entry.source_url:
-            head += f" — source: {entry.source_title or ''} {entry.source_url}".rstrip()
+            head += f" — source ({entry.source_basis or 'never checked'}): {entry.source_title or ''} {entry.source_url}".rstrip()
         if pages > 1:
             head += f" (page {page} of {pages}; pass page= for the others)"
         return f"{head}\n{body[(page - 1) * _ENTRY_PAGE: page * _ENTRY_PAGE]}"
@@ -192,7 +192,11 @@ def handle_learn_add(user_id: UUID, input_dict: dict, now: datetime, *, learn_se
             return refused("Refused: a kept reference needs its fetched source_url. "
                     "Their own words can go as material; a recalled fact can't.")
         placed = f" in '{entry.region}'" if entry.region else " (unplaced — ask them where it fits)"
-        return done(f"Placed on '{thread.title}'{placed}.")
+        kept = ""
+        if entry.kind == EntryKind.SOURCE:
+            kept = (" The source could NOT be read — kept as an unread link; nothing in it has been checked."
+                    if entry.source_basis == NOT_READ else f" Source reached: {entry.source_basis}.")
+        return done(f"Placed on '{thread.title}'{placed}.{kept}")
 
     if what == "position":
         position = str(input_dict.get("position", "")).strip()

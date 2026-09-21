@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Protocol
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from psycopg2.extras import Json, RealDictCursor
 
-from trellis.domain_move_models import RunLog, TrainingPlan
+from trellis.domain_move_models import PlanProposal, RunLog, TrainingPlan
 
 _log = logging.getLogger(__name__)
 
@@ -31,6 +31,12 @@ class TrainingRepository(Protocol):
     def set_user_note(self, user_id: UUID, activity_id: str, note: str) -> bool: ...
     def get_watch_push(self, user_id: UUID, on_date: date, name: str) -> str | None: ...
     def record_watch_push(self, user_id: UUID, on_date: date, name: str, workout_id: str) -> None: ...
+    def save_proposal(self, proposal: PlanProposal) -> PlanProposal: ...
+    def open_proposal(self, user_id: UUID) -> PlanProposal | None: ...
+    def get_proposal(self, user_id: UUID, proposal_id: UUID) -> PlanProposal | None: ...
+    def resolve_proposal(self, proposal_id: UUID, status: str, at: datetime) -> bool: ...
+    def mark_proposal_delivered(self, proposal_id: UUID, at: datetime) -> None: ...
+    def store_agreed(self, proposal_id: UUID, record: TrainingPlan, at: datetime) -> bool: ...
 
 
 _ACTIVITY_COLS = (
@@ -57,19 +63,23 @@ class PostgresMoveRepository:
     def upsert(self, record: TrainingPlan) -> TrainingPlan:
         with self._db.connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO training_plan (user_id, goal_id, baseline, plan, updated_at)
-                    VALUES (%s, %s, %s, %s, NOW())
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        goal_id = EXCLUDED.goal_id,
-                        baseline = EXCLUDED.baseline,
-                        plan = EXCLUDED.plan,
-                        updated_at = NOW()
-                    """,
-                    (record.user_id, record.goal_id, record.baseline, Json(record.plan)),
-                )
+                _upsert_plan(cur, record)
         return record
+
+    def store_agreed(self, proposal_id: UUID, record: TrainingPlan, at: datetime) -> bool:
+        """The proposal's resolution and the plan it becomes, in ONE transaction.
+        Claimed first in a separate commit, a failed plan write left a proposal
+        marked agreed that had never been stored — and its button refusing to try
+        again. False = it was no longer open (a second press, a replacement):
+        nothing is written. An error rolls both back; the proposal stays open."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE plan_proposals SET status = 'agreed', resolved_at = %s WHERE id = %s AND status = 'open'",
+                            (at, proposal_id))
+                if cur.rowcount != 1:
+                    return False
+                _upsert_plan(cur, record)
+        return True
 
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]:
         """Runs only — feeds baseline math, plan ticks, and run reviews."""
@@ -100,6 +110,51 @@ class PostgresMoveRepository:
                 )
                 return cur.rowcount > 0
 
+    def save_proposal(self, proposal: PlanProposal) -> PlanProposal:
+        """The new proposal and the retirement of the one it replaces, together:
+        there is never a moment with two open."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE plan_proposals SET status = 'superseded', resolved_at = %s"
+                    " WHERE user_id = %s AND status = 'open'",
+                    (proposal.created_at, proposal.user_id),
+                )
+                cur.execute(
+                    "INSERT INTO plan_proposals (id, user_id, plan, replace_week, status, created_at)"
+                    " VALUES (%s, %s, %s, %s, 'open', %s)",
+                    (proposal.id, proposal.user_id, Json(proposal.plan), proposal.replace_week, proposal.created_at),
+                )
+        return proposal
+
+    def open_proposal(self, user_id: UUID) -> PlanProposal | None:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM plan_proposals WHERE user_id = %s AND status = 'open'", (user_id,))
+                row = cur.fetchone()
+                return _proposal(row) if row else None
+
+    def get_proposal(self, user_id: UUID, proposal_id: UUID) -> PlanProposal | None:
+        with self._db.connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM plan_proposals WHERE user_id = %s AND id = %s", (user_id, proposal_id))
+                row = cur.fetchone()
+                return _proposal(row) if row else None
+
+    def resolve_proposal(self, proposal_id: UUID, status: str, at: datetime) -> bool:
+        """Only an OPEN proposal can be resolved, and only once: two presses of
+        the same button, or a press racing a replacement, leave one winner."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE plan_proposals SET status = %s, resolved_at = %s WHERE id = %s AND status = 'open'",
+                            (status, at, proposal_id))
+                return cur.rowcount == 1
+
+    def mark_proposal_delivered(self, proposal_id: UUID, at: datetime) -> None:
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE plan_proposals SET delivered_at = %s WHERE id = %s", (at, proposal_id))
+
     def get_watch_push(self, user_id: UUID, on_date: date, name: str) -> str | None:
         """The Garmin workout id Trellis last pushed for this date and name."""
         with self._db.connect() as conn:
@@ -123,6 +178,29 @@ class PostgresMoveRepository:
                     """,
                     (user_id, on_date, name, workout_id),
                 )
+
+
+def _upsert_plan(cur, record: TrainingPlan) -> None:
+    cur.execute(
+        """
+        INSERT INTO training_plan (user_id, goal_id, baseline, plan, updated_at)
+        VALUES (%s, %s, %s, %s, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+            goal_id = EXCLUDED.goal_id,
+            baseline = EXCLUDED.baseline,
+            plan = EXCLUDED.plan,
+            updated_at = NOW()
+        """,
+        (record.user_id, record.goal_id, record.baseline, Json(record.plan)),
+    )
+
+
+def _proposal(row: dict) -> PlanProposal:
+    return PlanProposal(
+        id=row["id"], user_id=row["user_id"], plan=row["plan"] or {}, replace_week=bool(row["replace_week"]),
+        status=row["status"], created_at=row["created_at"], delivered_at=row.get("delivered_at"),
+        resolved_at=row.get("resolved_at"),
+    )
 
 
 def _row(row: dict) -> TrainingPlan:

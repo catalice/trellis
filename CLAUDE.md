@@ -72,6 +72,15 @@ Python before speaking, and why any future knowledge feature (Learn) must
 fetch and store its citations — a reference that can't be followed back to
 its source doesn't get kept.
 
+**A listing is not a source** (stage 5, Sep 2026). `web_search query=` finds —
+titles, links, fragments; `web_search read=` reads the source's own text and
+says how much was reached (full text, abstract only, registry record, page
+text). The search provider's synthesised answer is never requested. A kept
+Learn reference records what was reached (`source_basis`). Context blocks say
+what they are — OBSERVED (device), REPORTED (their words), INFERRED (Watcher) —
+so a reply can. The Watcher's tests state a direction and can be refuted; a day
+with nothing recorded is unknown; medications keep their names.
+
 ---
 
 ## Routing — how a message reaches a house
@@ -131,7 +140,7 @@ Every file in `src/trellis/` must be exactly one of these categories. Flat struc
 core_assembler.py    # one turn end to end: routing, context tiers, tool binding
 core_config.py
 core_history.py
-core_main.py         # the ONE place houses are registered and wired
+core_main.py         # the ONE place houses are registered and wired — wire() builds the app; main() runs it
 core_meta_tool.py    # always-on tools: update_current_context, save_preferences
 core_model.py        # the model boundary: what Trellis needs from a model, in its own terms — no provider
 core_onboarding.py
@@ -259,6 +268,21 @@ never names that column, so a resync structurally cannot touch their words. Runs
 are a filtered view (`recent_runs`) for baseline math; reviews read every sport
 (`recent_workouts`).
 
+**A change to the week is their decision (migration 032).** Nothing is read
+from their words — two attempts at that were each broken in review. Every
+`move_update what=plan` is HELD as a proposal; the model has no way to store a
+week. The proposal goes to them as its own message, rendered from the record,
+with Store this / Change it buttons (`PlanDecisions` — the seam any front end
+uses: `waiting`, `delivered`, `decide`). Only their press stores it: that record,
+that revision, once — the plan write and the proposal's resolution are ONE
+transaction — on the action log like any change; when nothing ran, the buttons
+stay. In a turn that proposes, the model's prose is NOT sent
+(`core_actions.OnlyVersion`): prose beside a proposal can't be checked against
+it, so they get a fixed line, what else was done (from the record), and the
+proposal. A filter on wording was tried first and ordinary phrasing beat it. An unanswered proposal stays in
+Move context and the snapshot. Cost, accepted for the trial: a change they
+dictate also takes one press.
+
 **What it reads cross-cutting (never owns):**
 - Goals — from Focus's goals table, filtered by training label
 - Health/readiness — from Sense, to factor into planning
@@ -383,7 +407,7 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 
 ## Lean constraints (non-negotiable)
 
-- **One conversational turn per message** (the agentic loop). Two bounded single-shot guards are the only exceptions, each born from a live failure: the silent-turn NUDGE (empty reply after tools), and the OUTCOME REWRITE (only when an action did not cleanly succeed: the draft goes back once with the record, because a warning appended beside "Done — saved." leaves the person to resolve the contradiction). The rewrite is the model's and is shipped as returned; what is GUARANTEED is the record's own statement, deterministic and last. (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
+- **One conversational turn per message** (the agentic loop; a button press is decided in Python — no turn at all). Two bounded single-shot guards are the only exceptions, each born from a live failure: the silent-turn NUDGE (empty reply after tools), and the OUTCOME REWRITE (only when an action did not cleanly succeed: the draft goes back once with the record, because a warning appended beside "Done — saved." leaves the person to resolve the contradiction). The rewrite is the model's and is shipped as returned; what is GUARANTEED is the record's own statement, deterministic and last. (The ANSWER CHECK guard was retired 2 Sep 2026 - it began degrading replies; the 29b prevention, the user message re-attached behind every tool round, is the surviving fix.) Never add unbounded extra calls; add tools instead. (Embeddings are not Claude calls — local and cheap.)
 - **Minimal pre-loaded context.** The failure mode is loading too much, not too little.
 - **Bounded context.** Insights and history enter as summaries. Never pass raw records.
 - **Tools as the API surface.** A future UI calls the same tools Telegram does.
@@ -436,5 +460,6 @@ The snapshot does not grow. Any new line must pass: *does this tell Claude somet
 - Nightly DB backup: `scripts/backup_db.sh` (launchd, dumps into the vault's `.backups/`)
 - Embedding backfill (safe to re-run, bot STOPPED — a write landing mid-run is undone): `docker compose stop trellis`, `uv run python scripts/backfill_embeddings.py`, check exit 0, `docker compose start trellis`
 - Tests: `.venv/bin/pytest tests/ -q`
+- Whole conversations (`tests/test_planning_conversations.py`): run through `core_main.wire()` — the app as deployed, real database — and judged on what is in the database, not on wording.
 - Scenarios (`tests/test_scenarios.py`, `tests/harness.py`): one set, run with a scripted model always, and with the real model when `TRELLIS_EVAL=1` — an evaluation of the model, not a gate on the software. Add a scenario immediately before fixing the fault it shows.
 - The embedding model is baked into the image (Dockerfile) — the bot embeds offline at runtime.

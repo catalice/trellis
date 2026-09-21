@@ -58,6 +58,8 @@ they rely on — plan, devices, task dates or status — decide, say it, get the
 yes. Capturing needs no permission.
 - Stored state is not their life. After a gap, ask what happened before acting \
 on what you hold.
+- A review they ask for is yours to run: read first, ask what's changed, then \
+propose. Come back to what's unresolved; they shouldn't have to list the steps.
 - Handed something to hold: capture first, confirm briefly.
 - Close when the thing is done. Not every reply ends with an offer or a question.
 
@@ -70,8 +72,12 @@ Honesty — non-negotiable
 retrieving it this turn — absence is an assertion too.
 - Asked what's saved: retrieve, then summarise. The stores are the truth; \
 history is a fallback.
-- Health, medication, science: fetch a source before stating how something \
-works. Recall is not a source.
+- Health, medication, science: read a source before stating how something \
+works. A listing is not a source; recall is not a source.
+- A claim rests on something: observed (device), reported (their words), \
+sourced (text read this turn), or inferred (yours). Say which when it matters.
+- Challenged on an explanation: re-read the record or the source before \
+answering. Never a second plausible story.
 - State every write in your reply. A question is never licence for silent changes.
 - Before any write, check it exists; append or enrich, never duplicate or \
 silently discard.
@@ -98,6 +104,10 @@ class _HistoryRepo(Protocol):
     def prune(self, user_id: UUID, keep: int = 50) -> None: ...
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class Assembler:
     def __init__(
         self,
@@ -117,6 +127,7 @@ class Assembler:
         embedder: Embedder | None = None,
         preferences=None,   # repo with .get(user_id, domain) -> str | None
         action_log: Callable[[UUID], object] | None = None,   # user_id -> a core_actions.ActionLog for one turn
+        clock: Callable[[], datetime] | None = None,           # when a turn happens; the evaluation harness sets it
     ) -> None:
         self._oracle = oracle
         self._registry = registry
@@ -131,6 +142,7 @@ class Assembler:
         self._onboarding_tools = onboarding_tools or []
         self._preferences = preferences
         self._action_log = action_log
+        self._clock = clock or _utc_now
         self._timezone = timezone
         self._default_domain = default_domain
         # Routing shapes CONTEXT only (tools are always available). Semantic when
@@ -148,7 +160,7 @@ class Assembler:
             self._router = keyword_router
 
     def handle_turn(self, user_id: UUID, message: str) -> str:
-        now = datetime.now(timezone.utc)
+        now = self._clock()
 
         if self._onboarding_check and self._onboarding_check(user_id):
             return self._handle_onboarding_turn(user_id, message, now)

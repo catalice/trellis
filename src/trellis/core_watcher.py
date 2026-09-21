@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -191,8 +192,9 @@ class _RunRepo(Protocol):
 # The columns build_daily_frame writes itself. A user-named tracked kind that
 # collides with one is stored as tracked_<kind> instead of overwriting it.
 _FRAME_COLUMNS = frozenset({
-    "body_battery", "cycle_day", "energy", "hrv", "meds", "mood", "notes", "phase", "ran", "ran_km",
-    "resting_hr", "run_avg_hr", "sleep_hours", "sleep_score", "stress", "tasks_done",
+    "body_battery", "cycle_day", "energy", "hrv", "logged", "meds", "meds_names", "mood", "notes",
+    "phase", "ran", "ran_km", "resting_hr", "run_avg_hr", "sleep_hours", "sleep_score", "stress",
+    "tasks_done", "watch",
 })
 
 
@@ -206,8 +208,12 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
         return frame.setdefault(d, {})
 
     by_day_scores: dict[date, dict[str, list]] = {}
+    # Two kinds of day are told apart so that ABSENCE can mean something:
+    # `logged` — they reported something that day; `watch` — the device recorded
+    # that day. A day with neither is unknown, never "no meds" or "no run".
     for s in states:
         d = s.felt_at.astimezone(tz).date()
+        row(d)["logged"] = True
         bucket = by_day_scores.setdefault(d, {"energy": [], "mood": []})
         if s.energy:
             bucket["energy"].append(s.energy)
@@ -252,16 +258,23 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
     for e in events:
         d = e.occurred_at.astimezone(tz).date()
         etype = str(e.event_type)
+        row(d)["logged"] = True
         if etype == "sleep" and e.value is not None:
             row(d)["sleep_hours"] = float(e.value)
         elif etype == "meds":
             row(d)["meds"] = True
+            # WHICH medication, in their words — one boolean made every
+            # medication the same medication.
+            name = _med_name(getattr(e, "detail", ""))
+            if name and name != "meds":
+                row(d)["meds_names"] = tuple(sorted({*row(d).get("meds_names", ()), name}))
         elif etype == "period_start":
             period_starts.append(d)
     period_starts.sort()
 
     for h in health_rows:
         d = h.observed_on
+        row(d)["watch"] = True
         if h.sleep_score is not None:
             row(d)["sleep_score"] = h.sleep_score
         if h.sleep_duration_minutes is not None and "sleep_hours" not in row(d):
@@ -278,6 +291,7 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
 
     for r in runs:
         row(r.ran_on)["ran"] = True
+        row(r.ran_on)["watch"] = True
         dist = getattr(r, "distance_km", None)
         if dist is not None:
             row(r.ran_on)["ran_km"] = round(row(r.ran_on).get("ran_km", 0.0) + dist, 2)
@@ -288,6 +302,7 @@ def build_daily_frame(user_id: UUID, *, states, events, health_rows, runs,
         if not epoch:
             continue
         d = datetime.fromtimestamp(int(epoch), tz=timezone.utc).astimezone(tz).date()
+        row(d)["watch"] = True
         if "run" in (getattr(a, "activity_type", "") or "").lower():
             if getattr(a, "average_heart_rate", None):
                 row(d)["run_avg_hr"] = a.average_heart_rate
@@ -340,15 +355,41 @@ def _human_condition(condition: str) -> str:
             return f"on {_WEEKDAYS[int(condition.split(':', 1)[1])]}s"
         except (ValueError, IndexError):
             return condition
+    if condition.startswith("meds:"):
+        return f"on days {condition.split(':', 1)[1].strip()} was logged"
     return {
         "ran_today": "on run days",
         "ran_yesterday": "the day after a run",
-        "meds_logged": "on meds days",
+        "meds_logged": "on days meds were logged",
     }.get(condition, condition)
 
 
+def _human_otherwise(condition: str) -> str:
+    """What the comparison side really is. Meds are self-reported: the other
+    side is days they logged something else, not days they took nothing."""
+    if condition == "meds_logged" or condition.startswith("meds:"):
+        return "on other logged days"
+    return "otherwise"
+
+
+def _med_name(raw) -> str:
+    """ONE spelling of a medication's name — for the frame, for what discovery
+    is shown, and for the condition a test spec names."""
+    return " ".join(re.sub(r"[_+;,\[\]]", " ", str(raw or "").lower()).split())
+
+
+def _ran(row: dict | None) -> bool | None:
+    if row is None:
+        return None
+    if row.get("ran"):
+        return True
+    return False if row.get("watch") else None    # no device record that day: unknown
+
+
 def _condition_holds(day_row: dict, prev_row: dict | None, condition: str) -> bool | None:
-    """None = condition can't be evaluated for this day (missing data)."""
+    """None = the condition can't be evaluated for this day. Missing data is
+    UNKNOWN, never false: a day nothing was recorded is not a day without a
+    run or without medication, and counting it as one invents the comparison."""
     if condition.startswith("phase:"):
         phase = day_row.get("phase")
         if phase is None:
@@ -357,11 +398,33 @@ def _condition_holds(day_row: dict, prev_row: dict | None, condition: str) -> bo
     if condition.startswith("dow:"):
         return None  # weekday is derived by the caller — see verify()
     if condition == "ran_today":
-        return bool(day_row.get("ran"))
+        return _ran(day_row)
     if condition == "ran_yesterday":
-        return bool(prev_row.get("ran")) if prev_row is not None else False
+        return _ran(prev_row)
     if condition == "meds_logged":
-        return bool(day_row.get("meds"))
+        if day_row.get("meds"):
+            return True
+        return False if day_row.get("logged") else None
+    if condition.startswith("meds:"):
+        wanted = set(_med_name(condition.split(":", 1)[1]).split())
+        if not wanted:
+            return None
+        if any(wanted <= set(name.split()) for name in day_row.get("meds_names", ())):
+            return True
+        return False if day_row.get("logged") else None
+    return None
+
+
+def _against_expectation(expect: str | None, allowed: tuple[str, str], went_first: bool) -> str | None:
+    """A hypothesis names a direction and the data can refute it. Returns why
+    the result does NOT confirm it, or None when it does. `went_first` is
+    whether the data moved the way allowed[0] names. A difference in EITHER
+    direction used to verify — 'mood is better on meds days' was confirmed by
+    mood being worse."""
+    if expect not in allowed:
+        return "the hypothesis names no direction, so a difference alone can't confirm it"
+    if (expect == allowed[0]) != went_first:
+        return f"the OPPOSITE of the proposed '{expect}'"
     return None
 
 
@@ -410,12 +473,13 @@ def verify(frame: dict[date, dict], test_spec: dict,
                  "diff": round(diff, 2), "threshold": threshold, "direction": moving}
         evidence = (f"{_human_metric(metric)} {moving}: was averaging {m_early:.1f}, "
                     f"recently {m_late:.1f} ({n} days)")
-        ok = abs(diff) >= threshold
-        if ok and direction in ("up", "down"):
-            ok = (diff > 0) == (direction == "up")
-            if not ok:
-                evidence += f" — moving opposite to the hypothesised {direction}"
-        return ok, evidence, stats
+        if abs(diff) < threshold:
+            return False, evidence, stats
+        refuted = _against_expectation(direction, ("up", "down"), diff > 0)
+        if refuted:
+            stats["not_confirmed"] = refuted
+            return False, f"{evidence} — {refuted}", stats
+        return True, evidence, stats
 
     if ttype == "correlation":
         a_key = str(test_spec.get("series_a", ""))
@@ -436,7 +500,14 @@ def verify(frame: dict[date, dict], test_spec: dict,
         stats = {"n": n, "r": round(r, 3), "lag_days": lag}
         direction = "rises with" if r > 0 else "falls as"
         evidence = f"{a_h} {direction} {b_h}{f" {lag} day{'s' if lag != 1 else ''} later" if lag else ''} (r={r:.2f}, {n} days)"
-        return abs(r) >= _MIN_CORRELATION_R, evidence, stats
+        if abs(r) < _MIN_CORRELATION_R:
+            return False, evidence, stats
+        refuted = _against_expectation(str(test_spec.get("expect", "")).strip().lower() or None,
+                                       ("positive", "negative"), r > 0)
+        if refuted:
+            stats["not_confirmed"] = refuted
+            return False, f"{evidence} — {refuted}", stats
+        return True, evidence, stats
 
     if ttype == "condition_compare":
         metric = str(test_spec.get("metric", ""))
@@ -465,9 +536,16 @@ def verify(frame: dict[date, dict], test_spec: dict,
         stats = {"n_with": n1, "n_without": n2,
                  "mean_with": round(m1, 2), "mean_without": round(m2, 2),
                  "diff": round(diff, 2), "threshold": threshold}
-        evidence = (f"{_human_metric(metric)} averages {m1:.1f} {cond_h} vs {m2:.1f} otherwise "
-                    f"({n1} vs {n2} days)")
-        return abs(diff) >= threshold, evidence, stats
+        evidence = (f"{_human_metric(metric)} averages {m1:.1f} {cond_h} vs {m2:.1f} "
+                    f"{_human_otherwise(condition)} ({n1} vs {n2} days)")
+        if abs(diff) < threshold:
+            return False, evidence, stats
+        refuted = _against_expectation(str(test_spec.get("expect", "")).strip().lower() or None,
+                                       ("higher", "lower"), diff > 0)
+        if refuted:
+            stats["not_confirmed"] = refuted
+            return False, f"{evidence} — {refuted}", stats
+        return True, evidence, stats
 
     return False, f"unknown test type {ttype!r} — can't verify this yet", {"error": "unknown_test"}
 
@@ -508,9 +586,13 @@ existed, one plain sentence>"}}]}}
 A test-spec lets deterministic code verify the hypothesis. The verbs that
 exist:
 - {{"type": "correlation", "series_a": "<metric>", "series_b": "<metric>",
-   "lag_days": <int, 0-3>}} — do two series move together?
-- {{"type": "condition_compare", "metric": "<metric>", "condition": "<cond>"}}
-   — is a metric different under a condition?
+   "lag_days": <int, 0-3>, "expect": "positive"|"negative"}} — do two series
+   move together, the way you say?
+- {{"type": "condition_compare", "metric": "<metric>", "condition": "<cond>",
+   "expect": "higher"|"lower"}} — is the metric higher or lower under the
+   condition, the way you say?
+Every test states the direction you expect: the data must be able to prove you
+wrong. A test with no direction verifies nothing.
 - {{"type": "trend", "metric": "<metric>", "direction": "up"|"down"}} — is a
    metric drifting over the window?
 - {{"type": "theme_recurrence", "theme": "<short phrase>", "window_days": 60,
@@ -518,7 +600,11 @@ exist:
 Metrics: energy, mood, sleep_hours, sleep_score, hrv, body_battery,
 resting_hr, stress, ran_km, run_avg_hr, tasks_done. Conditions:
 phase:menstruation, phase:follicular, phase:ovulation, phase:luteal,
-ran_today, ran_yesterday, meds_logged, dow:0..6 (Monday=0).
+ran_today, ran_yesterday, meds_logged (any medication), meds:<name exactly as
+it appears in the data> (one medication — different medications are different
+conditions), dow:0..6 (Monday=0). A day with nothing recorded is unknown, not a
+day without.
+State what moves together, never why: the data shows association, not cause.
 If no verb fits, use null and say what check you would run in wanted_test —
 untestable hypotheses are shown honestly, and your wanted tests are how the
 vocabulary grows.\
@@ -728,7 +814,10 @@ class Watcher:
             if row.get("ran"):
                 bits.append("RAN")
             if row.get("meds"):
-                bits.append("meds")
+                # Shown exactly as verification will match it — a name reshaped
+                # for display came back in a test spec and matched no day at all.
+                names = "; ".join(row.get("meds_names", ()))
+                bits.append(f"meds=[{names}]" if names else "meds")
             if len(bits) > 1:
                 lines.append(" ".join(bits))
         return "\n".join(lines)
@@ -805,10 +894,16 @@ class Watcher:
             for p in verified:
                 parts.append(f"  [{p['id']}] {p['hypothesis']} — {p['evidence']}")
         if adopted:
-            parts.append("Adopted patterns (they confirmed these — let them quietly shape suggestions):")
+            parts.append("Adopted patterns (they confirmed these — let them quietly shape suggestions). "
+                         "Associations in their data, not causes:")
             for p in adopted:
-                parts.append(f"  {p['hypothesis']}")
-        return "[The Watcher — long-window patterns]\n" + "\n".join(parts)
+                # Never the sentence alone: what the data says NOW rides with it,
+                # including when it has stopped agreeing.
+                line = f"  {p['hypothesis']}"
+                if p.get("evidence"):
+                    line += f" — latest data: {p['evidence']}"
+                parts.append(line)
+        return "[The Watcher — long-window patterns. INFERRED from their data: associations, never causes]\n" + "\n".join(parts)
 
     def respond(self, user_id: UUID, pattern_id: UUID, verdict: str,
                 note: str | None) -> dict | None:

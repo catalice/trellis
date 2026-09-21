@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Callable
 from uuid import UUID
 
-from trellis.core_actions import done, failed, partial, refused, unknown
+from trellis.core_actions import OnlyVersion, done, failed, partial, refused, unknown
 from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
-from trellis.domain_move_service import AmbiguousWorkout, NoSuchWorkout
+from trellis.domain_move_service import AmbiguousWorkout, MalformedProposal, NoSuchProposal, NoSuchWorkout, ProposalNotOpen
 
 _log = logging.getLogger(__name__)
 
@@ -63,8 +64,12 @@ MOVE_GET_TOOL: dict = {
 MOVE_UPDATE_TOOL: dict = {
     "name": "move_update",
     "description": (
-        "Write to the training record. what=plan: store the plan — saves MERGE by date "
-        "(days sent replace same-dated days, days not sent survive; nothing is removed unless "
+        "Write to the training record. what=plan: ANY change to the week — yours or one they asked for — "
+        "is HELD as a proposal; nothing is stored. Trellis sends them the week itself as its own message, "
+        "built from the record, with Store this / Change it buttons. Only their press stores it; you cannot. "
+        "The plan you send is the prescription — exact sessions, durations, distances. In a turn where you "
+        "propose, your written reply is NOT sent (prose beside a proposal can't be checked against it): so "
+        "owe them an answer or an explanation? Give it in a turn where you don't propose. Once stored, days MERGE by date (days not sent survive; nothing is removed unless "
         "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
         "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
         "The activity is never guessed: a day with several needs sport, and one not synced yet is refused. "
@@ -247,7 +252,7 @@ def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_s
     that took Move from five tools to four). The proven handlers stay behind it."""
     what = str(input_dict.get("what", "")).strip().lower()
     if what == "plan":
-        return _update_plan(user_id, input_dict, move_service=move_service)
+        return _plan_change(user_id, input_dict, now, move_service=move_service)
     if what == "baseline":
         if not str(input_dict.get("baseline", "")).strip():
             return refused("baseline is required — the fitness baseline text.")
@@ -256,6 +261,168 @@ def handle_move_update(user_id: UUID, input_dict: dict, now: datetime, *, move_s
     if what == "workout":
         return _update_workout(user_id, input_dict, move_service=move_service)
     return refused("Unknown request. Use what: plan, baseline, or workout.")
+
+
+def _week_lines(plan: dict) -> str:
+    return "\n".join("  " + _fmt_session(s) for s in plan.get("week", []) if isinstance(s, dict) and s.get("date"))
+
+
+_ONLY_THE_PROPOSAL = OnlyVersion(introduction="I've put a week together — it's in the next message, with its buttons. "
+                                              "Ask me why for any of it.")
+
+
+def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
+    """Every change to the week is held as a proposal. Nothing here stores."""
+    plan = input_dict.get("plan")
+    if isinstance(plan, str):
+        try:
+            plan = json.loads(plan)
+        except json.JSONDecodeError:
+            plan = None
+    if not isinstance(plan, dict):
+        return refused("A plan change needs a plan: {'arc': ..., 'week': [{'date', 'type', 'detail'}]}.")
+    try:
+        proposal = move_service.propose_plan(
+            user_id, plan=plan, replace_week=bool(input_dict.get("replace_week", False)), now=now)
+    except MalformedProposal as problem:
+        return refused(f"Can't hold that as a proposal: {problem}. It has to be storable exactly as shown.")
+    except Exception:
+        _log.warning("move_update propose failed", exc_info=True)
+        return unknown("Holding the proposal hit an error — it may or may not be held. Nothing was stored in the plan.")
+    return done(
+        "PROPOSED — NOT STORED. The stored plan is unchanged.\n"
+        "Trellis sends them the week itself as the next message, built from the record, with Store this / "
+        "Change it buttons — only their press stores it. Whatever you write this turn is NOT sent: they get a "
+        "fixed line, what else you did this turn (from the record), and the proposal. So say nothing that "
+        "matters here. If they want it different, propose again with the full prescription — this one is replaced.",
+        only_version=_ONLY_THE_PROPOSAL,
+    )
+
+
+def render_proposal(proposal) -> str:
+    """The proposal as the PERSON sees it — built from the record, so what they
+    press Store under is what is held, and what is held is what gets stored."""
+    lines = ["Proposed — not stored yet:"]
+    for session in proposal.plan.get("week", []):
+        day = date.fromisoformat(str(session["date"]))
+        detail = str(session.get("detail") or "").strip()
+        lines.append(f"{day.strftime('%a %-d %b')} — {session.get('type', 'session')}" + (f": {detail}" if detail else ""))
+    if proposal.replace_week:
+        lines.append("(This replaces the whole stored week.)")
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class Decision:
+    """Something waiting for their press: the text they are shown and the
+    buttons under it — (label, data). `data` comes back to `decide`."""
+    ref: UUID
+    text: str
+    buttons: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class Pressed:
+    """What a press came to. `buttons_stay`: nothing ran and the proposal is
+    still open, so the same buttons are the way to try again — a front end must
+    not take them away. False: it is settled (or can't be offered again safely)."""
+    text: str
+    buttons_stay: bool = False
+
+
+class PlanDecisions:
+    """The seam a front end uses for plan approval — Telegram today. It sends
+    what is `waiting`, tells us it was `delivered`, and brings back a press to
+    `decide`. No model is involved in any of it."""
+    PREFIX = "plan"
+
+    def __init__(self, move_service, *, action_log=None, history=None) -> None:
+        self._move = move_service
+        self._action_log = action_log        # user_id -> a core_actions.ActionLog
+        self._history = history
+
+    def waiting(self, user_id: UUID) -> list[Decision]:
+        proposal = self._move.undelivered_proposal(user_id)
+        if proposal is None:
+            return []
+        return [Decision(ref=proposal.id, text=render_proposal(proposal), buttons=(
+            ("Store this", f"{self.PREFIX}:store:{proposal.id}"), ("Change it", f"{self.PREFIX}:change:{proposal.id}")))]
+
+    def delivered(self, user_id: UUID, decision: Decision, now: datetime) -> None:
+        self._move.proposal_delivered(decision.ref, now=now)
+        self._remember(user_id, f"[Sent to them as its own message, with Store this / Change it buttons]\n{decision.text}")
+
+    def decide(self, user_id: UUID, data: str, now: datetime) -> Pressed:
+        """One press. On the record before it runs, like any action that changes
+        something; if it can't be recorded it doesn't run — and the buttons stay."""
+        try:
+            _, choice, ref = data.split(":", 2)
+            proposal_id = UUID(ref)
+        except ValueError:
+            return Pressed("That button isn't one I recognise. Nothing was changed.")
+        if choice not in ("store", "change"):
+            return Pressed("That button isn't one I recognise. Nothing was changed.")
+        log = self._action_log(user_id) if self._action_log is not None else None
+        handle = None
+        if log is not None:
+            try:
+                handle = log.begin("plan_decision", {"choice": choice, "proposal": str(proposal_id)})
+            except Exception:
+                _log.warning("action log begin failed", exc_info=True)
+            if handle is None:
+                return Pressed("I couldn't put that on record, so I haven't done it. Nothing was changed — "
+                               "the buttons are still there; press again in a moment.", buttons_stay=True)
+        try:
+            result = self._decide(user_id, choice, proposal_id, now)
+            stay = False
+        except Exception:
+            _log.warning("plan decision failed", exc_info=True)
+            result, stay = self._after_an_error(user_id, proposal_id)
+        if log is not None:
+            try:
+                log.finish(handle, result.status, result.splitlines()[0][:200])
+            except Exception:
+                _log.warning("action log finish failed", exc_info=True)
+        self._remember(user_id, f"[They pressed {'Store this' if choice == 'store' else 'Change it'}]\n{result}")
+        return Pressed(str(result), buttons_stay=stay)
+
+    def _after_an_error(self, user_id: UUID, proposal_id: UUID):
+        """The store and its proposal's resolution are one transaction, so an
+        error normally means neither happened. Look before saying so: still
+        open = nothing ran, try again; anything else is not offered again."""
+        try:
+            status = self._move.proposal_status(user_id, proposal_id)
+        except Exception:
+            status = None
+        if status == "open":
+            return failed("That hit an error and nothing was stored — the proposal is still open. "
+                          "The buttons are still there; press again in a moment."), True
+        if status == "agreed":
+            return done("That hit an error part-way, but the record shows the week WAS stored."), False
+        return unknown("That hit an error and I can't tell whether the week was stored. "
+                       "Ask me what's stored before doing anything else."), False
+
+    def _decide(self, user_id: UUID, choice: str, proposal_id: UUID, now: datetime):
+        if choice == "change":
+            if self._move.decline_proposal(user_id, proposal_id, now=now):
+                return done("Nothing stored — that proposal is withdrawn. Tell me what you'd like different.")
+            return refused("That proposal was already answered or replaced. Nothing was changed.")
+        try:
+            goals = self._move.training_goals(user_id)
+            proposal, _ = self._move.approve_proposal(user_id, proposal_id, goal_id=goals[0].id if goals else None, now=now)
+        except NoSuchProposal:
+            return refused("I can't find that proposal. Nothing was stored.")
+        except ProposalNotOpen as state:
+            return refused(f"That proposal is {state}, so it wasn't stored again. Nothing was changed.")
+        return done("Stored, exactly as shown:\n" + "\n".join(render_proposal(proposal).splitlines()[1:]))
+
+    def _remember(self, user_id: UUID, content: str) -> None:
+        if self._history is None:
+            return
+        try:
+            self._history.append(user_id, "assistant", content)
+        except Exception:
+            _log.warning("could not note a plan decision in history", exc_info=True)
 
 
 def _update_plan(user_id: UUID, input_dict: dict, *, move_service) -> str:
@@ -498,6 +665,20 @@ def move_context_loader(move_service, goal_reader) -> ContextLoader:
         except Exception:
             _log.warning("training_context: plan load failed", exc_info=True)
 
+        # Unfinished business is a RECORD, not something to remember: a proposal
+        # they haven't answered is shown until they do.
+        try:
+            waiting = move_service.open_proposal(user_id)
+            if waiting is not None:
+                parts.append(
+                    "PROPOSED BY YOU, NOT STORED — sent to them with Store this / Change it buttons, "
+                    f"{waiting.created_at.astimezone(move_service.timezone).strftime('%a %-d %b %H:%M')}; not answered yet:\n"
+                    f"{_week_lines(waiting.plan)}\n"
+                    "Only their press stores it. If they want it different, propose again."
+                )
+        except Exception:
+            _log.warning("training_context: open proposal failed", exc_info=True)
+
         # Readiness/recovery (sleep, HRV, body battery) lives in the Sense room and
         # is surfaced every turn by sense_snapshot; the coach reads it from context
         # and factors it into how hard to push.
@@ -531,14 +712,19 @@ def move_snapshot(move_service) -> ContextLoader:
     run (if planned) so the coach always knows it exists. Readiness is in the Sense
     room's snapshot, not duplicated here."""
     def loader(user_id: UUID, now: datetime) -> str | None:
+        lines = []
         try:
             session = move_service.todays_session(user_id, now)
+            if session:
+                lines.append(f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}")
         except Exception:
             _log.warning("move_snapshot session failed", exc_info=True)
-            return None
-        if not session:
-            return None
-        return f"Today's run: {session.get('type', 'run')} — {str(session.get('detail', ''))[:50]}"
+        try:
+            if move_service.open_proposal(user_id) is not None:
+                lines.append("Training: a week you proposed is waiting for their answer.")
+        except Exception:
+            _log.warning("move_snapshot proposal failed", exc_info=True)
+        return "\n".join(lines) or None
 
     return loader
 

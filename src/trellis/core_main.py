@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from telegram import Update
@@ -103,6 +105,7 @@ from trellis.domain_move_service import MoveService
 from trellis.domain_move_tool import (
     MOVE_ROOMS,
     MOVE_SIGNALS,
+    PlanDecisions,
     move_context_loader,
     move_snapshot,
     move_tools,
@@ -190,25 +193,25 @@ def build_watcher(
     )
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+@dataclass
+class Wiring:
+    """Everything main() needs from the assembled app."""
+    assembler: Any
+    reminder_service: Any
+    move_service: Any
+    watcher: Any
+    history: Any
+    memory: Any
+    transcriber: Any
+    garmin_sync: Any
+    decisions: Any          # what is waiting for their press, and what a press does (PlanDecisions)
 
-    settings = Settings.from_env()
-    settings.validate()
-    if not settings.telegram_allowed_users:
-        logging.getLogger(__name__).warning(
-            "TELEGRAM_ALLOWED_USERS is empty: nobody can use this bot. Send it "
-            "/start to learn your Telegram id, add it to .env, and restart.")
 
-    database = PostgresDatabase(settings.database_url)
-    database.migrate(Path(__file__).with_name("migrations"))
-
-    model = build_model(settings)
+def wire(settings: Settings, database: PostgresDatabase, model: ModelConnector, clock=None) -> Wiring:
+    """The whole app, assembled — houses, tools, context, the conversation
+    engine — from settings, a migrated database and a model. main() runs it
+    behind Telegram; the evaluation harness runs the SAME wiring behind a
+    scripted or real model, so what is evaluated is what is deployed."""
     brain_dump_claude = BrainDumpClaude(model)
 
     # Web search — read-only window on the outside world. None if no key configured.
@@ -265,7 +268,7 @@ def main() -> None:
     reminder_service = ReminderService(reminder_repo, settings.timezone, projection=vault)
     goal_service = GoalService(goal_repo)
     learn_service = LearnService(
-        PostgresLearnRepository(database), settings.timezone, projection=vault,
+        PostgresLearnRepository(database), settings.timezone, projection=vault, sources=web_search,
     )
 
     def _dump_hints(uid) -> str | None:
@@ -416,6 +419,7 @@ def main() -> None:
     ))
 
     assembler = Assembler(
+        clock=clock,
         timezone=settings.timezone,
         oracle=oracle,
         registry=registry,
@@ -452,6 +456,34 @@ def main() -> None:
         ],
     )
 
+    return Wiring(assembler=assembler, reminder_service=reminder_service, move_service=move_service,
+                  watcher=watcher, history=history, memory=memory, transcriber=transcriber,
+                  garmin_sync=garmin_sync,
+                  decisions=PlanDecisions(move_service, action_log=lambda uid: PostgresActionLog(database, uid),
+                                          history=history))
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    settings = Settings.from_env()
+    settings.validate()
+    if not settings.telegram_allowed_users:
+        logging.getLogger(__name__).warning(
+            "TELEGRAM_ALLOWED_USERS is empty: nobody can use this bot. Send it "
+            "/start to learn your Telegram id, add it to .env, and restart.")
+
+    database = PostgresDatabase(settings.database_url)
+    database.migrate(Path(__file__).with_name("migrations"))
+
+    w = wire(settings, database, build_model(settings))
+    garmin_sync, move_service, watcher = w.garmin_sync, w.move_service, w.watcher
+
     # Background Garmin refresh (every 6h — see core_telegram) — keeps each
     # connected user's health/readiness and recent runs current without them
     # asking. Same path as the on-demand sync_garmin tool. Only wired when
@@ -476,16 +508,17 @@ def main() -> None:
     application = TelegramTrellis(
         settings,
         database,
-        assembler,
-        reminder_service,
-        transcriber=transcriber,
-        memory=memory,
+        w.assembler,
+        w.reminder_service,
+        transcriber=w.transcriber,
+        memory=w.memory,
         garmin_sync=background_garmin_sync,
         watcher_tick=lambda: [
             watcher.tick(uid, datetime.now(timezone.utc))
             for uid, _tg in database.list_users()
         ],
-        message_log=history,
+        message_log=w.history,
+        decisions=w.decisions,
     ).build()
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 

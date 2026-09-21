@@ -723,12 +723,12 @@ class TestWebSearch:
         class FakeSearch:
             def search(self, q, *, max_results=5, **kw):
                 return SearchResponse(
-                    query=q, answer="Short answer.",
+                    query=q,
                     results=(SearchResult("Title A", "https://a.com", "snippet a"),),
                 )
         reply = handle_web_search(UID, {"query": "drum machines"}, NOW, web_search=FakeSearch())
-        assert "Short answer." in reply
         assert "https://a.com" in reply
+        assert reply.startswith("LISTING")          # a listing says it is one
 
     def test_handler_empty(self):
         from trellis.domain_focus_tool import handle_web_search
@@ -740,7 +740,7 @@ class TestWebSearch:
     def test_handler_requires_query(self):
         from trellis.domain_focus_tool import handle_web_search
         reply = handle_web_search(UID, {}, NOW, web_search=object())
-        assert "required" in reply
+        assert "query" in reply and "read=" in reply
 
 
 class TestSaveToEffort:

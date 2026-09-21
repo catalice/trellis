@@ -11,6 +11,10 @@ from trellis.infra_postgres import PostgresDatabase
 _log = logging.getLogger(__name__)
 
 
+# How a turn Trellis starts by itself is marked on the user side of the conversation.
+SCHEDULED_TURN = "[Scheduled check-in."
+
+
 @dataclass(frozen=True)
 class ConversationTurn:
     id: UUID

@@ -164,8 +164,10 @@ def handle_sense_get(user_id: UUID, input_dict: dict, now: datetime, *, sense_se
             row = rows[d]
             bits = []
             for k in sorted(row):
-                v = row[k]
-                bits.append(f"{k} {round(v, 1) if isinstance(v, float) else v}")
+                if k in ("logged", "watch") or (k == "meds" and row.get("meds_names")):
+                    continue        # bookkeeping for the verifier; names say more than True
+                v = ", ".join(row[k]) if k == "meds_names" else row[k]
+                bits.append(f"{'meds' if k == 'meds_names' else k} {round(v, 1) if isinstance(v, float) else v}")
             lines.append(f"  {d.isoformat()}: " + ", ".join(bits))
         return "\n".join(lines)
 
@@ -298,7 +300,7 @@ def _fmt_logged(rows: list) -> "str | None":
     for r in rows:
         ago = "today" if r["days_ago"] == 0 else f"{r['days_ago']}d ago"
         bits.append(f"{r['name']} {r['days']}d, last {r['last'].strftime('%-d %b')} ({ago})")
-    return "[Logged, last 30 days — computed] " + "; ".join(bits)
+    return "[Logged, last 30 days — computed from what they REPORTED; a day not logged is unknown] " + "; ".join(bits)
 
 
 def _fmt_tracking(states: list, events: list, tz) -> "str | None":
@@ -308,7 +310,7 @@ def _fmt_tracking(states: list, events: list, tz) -> "str | None":
         return None
     lines = []
     if states:
-        lines.append("State logs (last 7 days):")
+        lines.append("REPORTED by them — state logs (last 7 days); e/m scores are read from their words:")
         for s in states:
             scores = "/".join(p for p in (
                 f"e{s.energy}" if s.energy else "", f"m{s.mood}" if s.mood else "",
@@ -316,7 +318,7 @@ def _fmt_tracking(states: list, events: list, tz) -> "str | None":
             felt = s.felt_at.astimezone(tz).strftime("%d %b %H:%M")
             lines.append(f"  [{s.id}] {felt} {scores or '·'} — {s.note[:80]}")
     if events:
-        lines.append("Events:")
+        lines.append("REPORTED by them — events:")
         for e in events:
             bits = [str(e.event_type)]
             if e.detail:
@@ -432,7 +434,7 @@ def sense_context_loader(sense_service, tz) -> ContextLoader:
         try:
             line = _fmt_health(sense_service.recent_health(user_id, now=now))
             if line:
-                parts.append("Recent Garmin readiness: " + line)
+                parts.append("OBSERVED by the watch — recent Garmin readiness: " + line)
         except Exception:
             _log.warning("sense_context: readiness failed", exc_info=True)
         return "[Wellbeing]\n" + "\n\n".join(parts)

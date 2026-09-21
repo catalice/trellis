@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from trellis.core_actions import (
-    ActionLog, ActionRecord, InMemoryActionLog, Status, failed, receipt, status_of, unknown,
+    ActionLog, ActionRecord, InMemoryActionLog, Status, failed, in_place_of_the_reply, receipt, status_of, unknown,
 )
 from trellis.core_model import ModelConnector, ModelReply, SystemPrompt, ToolOutcome, Turn
 
@@ -164,9 +164,17 @@ class Oracle:
         # followed by "Not done". Python cannot judge prose; it can only make
         # sure the truth is stated, and stated last.
         correction = receipt(done or [])
-        if correction:
+        # Something they are about to DECIDE on reaches them separately, rendered
+        # from its record. Prose beside it can't be checked for a second version
+        # of it, so this turn's prose is not sent: a fixed introduction and the
+        # record of what else was done take its place.
+        deciding = [a.only_version for a in (done or []) if a.only_version is not None]
+        if deciding:
+            _log.info("oracle: a decision is going out separately — the model's prose is not sent this turn")
+            text = in_place_of_the_reply(deciding[-1], done or [])
+        elif correction:
             text = self._rewritten(text, correction)
-            text = f"{text}\n\n{correction}" if text else correction
+        text = "\n\n".join(part for part in (text, correction) if part)
         return OracleResult(text, tuple(calls), tuple(done or ()))
 
     def _rewritten(self, draft: str, correction: str) -> str:
@@ -216,6 +224,8 @@ class Oracle:
         record = handle if isinstance(handle, ActionRecord) else ActionRecord(tool=name, input=dict(input_dict))
         record.status, record.summary = status, summary
         record.correctable = bool(getattr(result, "correctable", False))
+        record.only_version = getattr(result, "only_version", None) if status is Status.SUCCEEDED else None
+        record.changes_things = changes_things
         done.append(record)
         if handle is not None:
             try:

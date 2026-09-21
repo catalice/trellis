@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from trellis.domain_move_models import RunLog, TrainingPlan
+from trellis.domain_move_models import PlanProposal, RunLog, TrainingPlan
 from trellis.domain_move_repo import TrainingRepository
 
 _log = logging.getLogger(__name__)
@@ -56,6 +56,18 @@ class AmbiguousWorkout(ValueError):
     def __init__(self, candidates: list) -> None:
         super().__init__("several activities fit")
         self.candidates = candidates
+
+
+class NoSuchProposal(LookupError):
+    """No proposal with that id for this person."""
+
+
+class ProposalNotOpen(ValueError):
+    """Already answered, or replaced by a newer one — its status is the message."""
+
+
+class MalformedProposal(ValueError):
+    """It could not be stored as shown."""
 
 
 class NoSuchWorkout(LookupError):
@@ -101,6 +113,10 @@ class MoveService:
         self._health = health_repo
         self._projection = projection
 
+    @property
+    def timezone(self) -> tzinfo:
+        return self._tz
+
     def _project_plan(self, user_id: UUID) -> None:
         """Refresh the vault's Training/Plan.md. Never raises — a failed vault
         write must not break the bot."""
@@ -116,21 +132,79 @@ class MoveService:
     def get_plan(self, user_id: UUID) -> TrainingPlan | None:
         return self._repo.get(user_id)
 
-    def save_plan(
-        self,
-        user_id: UUID,
-        *,
-        plan: dict | None = None,
-        baseline: str | None = None,
-        goal_id: UUID | None = None,
-        replace_week: bool = False,
-    ) -> TrainingPlan:
-        """Upsert the coach's plan — MERGING, never destroying (12 Aug: an
-        arc-note save wiped six days of stored week; the tool obeyed. Never
-        again — in code, not in a prompt). arc replaces arc only when sent;
-        incoming week days replace SAME-DATED days, all other stored days
-        survive. replace_week=True is the only way to drop days (the weekly
-        full re-author)."""
+    # -- Whose decision a plan change is ---------------------------------------
+    # The plan was stored in the turn it was first suggested, then stored again,
+    # differently, after they objected. Two attempts to have Python tell from
+    # their WORDS whether they had agreed, or instructed, were each broken by an
+    # independent review ("Is that plan okay?" approved; "I have pilates on
+    # Friday" rewrote Friday). So nothing is read from words: every change to
+    # the week is HELD as a proposal, they are shown the record itself, and the
+    # only thing that stores it is their press of the button under it.
+
+    def propose_plan(self, user_id: UUID, *, plan: dict, replace_week: bool, now: datetime) -> PlanProposal:
+        """Held exactly as it will be stored. Storing merges BY DATE, so two
+        entries on one date would show as two and save as one — refused here,
+        as is any entry without a real date (it used to be dropped silently)."""
+        week = plan.get("week") or []
+        seen: set[str] = set()
+        for session in week:
+            try:
+                day = str(date.fromisoformat(str(session.get("date") if isinstance(session, dict) else None)))
+            except ValueError:
+                raise MalformedProposal(f"every day needs a real date (YYYY-MM-DD): {session!r}")
+            if day in seen:
+                raise MalformedProposal(f"two entries for {day} — one entry per day; put both sessions in its detail")
+            seen.add(day)
+        if not seen:
+            raise MalformedProposal("no dated days")
+        held = {**plan, "week": sorted(week, key=lambda s: str(s["date"]))}
+        return self._repo.save_proposal(PlanProposal(
+            id=uuid4(), user_id=user_id, plan=held, replace_week=replace_week,
+            status="open", created_at=now,
+        ))
+
+    def open_proposal(self, user_id: UUID) -> PlanProposal | None:
+        return self._repo.open_proposal(user_id)
+
+    def undelivered_proposal(self, user_id: UUID) -> PlanProposal | None:
+        waiting = self._repo.open_proposal(user_id)
+        return waiting if waiting is not None and waiting.delivered_at is None else None
+
+    def proposal_delivered(self, proposal_id: UUID, *, now: datetime) -> None:
+        self._repo.mark_proposal_delivered(proposal_id, now)
+
+    def approve_proposal(self, user_id: UUID, proposal_id: UUID, *, goal_id: UUID | None, now: datetime) -> tuple[PlanProposal, TrainingPlan]:
+        """Their press of "Store this" under one specific proposal. Stores that
+        record and nothing else. A replaced, withdrawn or already-stored
+        proposal cannot apply again, nor one whose days have all gone by."""
+        proposal = self._repo.get_proposal(user_id, proposal_id)
+        if proposal is None:
+            raise NoSuchProposal(str(proposal_id))
+        if proposal.status != "open":
+            raise ProposalNotOpen(proposal.status)
+        today = now.astimezone(self._tz).date()
+        if all(date.fromisoformat(str(s["date"])) < today for s in proposal.plan["week"]):
+            self._repo.resolve_proposal(proposal.id, "withdrawn", now)
+            raise ProposalNotOpen("out of date — every day in it has passed")
+        record = self._merged(user_id, plan=proposal.plan, baseline=None, goal_id=goal_id,
+                              replace_week=proposal.replace_week)
+        if not self._repo.store_agreed(proposal.id, record, now):      # one transaction; one press wins
+            raise ProposalNotOpen("no longer open")
+        self._project_plan(user_id)
+        return proposal, record
+
+    def proposal_status(self, user_id: UUID, proposal_id: UUID) -> str | None:
+        proposal = self._repo.get_proposal(user_id, proposal_id)
+        return proposal.status if proposal else None
+
+    def decline_proposal(self, user_id: UUID, proposal_id: UUID, *, now: datetime) -> bool:
+        """"Change it": nothing is stored and this proposal can no longer be."""
+        proposal = self._repo.get_proposal(user_id, proposal_id)
+        return proposal is not None and self._repo.resolve_proposal(proposal.id, "withdrawn", now)
+
+    def _merged(self, user_id: UUID, *, plan: dict | None, baseline: str | None, goal_id: UUID | None,
+                replace_week: bool) -> TrainingPlan:
+        """The record a save would write — computed, not written."""
         existing = self._repo.get(user_id)
         stored = dict(existing.plan) if existing and existing.plan else {}
         merged = dict(stored)
@@ -148,13 +222,31 @@ class MoveService:
                     for sess in incoming:
                         by_date[str(sess["date"])] = sess
                     merged["week"] = [by_date[d] for d in sorted(by_date)]
-        saved = self._repo.upsert(TrainingPlan(
+        return TrainingPlan(
             user_id=user_id,
             goal_id=goal_id if goal_id is not None else (existing.goal_id if existing else None),
             baseline=baseline if baseline is not None else (existing.baseline if existing else None),
             plan=merged,
             updated_at=datetime.now(timezone.utc),
-        ))
+        )
+
+    def save_plan(
+        self,
+        user_id: UUID,
+        *,
+        plan: dict | None = None,
+        baseline: str | None = None,
+        goal_id: UUID | None = None,
+        replace_week: bool = False,
+    ) -> TrainingPlan:
+        """Upsert the coach's plan — MERGING, never destroying (12 Aug: an
+        arc-note save wiped six days of stored week; the tool obeyed. Never
+        again — in code, not in a prompt). arc replaces arc only when sent;
+        incoming week days replace SAME-DATED days, all other stored days
+        survive. replace_week=True is the only way to drop days (the weekly
+        full re-author)."""
+        saved = self._repo.upsert(self._merged(user_id, plan=plan, baseline=baseline, goal_id=goal_id,
+                                               replace_week=replace_week))
         self._project_plan(user_id)
         return saved
 
