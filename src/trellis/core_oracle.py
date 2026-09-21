@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from trellis.core_actions import (
-    ActionLog, ActionRecord, InMemoryActionLog, Status, failed, receipt, status_of, unknown,
+    ActionLog, ActionRecord, InMemoryActionLog, Status, failed, receipt, status_of, unknown, without_competing,
 )
 from trellis.core_model import ModelConnector, ModelReply, SystemPrompt, ToolOutcome, Turn
 
@@ -166,16 +166,18 @@ class Oracle:
         correction = receipt(done or [])
         if correction:
             text = self._rewritten(text, correction)
-        # What a tool says the person must see word for word (a proposal they
-        # are about to decide on) goes in after the model's text and is never
-        # passed through the rewrite: the LAST one per tool, so a proposal
-        # revised within the turn is shown once, current.
-        shown: dict[str, str] = {}
+        # Something they are about to DECIDE on reaches them separately, rendered
+        # from its record. The reply must not carry a second version of it — a
+        # recommendation of 30 minutes above a button that stores 90 leaves them
+        # checking Trellis's work. Those sentences come out, deterministically,
+        # after any rewrite.
         for action in done or []:
-            if action.show:
-                shown.pop(action.tool, None)
-                shown[action.tool] = action.show
-        text = "\n\n".join(part for part in (text, *shown.values(), correction) if part)
+            if action.only_version is not None:
+                cleaned = without_competing(text, action.only_version)
+                if cleaned != text:
+                    _log.warning("oracle: removed competing statements from the reply (%s)", action.tool)
+                text = cleaned
+        text = "\n\n".join(part for part in (text, correction) if part)
         return OracleResult(text, tuple(calls), tuple(done or ()))
 
     def _rewritten(self, draft: str, correction: str) -> str:
@@ -225,7 +227,7 @@ class Oracle:
         record = handle if isinstance(handle, ActionRecord) else ActionRecord(tool=name, input=dict(input_dict))
         record.status, record.summary = status, summary
         record.correctable = bool(getattr(result, "correctable", False))
-        record.show = getattr(result, "show", None) if status is Status.SUCCEEDED else None
+        record.only_version = getattr(result, "only_version", None) if status is Status.SUCCEEDED else None
         done.append(record)
         if handle is not None:
             try:

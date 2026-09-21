@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -39,24 +40,47 @@ class ActionResult(str):
     that treats tool results as text keeps working."""
     status: Status
     correctable: bool
-    show: str | None        # text that must reach the person WORD FOR WORD (see done())
+    only_version: "OnlyVersion | None"      # see done()
 
     def __new__(cls, text: str, status: Status = Status.SUCCEEDED, correctable: bool = False,
-                show: str | None = None) -> "ActionResult":
+                only_version: "OnlyVersion | None" = None) -> "ActionResult":
         result = super().__new__(cls, text)
         result.status = status
         result.correctable = correctable
-        result.show = show
+        result.only_version = only_version
         return result
 
 
-def done(text: str, show: str | None = None) -> ActionResult:
-    """It happened. A tool that changes something must say so explicitly.
-    `show`: when the person is about to DECIDE on something, what they decide on
-    can't be the model's retelling of it. The engine puts `show` in the reply
-    itself, after the model's words, unaltered — so what they agree to is what
-    is held."""
-    return ActionResult(text, Status.SUCCEEDED, show=show)
+@dataclass(frozen=True)
+class OnlyVersion:
+    """The person is about to DECIDE on something that reaches them separately,
+    rendered from its record. The model's reply must not carry a second version
+    of it: `competing` matches the statements that would be one, and the engine
+    takes those sentences out of the reply. `if_nothing_left` is what is said
+    when that leaves nothing."""
+    competing: "re.Pattern[str]"
+    if_nothing_left: str
+
+
+def done(text: str, only_version: OnlyVersion | None = None) -> ActionResult:
+    """It happened. A tool that changes something must say so explicitly."""
+    return ActionResult(text, Status.SUCCEEDED, only_version=only_version)
+
+
+def without_competing(reply: str, rule: OnlyVersion) -> str:
+    """The reply with every sentence that states a competing version removed —
+    whole sentences, so nothing is left half-said. Lines emptied by it go too."""
+    kept_lines = []
+    for line in reply.split("\n"):
+        if not line.strip():
+            kept_lines.append(line)
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+", line)
+        kept = [s for s in sentences if not rule.competing.search(s)]
+        if kept:
+            kept_lines.append(" ".join(kept))
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
+    return cleaned or rule.if_nothing_left
 
 
 def failed(text: str) -> ActionResult:
@@ -96,7 +120,7 @@ class ActionRecord:
     status: Status = Status.UNKNOWN          # until closed: an attempt nobody finished is unknown
     correctable: bool = False                 # a refusal of the request as sent (see refused())
     summary: str = ""                         # first line of what the handler said
-    show: str | None = None                   # delivered to the person verbatim (this turn only; not stored)
+    only_version: "OnlyVersion | None" = None   # this turn only; not stored
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
     id: UUID = field(default_factory=uuid4)
