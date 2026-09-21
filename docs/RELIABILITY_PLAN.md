@@ -4,7 +4,8 @@
 Stages 2–3 (model boundary, scenario harness, truthful outcomes) reviewed together, merged and
 deployed 20 September 2026. Stage 4 (retrieval, memory, answer completeness): reviewed, three bounded corrections, merged and
 deployed 20 September 2026; the index repair (bot stopped) filed 2 missing rows and removed 1 orphan.
-Stages 5–6 are built on `reliability/04-evidence-ownership` and await the combined review.
+Stages 5–6 (evidence; plan changes approved by a button): reviewed four times, merged and deployed
+21 September 2026. The bounded trial week starts from here — no added independence; readiness check after it.
 Finding numbers (F1–F21) refer to the external review of revision `954d93f`.
 
 ## Goal
