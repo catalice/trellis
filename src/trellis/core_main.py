@@ -205,7 +205,7 @@ class Wiring:
     garmin_sync: Any
 
 
-def wire(settings: Settings, database: PostgresDatabase, model: ModelConnector) -> Wiring:
+def wire(settings: Settings, database: PostgresDatabase, model: ModelConnector, clock=None) -> Wiring:
     """The whole app, assembled — houses, tools, context, the conversation
     engine — from settings, a migrated database and a model. main() runs it
     behind Telegram; the evaluation harness runs the SAME wiring behind a
@@ -418,6 +418,7 @@ def wire(settings: Settings, database: PostgresDatabase, model: ModelConnector) 
     ))
 
     assembler = Assembler(
+        clock=clock,
         timezone=settings.timezone,
         oracle=oracle,
         registry=registry,

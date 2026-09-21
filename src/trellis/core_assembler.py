@@ -104,6 +104,10 @@ class _HistoryRepo(Protocol):
     def prune(self, user_id: UUID, keep: int = 50) -> None: ...
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class Assembler:
     def __init__(
         self,
@@ -123,6 +127,7 @@ class Assembler:
         embedder: Embedder | None = None,
         preferences=None,   # repo with .get(user_id, domain) -> str | None
         action_log: Callable[[UUID], object] | None = None,   # user_id -> a core_actions.ActionLog for one turn
+        clock: Callable[[], datetime] | None = None,           # when a turn happens; the evaluation harness sets it
     ) -> None:
         self._oracle = oracle
         self._registry = registry
@@ -137,6 +142,7 @@ class Assembler:
         self._onboarding_tools = onboarding_tools or []
         self._preferences = preferences
         self._action_log = action_log
+        self._clock = clock or _utc_now
         self._timezone = timezone
         self._default_domain = default_domain
         # Routing shapes CONTEXT only (tools are always available). Semantic when
@@ -154,7 +160,7 @@ class Assembler:
             self._router = keyword_router
 
     def handle_turn(self, user_id: UUID, message: str) -> str:
-        now = datetime.now(timezone.utc)
+        now = self._clock()
 
         if self._onboarding_check and self._onboarding_check(user_id):
             return self._handle_onboarding_turn(user_id, message, now)
