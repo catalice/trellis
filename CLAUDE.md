@@ -269,13 +269,16 @@ are a filtered view (`recent_runs`) for baseline math; reviews read every sport
 (`recent_workouts`).
 
 **A plan change is their decision (migration 032).** `move_update what=plan`
-goes one of three ways, decided in Python: their INSTRUCTION (their own words,
-found in the message being answered, naming what changes) is stored at once;
-anything else is HELD as a proposal and the stored plan is untouched; their YES,
-in a later turn, stores the proposal they were shown — never one composed
-afterwards. A proposal can't be agreed in the turn that made it; a yes is not an
-instruction; a scheduled check-in is never them speaking. An unanswered proposal
-stays in Move context and the snapshot — unfinished business is a record.
+goes one of three ways, decided in Python from THEIR message, never from the
+model's account of it. An INSTRUCTION — their words, from a sentence that is
+neither a question nor a negation — is stored at once and may change only the
+days it names. Anything else is HELD as a proposal; the stored plan is untouched
+and the person receives the proposal rendered from its record by the engine
+(`done(show=…)`), not the model's retelling. A YES — their whole message, assent
+and nothing else, in a later turn — stores that record. An unanswered proposal
+stays in Move context and the snapshot; an instruction that overtakes it retires
+it. Python does not read meaning: it bounds what can happen without it, and
+where it can't tell it costs one more "yes". English only.
 
 **What it reads cross-cutting (never owns):**
 - Goals — from Focus's goals table, filtered by training label

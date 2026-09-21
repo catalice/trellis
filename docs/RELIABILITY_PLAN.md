@@ -173,16 +173,26 @@ unresolved; the week is revisited when commitments change, at check-in and after
 a missed session — revisiting never rewrites it. Night-before watch uploads are a
 separate standing permission, NOT granted here: they wait for the readiness check.
 
-Evaluation, real model, the wired app, a fictional four-turn review (ask → life
-update → challenge → yes), judged in the database. Before the mechanism: 1 of 3
-runs passed; one stored the plan before any yes — the fault as it happened.
-After: in 4 of 4 runs nothing was stored without a yes, what was stored was
-exactly what had been shown, and the tasks they said were done were done. 2 of 4
-passed every check; the other two were judgement, not record-keeping — one
-reviewed without asking anything, one proposed (did not store) a week with a run
-cut that conflicted with nothing. The first evaluation also found a hole: a yes
-quoted as "their instruction" — closed (an instruction must name what it changes).
-Small numbers; the trial week is the real measure.
+**The combined review (21 September) held deployment, rightly.** The first
+build called two things guarantees on the strength of four sampled runs. They
+were not: the agree path trusted the model to say the person had agreed (a plan
+was stored after "I do not want to change my week"), and "stored what was shown"
+was really "stored the record" — the model wrote what the person saw. Corrected:
+agreement and instruction scope are decided in Python from their message; the
+proposal they receive is rendered from the record; each reproduced case is a
+test. Also corrected: medication names between discovery and verification, and
+trends with no direction.
+
+Evaluation after the correction — real model, the wired app, fixed clock, a
+fictional four-turn review (ask → life update with an item left open → challenge
+→ yes), judged in the database and in the delivered message. 3 runs: in all 3,
+nothing was stored without a plain yes, the held proposal was in the delivered
+message word for word, what was stored was that record, and two attempts to pass
+a paraphrase off as "their instruction" were refused. 0 of 3 passed every check:
+all 3 proposed (did not store) a week without the Friday run that conflicted
+with nothing; 2 never came back to the item left open; 1 never asked what the
+week held. Those are judgement, and they are what the trial week measures. Three
+runs establish nothing about rates; the tests, not the samples, carry the claims.
 
 **The trial.** One training week after deployment, bounded: fixed start and
 end, the agreed terms, nothing added mid-week. It answers one question — does
