@@ -71,6 +71,22 @@ class ProposalNotOpen(ValueError):
     """Already answered, or replaced by a newer one — its status is the message."""
 
 
+class NotAYes(ValueError):
+    """The message being answered is not plain assent — so nothing is agreed."""
+
+
+class MalformedProposal(ValueError):
+    """It could not be stored as shown."""
+
+
+# What counts as a yes: the WHOLE message, these words only, at least one of the core.
+_ASSENT_CORE = frozenset("yes yep yeah yup ok okay sure agreed agree approved perfect good great fine works go 👍".split())
+_ASSENT = _ASSENT_CORE | frozenset(
+    "please with that it do sounds lets let s store save lock in thanks thank you looks right the plan this week "
+    "for me all love use one lovely brilliant then ahead is its and i im happy a to".split())
+_NEGATION = re.compile(r"\b(not|no|never|don'?t|won'?t|can'?t|cannot|shouldn'?t|wouldn'?t|without|rather)\b|n't\b", re.I)
+
+
 class ProposalNotSeen(ValueError):
     """Made in THIS turn: the person cannot have agreed to what they have not
     been shown. Agreement is only ever to a proposal from an earlier turn."""
@@ -148,42 +164,94 @@ class MoveService:
     #   Trellis's proposal — held as a record; stored only when a LATER message
     #                       agrees to it, and what is stored is that record.
 
-    def asked_for(self, user_id: UUID, their_words: str) -> bool:
-        """True when `their_words` really is part of the message being answered —
-        at least three words of it, their wording. The model points at the
-        instruction; Python checks it is there."""
+    def _message(self, user_id: UUID) -> str:
+        """The message this turn answers — "" when there is none (a scheduled
+        turn, or no provider): everything below then fails closed."""
         if self._their_message is None:
-            return False
+            return ""
         try:
-            message = self._their_message(user_id) or ""
+            return self._their_message(user_id) or ""
         except Exception:
             _log.warning("could not read the message being answered", exc_info=True)
-            return False
-        quoted, said = _plain(their_words), _plain(message)
-        return len(quoted.split()) >= 3 and quoted in said
+            return ""
 
-    def names_the_change(self, their_words: str, plan: dict) -> bool:
-        """An instruction says WHAT to change. "Yes, go with that" is in their
-        message too, but it is assent to something they were shown — and what
-        they were shown has to be a held proposal, not the model's memory of its
-        own prose. So the quoted words must touch the change itself: a weekday
-        being changed, a kind of session, a number in it, or plain 'run'."""
-        words = set(_plain(their_words).split())
-        touched = {"run", "runs", "running", "session", "sessions", "workout", "plan", "week", "today", "tomorrow"}
-        for session in (plan.get("week") or []):
-            if not isinstance(session, dict):
-                continue
-            touched.add(str(session.get("type", "")).lower())
-            touched.update(re.findall(r"\d+", str(session.get("detail", ""))))
+    def said_yes(self, user_id: UUID) -> bool:
+        """Whether THEY agreed is decided here, from their message — never by
+        the model saying they did. Deliberately narrow: the whole message must
+        be assent and nothing else. "Yes but…", a question, a refusal, a change,
+        a scheduled turn — none of those is a yes, and the cost of being narrow
+        is one more "yes", never a change they didn't agree to. (English only.)"""
+        words = _plain(self._message(user_id)).split()
+        return (0 < len(words) <= 10 and all(w in _ASSENT for w in words)
+                and any(w in _ASSENT_CORE for w in words))
+
+    def instruction_problem(self, user_id: UUID, their_words: str, plan: dict, *, replace_week: bool,
+                            now: datetime) -> str | None:
+        """Why this is NOT their instruction — or None when it can be carried
+        out. Python cannot read meaning, so it bounds what an instruction can
+        do: the words must be theirs, from a sentence that is neither a question
+        nor a negation, and ONLY the days those words name may change."""
+        message = self._message(user_id)
+        quoted = _plain(their_words)
+        if len(quoted.split()) < 3 or quoted not in _plain(message):
+            return "those words are not in the message being answered"
+        sentence = next((s for s in re.split(r"(?<=[.!?\n])", message) if quoted in _plain(s)), message)
+        if sentence.strip().endswith("?"):
+            return "those words are from a question, not an instruction"
+        if _NEGATION.search(sentence):
+            return "that sentence says what NOT to do; it can't be carried out as an instruction automatically"
+        if replace_week:
+            return "replacing the whole week drops days the instruction doesn't name"
+        days = [s for s in (plan.get("week") or []) if isinstance(s, dict)]
+        if not days:
+            return "no dated day was sent"
+        today = now.astimezone(self._tz).date()
+        named = set(quoted.split())
+        dates = [str(s.get("date")) for s in days]
+        if len(set(dates)) != len(dates):
+            return "two entries for one date — storing keeps one per day, so one would be lost"
+        for session in days:
             try:
                 day = date.fromisoformat(str(session.get("date")))
-                touched.update({day.strftime("%A").lower(), day.strftime("%a").lower(), str(day.day)})
             except ValueError:
-                pass
-        return bool(words & (touched - {""}))
+                return f"{session.get('date')!r} is not a date"
+            names = {day.strftime("%A").lower(), day.strftime("%a").lower()}
+            if day == today:
+                names |= {"today", "tonight"}
+            if day == today + timedelta(days=1):
+                names.add("tomorrow")
+            if not (names & named):
+                return f"their words don't name {day.strftime('%A')} — an instruction changes only the days it names"
+        return None
+
+    def retire_overtaken_proposal(self, user_id: UUID, plan: dict, *, now: datetime) -> bool:
+        """Their instruction changed days an open proposal also covers: the
+        proposal now describes a week that no longer exists."""
+        waiting = self._repo.open_proposal(user_id)
+        if waiting is None:
+            return False
+        changed = {str(s.get("date")) for s in (plan.get("week") or []) if isinstance(s, dict)}
+        if changed & {str(s.get("date")) for s in waiting.plan.get("week", [])}:
+            self._repo.resolve_proposal(waiting.id, "superseded", now)
+            return True
+        return False
 
     def propose_plan(self, user_id: UUID, *, plan: dict, replace_week: bool, now: datetime) -> PlanProposal:
-        week = [s for s in (plan.get("week") or []) if isinstance(s, dict) and s.get("date")]
+        """Held exactly as it will be stored. Storing merges BY DATE, so two
+        entries on one date would show as two and save as one — refused here,
+        as is any entry without a real date (it used to be dropped silently)."""
+        week = plan.get("week") or []
+        seen: set[str] = set()
+        for session in week:
+            try:
+                day = str(date.fromisoformat(str(session.get("date") if isinstance(session, dict) else None)))
+            except ValueError:
+                raise MalformedProposal(f"every day needs a real date (YYYY-MM-DD): {session!r}")
+            if day in seen:
+                raise MalformedProposal(f"two entries for {day} — one entry per day; put both sessions in its detail")
+            seen.add(day)
+        if not seen:
+            raise MalformedProposal("no dated days")
         held = {**plan, "week": sorted(week, key=lambda s: str(s["date"]))}
         return self._repo.save_proposal(PlanProposal(
             id=uuid4(), user_id=user_id, plan=held, replace_week=replace_week,
@@ -201,6 +269,8 @@ class MoveService:
             raise ProposalNotOpen(proposal.status)
         if proposal.created_at >= now:
             raise ProposalNotSeen(str(proposal_id))
+        if not self.said_yes(user_id):
+            raise NotAYes(str(proposal_id))
         saved = self.save_plan(user_id, plan=proposal.plan, goal_id=goal_id, replace_week=proposal.replace_week)
         self._repo.resolve_proposal(proposal.id, "agreed", now)
         return proposal, saved

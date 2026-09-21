@@ -20,7 +20,10 @@ from uuid import UUID
 
 from trellis.core_actions import done, failed, partial, refused, unknown
 from trellis.domain_move_claude import MOVE_COACH_GUIDANCE
-from trellis.domain_move_service import AmbiguousWorkout, NoSuchProposal, NoSuchWorkout, ProposalNotOpen, ProposalNotSeen
+from trellis.core_actions import Status
+from trellis.domain_move_service import (
+    AmbiguousWorkout, MalformedProposal, NoSuchProposal, NoSuchWorkout, NotAYes, ProposalNotOpen, ProposalNotSeen,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -67,8 +70,9 @@ MOVE_UPDATE_TOOL: dict = {
         "Suggesting a week, or any change of your own? Send it here BEFORE you describe it: it is HELD "
         "as a proposal, nothing is stored, and you show them exactly what comes back. "
         "agree=<proposal id>: they said yes in a LATER message — stores that proposal as it was shown, "
-        "never a new one. instructed=<their words>: they told you what to change — stored now, no asking. "
-        "A yes is not an instruction. Stored days MERGE by date (days not sent survive; nothing is removed unless "
+        "never a new one; Trellis checks their message is a plain yes. instructed=<their words>: they told "
+        "you what to change — stored now, no asking, and ONLY the days their words name. "
+        "Stored days MERGE by date (days not sent survive; nothing is removed unless "
         "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
         "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
         "The activity is never guessed: a day with several needs sport, and one not synced yet is refused. "
@@ -281,35 +285,65 @@ def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service
     if agree:
         return _answer_proposal(user_id, agree, now, move_service=move_service)
 
-    instructed = str(input_dict.get("instructed", "")).strip()
-    if instructed:
-        sent = input_dict.get("plan") if isinstance(input_dict.get("plan"), dict) else {}
-        if move_service.asked_for(user_id, instructed) and not move_service.names_the_change(instructed, sent):
-            return refused("Those words agree to something — they don't say what to change. If they are saying yes to "
-                           "a week you described, it has to be a proposal they were SHOWN: send it without "
-                           "`instructed` to hold it, show exactly what comes back, and ask again. Nothing was stored.")
-        if move_service.asked_for(user_id, instructed):
-            return _update_plan(user_id, input_dict, move_service=move_service)
-        return refused("Those words aren't in the message you're answering, so this isn't their instruction. "
-                       "Copy their wording exactly — or send the change without `instructed` to propose it.")
-
     plan = input_dict.get("plan")
     if isinstance(plan, str):
         try:
             plan = json.loads(plan)
         except json.JSONDecodeError:
             plan = None
-    if not isinstance(plan, dict) or not [s for s in (plan.get("week") or []) if isinstance(s, dict) and s.get("date")]:
-        return refused("A proposal needs a plan with dated days: {'arc': ..., 'week': [{'date', 'type', 'detail'}]}.")
+    if not isinstance(plan, dict):
+        return refused("A plan change needs a plan: {'arc': ..., 'week': [{'date', 'type', 'detail'}]}.")
+    replace_week = bool(input_dict.get("replace_week", False))
+
+    instructed = str(input_dict.get("instructed", "")).strip()
+    if instructed:
+        problem = move_service.instruction_problem(user_id, instructed, plan, replace_week=replace_week, now=now)
+        if problem:
+            return refused(f"Not carried out as their instruction: {problem}. Nothing was stored. "
+                           "Send it without `instructed` to hold it as a proposal they can say yes to.")
+        result = _update_plan(user_id, {**input_dict, "plan": plan}, move_service=move_service)
+        if result.status is not Status.SUCCEEDED:
+            return result
+        try:
+            retired = move_service.retire_overtaken_proposal(user_id, plan, now=now)
+        except Exception:
+            _log.warning("could not retire an overtaken proposal", exc_info=True)
+            return partial(f"{result}\nStored — but a proposal that was waiting may now be out of date and could not "
+                           "be retired. Don't agree it; propose again.")
+        if retired:
+            return done(f"{result}\nThe proposal that was waiting covered the same day(s) and is now out of date — "
+                        "it has been retired. Propose again if the rest of it still stands.")
+        return result
+
     try:
-        proposal = move_service.propose_plan(user_id, plan=plan, replace_week=bool(input_dict.get("replace_week", False)), now=now)
+        proposal = move_service.propose_plan(user_id, plan=plan, replace_week=replace_week, now=now)
+    except MalformedProposal as problem:
+        return refused(f"Can't hold that as a proposal: {problem}. It has to be storable exactly as shown.")
     except Exception:
         _log.warning("move_update propose failed", exc_info=True)
         return unknown("Holding the proposal hit an error — it may or may not be held. Nothing was stored in the plan.")
-    return done(f"PROPOSED — NOT STORED. Held as proposal {proposal.id}. The stored plan is unchanged.\n"
-                f"Show them exactly this, and ask:\n{_week_lines(proposal.plan)}\n"
-                f"On their yes (a later message): move_update what=plan agree={proposal.id}. "
-                f"If they want it different, propose again — this one is replaced.")
+    return done(
+        f"PROPOSED — NOT STORED. Held as proposal {proposal.id}. The stored plan is unchanged.\n"
+        "Trellis puts the week itself beneath your reply, word for word — do NOT list the days yourself; "
+        "a second version in your words is what they would be agreeing to by mistake. Give your reasoning, and ask.\n"
+        f"On their plain yes (a later message): move_update what=plan agree={proposal.id}. "
+        "If they want it different, propose again — this one is replaced.",
+        show=render_proposal(proposal),
+    )
+
+
+def render_proposal(proposal) -> str:
+    """The proposal as the PERSON sees it — built from the record, so what they
+    say yes to is what is held, and what is held is what gets stored."""
+    lines = ["PROPOSED — not stored yet:"]
+    for session in proposal.plan.get("week", []):
+        day = date.fromisoformat(str(session["date"]))
+        detail = str(session.get("detail") or "").strip()
+        lines.append(f"{day.strftime('%a %-d %b')} — {session.get('type', 'session')}" + (f": {detail}" if detail else ""))
+    if proposal.replace_week:
+        lines.append("(This replaces the whole stored week.)")
+    lines.append("Reply yes to store exactly this, or tell me what to change.")
+    return "\n".join(lines)
 
 
 def _answer_proposal(user_id: UUID, agree: str, now: datetime, *, move_service) -> str:
@@ -328,6 +362,10 @@ def _answer_proposal(user_id: UUID, agree: str, now: datetime, *, move_service) 
         return refused("No proposal with that id.")
     except ProposalNotOpen as state:
         return refused(f"That proposal is {state} — it can't be agreed. Read the open one in context, or propose again.")
+    except NotAYes:
+        return refused("Their message is not a plain yes — it asks, objects, changes something, or isn't from them. "
+                       "Nothing was stored. Answer what they said; if the week changes, propose again; "
+                       "if it stands, ask them to reply yes.")
     except ProposalNotSeen:
         return refused("That proposal was made in THIS turn — they haven't seen it, so they can't have agreed. "
                        "Show it and ask. Nothing was stored.")

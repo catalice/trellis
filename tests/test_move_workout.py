@@ -757,6 +757,7 @@ class TestMoveUpdateFold(unittest.TestCase):
                 self.plan = None
                 self.workouts = [w]
             def get(self, user_id): return self.plan
+            def open_proposal(self, user_id): return None
             def upsert(self, record):
                 self.plan = record
                 return record
@@ -776,7 +777,7 @@ class TestMoveUpdateFold(unittest.TestCase):
         self.repo = _Repo()
         self.user = w.user_id
         return MoveService(self.repo, _Goals(), ZoneInfo("Europe/Madrid"),
-                           their_message=lambda uid: "Put an easy 5k on the 15th, please.")
+                           their_message=lambda uid: "Put an easy 5k on Tuesday, please.")
 
     def test_plan_then_baseline_keeps_week(self):
         from datetime import datetime, timezone
@@ -785,7 +786,7 @@ class TestMoveUpdateFold(unittest.TestCase):
         now = datetime.now(timezone.utc)
         out = handle_move_update(self.user, {"what": "plan", "plan": {
             "arc": "base", "week": [{"date": "2026-09-15", "type": "easy", "detail": "5k"}]},
-            "instructed": "put an easy 5k on the 15th"},          # their instruction: stored, no second asking
+            "instructed": "put an easy 5k on Tuesday"},          # their instruction: stored, no second asking
             now, move_service=svc)
         self.assertIn("Merged 1 day(s) in", out)
         out = handle_move_update(self.user, {"what": "baseline", "baseline": "Z2 ~7:00/km"},
