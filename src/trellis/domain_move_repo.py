@@ -36,6 +36,7 @@ class TrainingRepository(Protocol):
     def get_proposal(self, user_id: UUID, proposal_id: UUID) -> PlanProposal | None: ...
     def resolve_proposal(self, proposal_id: UUID, status: str, at: datetime) -> bool: ...
     def mark_proposal_delivered(self, proposal_id: UUID, at: datetime) -> None: ...
+    def store_agreed(self, proposal_id: UUID, record: TrainingPlan, at: datetime) -> bool: ...
 
 
 _ACTIVITY_COLS = (
@@ -62,19 +63,23 @@ class PostgresMoveRepository:
     def upsert(self, record: TrainingPlan) -> TrainingPlan:
         with self._db.connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO training_plan (user_id, goal_id, baseline, plan, updated_at)
-                    VALUES (%s, %s, %s, %s, NOW())
-                    ON CONFLICT (user_id) DO UPDATE SET
-                        goal_id = EXCLUDED.goal_id,
-                        baseline = EXCLUDED.baseline,
-                        plan = EXCLUDED.plan,
-                        updated_at = NOW()
-                    """,
-                    (record.user_id, record.goal_id, record.baseline, Json(record.plan)),
-                )
+                _upsert_plan(cur, record)
         return record
+
+    def store_agreed(self, proposal_id: UUID, record: TrainingPlan, at: datetime) -> bool:
+        """The proposal's resolution and the plan it becomes, in ONE transaction.
+        Claimed first in a separate commit, a failed plan write left a proposal
+        marked agreed that had never been stored — and its button refusing to try
+        again. False = it was no longer open (a second press, a replacement):
+        nothing is written. An error rolls both back; the proposal stays open."""
+        with self._db.connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE plan_proposals SET status = 'agreed', resolved_at = %s WHERE id = %s AND status = 'open'",
+                            (at, proposal_id))
+                if cur.rowcount != 1:
+                    return False
+                _upsert_plan(cur, record)
+        return True
 
     def recent_runs(self, user_id: UUID, *, limit: int) -> list[RunLog]:
         """Runs only — feeds baseline math, plan ticks, and run reviews."""
@@ -173,6 +178,21 @@ class PostgresMoveRepository:
                     """,
                     (user_id, on_date, name, workout_id),
                 )
+
+
+def _upsert_plan(cur, record: TrainingPlan) -> None:
+    cur.execute(
+        """
+        INSERT INTO training_plan (user_id, goal_id, baseline, plan, updated_at)
+        VALUES (%s, %s, %s, %s, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+            goal_id = EXCLUDED.goal_id,
+            baseline = EXCLUDED.baseline,
+            plan = EXCLUDED.plan,
+            updated_at = NOW()
+        """,
+        (record.user_id, record.goal_id, record.baseline, Json(record.plan)),
+    )
 
 
 def _proposal(row: dict) -> PlanProposal:

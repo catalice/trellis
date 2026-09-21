@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Callable
@@ -68,9 +67,9 @@ MOVE_UPDATE_TOOL: dict = {
         "Write to the training record. what=plan: ANY change to the week — yours or one they asked for — "
         "is HELD as a proposal; nothing is stored. Trellis sends them the week itself as its own message, "
         "built from the record, with Store this / Change it buttons. Only their press stores it; you cannot. "
-        "The plan you SEND is the prescription — exact sessions, durations, distances, as ever. Your REPLY is "
-        "the reasoning only: sentences restating days, durations or distances are removed from it, so the "
-        "proposal is the one version they see. Once stored, days MERGE by date (days not sent survive; nothing is removed unless "
+        "The plan you send is the prescription — exact sessions, durations, distances. In a turn where you "
+        "propose, your written reply is NOT sent (prose beside a proposal can't be checked against it): so "
+        "owe them an answer or an explanation? Give it in a turn where you don't propose. Once stored, days MERGE by date (days not sent survive; nothing is removed unless "
         "replace_week=true). what=baseline: wholesale replace. what=workout: their words on a "
         "recorded workout, any sport — how it felt, what the watch can't see; appends, never erases. "
         "The activity is never guessed: a day with several needs sport, and one not synced yet is refused. "
@@ -268,16 +267,8 @@ def _week_lines(plan: dict) -> str:
     return "\n".join("  " + _fmt_session(s) for s in plan.get("week", []) if isinstance(s, dict) and s.get("date"))
 
 
-# What would be a SECOND version of the plan in the model's own words: a training
-# quantity, or a line that opens with a day. The reasoning stays; the numbers and
-# the days live in the proposal they are sent.
-_COMPETING_PLAN = re.compile(
-    r"\b\d+(?:[.,]\d+)?\s?(?:min|mins|minutes?|km|k|mi|miles?|hrs?|hours?)\b"
-    r"|\b\d+\s?[x×]\s?\d+"
-    r"|^[\s*•\-–—_#>]*(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)[a-z]*\b[^a-z]",
-    re.IGNORECASE,
-)
-_ONLY_THE_PROPOSAL = OnlyVersion(competing=_COMPETING_PLAN, if_nothing_left="I've put a week together — it's in the next message.")
+_ONLY_THE_PROPOSAL = OnlyVersion(introduction="I've put a week together — it's in the next message, with its buttons. "
+                                              "Ask me why for any of it.")
 
 
 def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service) -> str:
@@ -301,10 +292,9 @@ def _plan_change(user_id: UUID, input_dict: dict, now: datetime, *, move_service
     return done(
         "PROPOSED — NOT STORED. The stored plan is unchanged.\n"
         "Trellis sends them the week itself as the next message, built from the record, with Store this / "
-        "Change it buttons — only their press stores it. In your reply give the reasoning and anything else "
-        "you owe them; don't restate days, durations or distances there (those sentences are removed — the "
-        "proposal carries them), and don't ask them to say yes. If they want it different, propose again "
-        "with the full prescription — this one is replaced.",
+        "Change it buttons — only their press stores it. Whatever you write this turn is NOT sent: they get a "
+        "fixed line, what else you did this turn (from the record), and the proposal. So say nothing that "
+        "matters here. If they want it different, propose again with the full prescription — this one is replaced.",
         only_version=_ONLY_THE_PROPOSAL,
     )
 
@@ -331,6 +321,15 @@ class Decision:
     buttons: tuple[tuple[str, str], ...]
 
 
+@dataclass(frozen=True)
+class Pressed:
+    """What a press came to. `buttons_stay`: nothing ran and the proposal is
+    still open, so the same buttons are the way to try again — a front end must
+    not take them away. False: it is settled (or can't be offered again safely)."""
+    text: str
+    buttons_stay: bool = False
+
+
 class PlanDecisions:
     """The seam a front end uses for plan approval — Telegram today. It sends
     what is `waiting`, tells us it was `delivered`, and brings back a press to
@@ -353,31 +352,55 @@ class PlanDecisions:
         self._move.proposal_delivered(decision.ref, now=now)
         self._remember(user_id, f"[Sent to them as its own message, with Store this / Change it buttons]\n{decision.text}")
 
-    def decide(self, user_id: UUID, data: str, now: datetime) -> str:
+    def decide(self, user_id: UUID, data: str, now: datetime) -> Pressed:
         """One press. On the record before it runs, like any action that changes
-        something; if it can't be recorded it doesn't run."""
+        something; if it can't be recorded it doesn't run — and the buttons stay."""
         try:
             _, choice, ref = data.split(":", 2)
             proposal_id = UUID(ref)
         except ValueError:
-            return "That button isn't one I recognise. Nothing was changed."
+            return Pressed("That button isn't one I recognise. Nothing was changed.")
         if choice not in ("store", "change"):
-            return "That button isn't one I recognise. Nothing was changed."
+            return Pressed("That button isn't one I recognise. Nothing was changed.")
         log = self._action_log(user_id) if self._action_log is not None else None
         handle = None
         if log is not None:
-            handle = log.begin("plan_decision", {"choice": choice, "proposal": str(proposal_id)})
+            try:
+                handle = log.begin("plan_decision", {"choice": choice, "proposal": str(proposal_id)})
+            except Exception:
+                _log.warning("action log begin failed", exc_info=True)
             if handle is None:
-                return "I couldn't put that on record, so I haven't done it. Nothing was changed — press again in a moment."
+                return Pressed("I couldn't put that on record, so I haven't done it. Nothing was changed — "
+                               "the buttons are still there; press again in a moment.", buttons_stay=True)
         try:
             result = self._decide(user_id, choice, proposal_id, now)
+            stay = False
         except Exception:
             _log.warning("plan decision failed", exc_info=True)
-            result = unknown("That hit an error part-way — the week may or may not have been stored. Ask me what's stored before pressing again.")
+            result, stay = self._after_an_error(user_id, proposal_id)
         if log is not None:
-            log.finish(handle, result.status, result.splitlines()[0][:200])
+            try:
+                log.finish(handle, result.status, result.splitlines()[0][:200])
+            except Exception:
+                _log.warning("action log finish failed", exc_info=True)
         self._remember(user_id, f"[They pressed {'Store this' if choice == 'store' else 'Change it'}]\n{result}")
-        return str(result)
+        return Pressed(str(result), buttons_stay=stay)
+
+    def _after_an_error(self, user_id: UUID, proposal_id: UUID):
+        """The store and its proposal's resolution are one transaction, so an
+        error normally means neither happened. Look before saying so: still
+        open = nothing ran, try again; anything else is not offered again."""
+        try:
+            status = self._move.proposal_status(user_id, proposal_id)
+        except Exception:
+            status = None
+        if status == "open":
+            return failed("That hit an error and nothing was stored — the proposal is still open. "
+                          "The buttons are still there; press again in a moment."), True
+        if status == "agreed":
+            return done("That hit an error part-way, but the record shows the week WAS stored."), False
+        return unknown("That hit an error and I can't tell whether the week was stored. "
+                       "Ask me what's stored before doing anything else."), False
 
     def _decide(self, user_id: UUID, choice: str, proposal_id: UUID, now: datetime):
         if choice == "change":

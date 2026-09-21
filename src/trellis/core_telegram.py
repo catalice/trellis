@@ -480,12 +480,17 @@ class TelegramTrellis:
                     self._decisions.decide, user_id, query.data or "", datetime.now(timezone.utc))
             except Exception:
                 self.logger.exception("a button press failed for user %s", user_id)
-                outcome = "Something went wrong with that button. Ask me what's stored before pressing again."
-            try:
-                await query.edit_message_reply_markup(reply_markup=None)      # pressed once; the buttons go
-            except Exception:
-                pass
-            await self._send_text(context.application, update.effective_chat.id, outcome)
+                outcome = None
+            text = outcome.text if outcome is not None else (
+                "Something went wrong with that button. Ask me what's stored before pressing again.")
+            # The buttons go only when the matter is settled. When nothing ran and
+            # the proposal is still open, they ARE the way to try again.
+            if outcome is None or not outcome.buttons_stay:
+                try:
+                    await query.edit_message_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+            await self._send_text(context.application, update.effective_chat.id, text)
 
     async def _typing_keepalive(self, chat, interval: float = 4.0) -> None:
         """Keep the typing indicator alive until cancelled. Never raises."""

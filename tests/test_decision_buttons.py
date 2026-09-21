@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from trellis.core_telegram import TelegramTrellis
-from trellis.domain_move_tool import Decision
+from trellis.domain_move_tool import Decision, Pressed
 
 UID = uuid4()
 ASKED = Decision(ref=uuid4(), text="Proposed — not stored yet:\nSun 15 Mar — long: 90min",
@@ -18,13 +18,15 @@ ASKED = Decision(ref=uuid4(), text="Proposed — not stored yet:\nSun 15 Mar —
 
 
 class _Decisions:
-    def __init__(self, waiting=()):
-        self._waiting, self.delivered_refs, self.presses = list(waiting), [], []
+    def __init__(self, waiting=(), outcome=Pressed("Stored, exactly as shown:\nSun 15 Mar — long: 90min")):
+        self._waiting, self.delivered_refs, self.presses, self.outcome = list(waiting), [], [], outcome
     def waiting(self, user_id): return list(self._waiting)
     def delivered(self, user_id, decision, now): self.delivered_refs.append(decision.ref)
     def decide(self, user_id, data, now):
         self.presses.append((user_id, data))
-        return "Stored, exactly as shown:\nSun 15 Mar — long: 90min"
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
 
 
 class _Bot:
@@ -86,3 +88,17 @@ def test_a_press_from_a_group_or_a_stranger_does_nothing():
         decisions = _Decisions()
         _, bot = _press(_app(decisions), **kwargs)
         assert decisions.presses == [] and bot.sent == []
+
+
+def test_when_nothing_ran_the_buttons_stay_so_there_is_something_to_press_again():
+    """The refusal said 'press again in a moment' and then took the buttons away;
+    the proposal was already marked delivered, so nothing ever brought them back."""
+    decisions = _Decisions(outcome=Pressed("I couldn't put that on record… press again in a moment.", buttons_stay=True))
+    state, bot = _press(_app(decisions))
+    assert state["buttons_removed"] == 0
+    assert "press again" in bot.sent[0]["text"]
+
+
+def test_a_press_that_blew_up_is_not_offered_again_blind():
+    state, bot = _press(_app(_Decisions(outcome=RuntimeError("boom"))))
+    assert state["buttons_removed"] == 1 and "Ask me what's stored" in bot.sent[0]["text"]

@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from harness import ScriptedModel, Step
-from trellis.core_actions import PostgresActionLog, Status
+from trellis.core_actions import PostgresActionLog, Status, done
 from trellis.core_history import PostgresConversationHistory
 from trellis.core_model import SystemPrompt
 from trellis.core_oracle import Oracle
@@ -69,7 +69,7 @@ def _propose(move, user, plan=WEEK, at=T1, **more):
 
 
 def _press(decisions, user, choice, proposal, at=T2):
-    return decisions.decide(user, f"plan:{choice}:{proposal.id}", at)
+    return decisions.decide(user, f"plan:{choice}:{proposal.id}", at).text
 
 
 class TestTheModelCannotStoreAWeek:
@@ -165,9 +165,9 @@ class TestOnlyTheirPressStoresIt:
         move, decisions, user, _ = app
         held = _propose(move, user)
         stranger = pg_database.ensure_user(int(uuid4().int % 10**9), "UTC")
-        assert "can't find" in decisions.decide(stranger, f"plan:store:{held.id}", T2)
+        assert "can't find" in decisions.decide(stranger, f"plan:store:{held.id}", T2).text
         for data in ("plan:store:not-an-id", "plan:delete:" + str(held.id), "garbage", ""):
-            assert "Nothing was changed" in decisions.decide(user, data, T2)
+            assert "Nothing was changed" in decisions.decide(user, data, T2).text
         assert _stored(move, user) == []
 
     def test_a_press_is_on_the_record_like_any_action(self, app):
@@ -184,7 +184,37 @@ class TestOnlyTheirPressStoresIt:
             def begin(self, tool, input): return None
         held = _propose(move, user)
         outcome = PlanDecisions(move, action_log=lambda uid: _NoLog()).decide(user, f"plan:store:{held.id}", T2)
-        assert "haven't done it" in outcome and _stored(move, user) == []
+        assert "haven't done it" in outcome.text and _stored(move, user) == []
+        assert outcome.buttons_stay                      # told to press again — so there must be something to press
+        assert move.open_proposal(user) is not None
+
+    def test_a_save_that_fails_leaves_the_proposal_open_and_a_second_press_stores_it(self, app, monkeypatch):
+        """The proposal was marked agreed in one commit and the plan written in
+        another: the write failed, the proposal was gone, and its button answered
+        'agreed, so it wasn't stored again' about a week that never was."""
+        move, decisions, user, _ = app
+        move.save_plan(user, plan=WEEK_60)
+        held = _propose(move, user, at=T2)
+        real = move._merged
+        def unwritable(*args, **kwargs):
+            record = real(*args, **kwargs)
+            record.plan["week"].append({"date": "2026-03-16", "cannot_be_written": {1, 2}})    # the database refuses it
+            return record
+        monkeypatch.setattr(move, "_merged", unwritable)
+        first = decisions.decide(user, f"plan:store:{held.id}", T3)
+        assert "nothing was stored" in first.text and first.buttons_stay
+        assert _stored(move, user) == WEEK_60["week"]            # the old week, untouched
+        assert move.open_proposal(user).id == held.id            # still theirs to press
+        monkeypatch.setattr(move, "_merged", real)
+        second = decisions.decide(user, f"plan:store:{held.id}", T3 + timedelta(minutes=1))
+        assert second.text.startswith("Stored, exactly as shown") and not second.buttons_stay
+        assert _stored(move, user) == WEEK["week"]
+
+    def test_settled_presses_take_the_buttons_away(self, app):
+        move, decisions, user, _ = app
+        held = _propose(move, user)
+        assert not decisions.decide(user, f"plan:store:{held.id}", T2).buttons_stay
+        assert not decisions.decide(user, f"plan:store:{held.id}", T3).buttons_stay     # already stored: nothing to retry
 
     def test_what_they_were_sent_and_what_they_pressed_are_in_the_conversation(self, app):
         move, decisions, user, database = app
@@ -198,41 +228,51 @@ class TestOnlyTheirPressStoresIt:
 
 
 class TestTheProposalIsTheOnlyPlanTheyAreShown:
-    """Held 90 minutes; the reply said '30 minutes. Shall I store that?'. Correct
-    buttons under a contradictory message still leave them checking the work."""
+    """Held 90 minutes; the reply said 30. A filter on wording was tried, and
+    'thirty minutes', 'half an hour' and 'take Friday off' walked past it — and
+    the evaluation checked the reply with the filter's own pattern, so it agreed.
+    Prose beside a proposal can't be checked, so in that turn it isn't sent."""
 
-    def _reply(self, user, move, *said: str) -> str:
-        model = ScriptedModel([Step(tools=(("move_update", {"what": "plan", "plan": WEEK}),)), *(Step(text=t) for t in said)])
+    INTRO = "I've put a week together — it's in the next message, with its buttons. Ask me why for any of it."
+
+    def _reply(self, user, move, said: str, also=()) -> str:
+        handlers = {"move_update": lambda inp: handle_move_update(user, inp, T1, move_service=move),
+                    "save_note": lambda inp: done("Done: Email the landlord about the boiler")}
+        tools = (("move_update", {"what": "plan", "plan": WEEK}), *also)
+        model = ScriptedModel([Step(tools=tools), Step(text=said)])
         return Oracle(model).run(
             SystemPrompt(stable="", volatile=""), [{"role": "user", "content": "Plan my week?"}],
-            [MOVE_UPDATE_TOOL], {"move_update": lambda inp: handle_move_update(user, inp, T1, move_service=move)}).text
+            [MOVE_UPDATE_TOOL], handlers).text
 
-    def test_a_competing_quantity_does_not_reach_them(self, app):
+    @pytest.mark.parametrize("said", [
+        "30 minutes. Shall I store that?",
+        "I'd keep Sunday's run to thirty minutes.",
+        "I'd take Friday off and keep Sunday to half an hour.",
+        "The long run is 30-minute easy running.",
+        "- Mon: easy\n- **Fri** — rest day\n- Sun: a shorter long run than usual",
+    ])
+    def test_nothing_the_model_wrote_reaches_them_beside_a_proposal(self, app, said):
         move, _, user, _ = app
-        reply = self._reply(user, move, "You look tired, so I'd keep Sunday short — 30 minutes. It's your call.")
-        assert "30" not in reply and "It's your call." in reply
+        assert self._reply(user, move, said) == self.INTRO
 
-    def test_a_schedule_in_the_models_own_words_does_not_reach_them(self, app):
+    def test_what_else_was_done_this_turn_is_kept_from_the_record(self, app):
         move, _, user, _ = app
-        reply = self._reply(user, move, "Both tasks are marked done.\n\n- Mon: easy\n- **Fri** — rest day\n- Sun 15: long run\n\n"
-                                        "I held volume because last night's sleep was poor.")
-        assert "Both tasks are marked done." in reply and "I held volume because last night's sleep was poor." in reply
-        assert "Mon" not in reply and "Fri" not in reply and "Sun 15" not in reply
-
-    def test_the_rest_of_what_they_are_owed_survives(self, app):
-        move, _, user, _ = app
-        reply = self._reply(user, move, "The venue is still open and due Saturday. Two tasks are overdue. I kept every run that fits.")
-        assert reply == "The venue is still open and due Saturday. Two tasks are overdue. I kept every run that fits."
-
-    def test_a_reply_that_was_nothing_but_a_second_plan_still_says_something(self, app):
-        move, _, user, _ = app
-        assert self._reply(user, move, "Mon 30min, Wed 4x4min, Sun 90min.") == "I've put a week together — it's in the next message."
+        reply = self._reply(user, move, "All sorted, and Sunday is thirty minutes.", also=(("save_note", {"text": "x"}),))
+        assert reply == self.INTRO + "\n\nAlso done:\n- Done: Email the landlord about the boiler"
 
     def test_a_turn_that_proposed_nothing_is_left_alone(self, app):
-        _, _, _, _ = app
         model = ScriptedModel([Step(text="Your long run on Sunday was 80 minutes at 149 bpm.")])
         text = Oracle(model).run(SystemPrompt(stable="", volatile=""), [{"role": "user", "content": "How was Sunday?"}], [], {}).text
         assert text == "Your long run on Sunday was 80 minutes at 149 bpm."
+
+    def test_a_proposal_that_was_refused_does_not_silence_the_reply(self, app):
+        move, _, user, _ = app
+        handlers = {"move_update": lambda inp: handle_move_update(user, inp, T1, move_service=move)}
+        model = ScriptedModel([Step(tools=(("move_update", {"what": "plan", "plan": {"week": []}}),)),
+                               Step(text="I couldn't put that together."), Step(text="I couldn't put that together.")])
+        text = Oracle(model).run(SystemPrompt(stable="", volatile=""), [{"role": "user", "content": "Plan my week?"}],
+                                 [MOVE_UPDATE_TOOL], handlers).text
+        assert "I couldn't put that together." in text
 
 
 class TestUnfinishedBusinessIsARecord:

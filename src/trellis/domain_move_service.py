@@ -186,31 +186,25 @@ class MoveService:
         if all(date.fromisoformat(str(s["date"])) < today for s in proposal.plan["week"]):
             self._repo.resolve_proposal(proposal.id, "withdrawn", now)
             raise ProposalNotOpen("out of date — every day in it has passed")
-        if not self._repo.resolve_proposal(proposal.id, "agreed", now):     # claimed first: one press wins
+        record = self._merged(user_id, plan=proposal.plan, baseline=None, goal_id=goal_id,
+                              replace_week=proposal.replace_week)
+        if not self._repo.store_agreed(proposal.id, record, now):      # one transaction; one press wins
             raise ProposalNotOpen("no longer open")
-        saved = self.save_plan(user_id, plan=proposal.plan, goal_id=goal_id, replace_week=proposal.replace_week)
-        return proposal, saved
+        self._project_plan(user_id)
+        return proposal, record
+
+    def proposal_status(self, user_id: UUID, proposal_id: UUID) -> str | None:
+        proposal = self._repo.get_proposal(user_id, proposal_id)
+        return proposal.status if proposal else None
 
     def decline_proposal(self, user_id: UUID, proposal_id: UUID, *, now: datetime) -> bool:
         """"Change it": nothing is stored and this proposal can no longer be."""
         proposal = self._repo.get_proposal(user_id, proposal_id)
         return proposal is not None and self._repo.resolve_proposal(proposal.id, "withdrawn", now)
 
-    def save_plan(
-        self,
-        user_id: UUID,
-        *,
-        plan: dict | None = None,
-        baseline: str | None = None,
-        goal_id: UUID | None = None,
-        replace_week: bool = False,
-    ) -> TrainingPlan:
-        """Upsert the coach's plan — MERGING, never destroying (12 Aug: an
-        arc-note save wiped six days of stored week; the tool obeyed. Never
-        again — in code, not in a prompt). arc replaces arc only when sent;
-        incoming week days replace SAME-DATED days, all other stored days
-        survive. replace_week=True is the only way to drop days (the weekly
-        full re-author)."""
+    def _merged(self, user_id: UUID, *, plan: dict | None, baseline: str | None, goal_id: UUID | None,
+                replace_week: bool) -> TrainingPlan:
+        """The record a save would write — computed, not written."""
         existing = self._repo.get(user_id)
         stored = dict(existing.plan) if existing and existing.plan else {}
         merged = dict(stored)
@@ -228,13 +222,31 @@ class MoveService:
                     for sess in incoming:
                         by_date[str(sess["date"])] = sess
                     merged["week"] = [by_date[d] for d in sorted(by_date)]
-        saved = self._repo.upsert(TrainingPlan(
+        return TrainingPlan(
             user_id=user_id,
             goal_id=goal_id if goal_id is not None else (existing.goal_id if existing else None),
             baseline=baseline if baseline is not None else (existing.baseline if existing else None),
             plan=merged,
             updated_at=datetime.now(timezone.utc),
-        ))
+        )
+
+    def save_plan(
+        self,
+        user_id: UUID,
+        *,
+        plan: dict | None = None,
+        baseline: str | None = None,
+        goal_id: UUID | None = None,
+        replace_week: bool = False,
+    ) -> TrainingPlan:
+        """Upsert the coach's plan — MERGING, never destroying (12 Aug: an
+        arc-note save wiped six days of stored week; the tool obeyed. Never
+        again — in code, not in a prompt). arc replaces arc only when sent;
+        incoming week days replace SAME-DATED days, all other stored days
+        survive. replace_week=True is the only way to drop days (the weekly
+        full re-author)."""
+        saved = self._repo.upsert(self._merged(user_id, plan=plan, baseline=baseline, goal_id=goal_id,
+                                               replace_week=replace_week))
         self._project_plan(user_id)
         return saved
 
